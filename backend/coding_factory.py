@@ -110,6 +110,9 @@ def generate_proposal(model_call, project, spec, context, lane):
         'Không dùng markdown fence. Tối đa 8 file, 18 KB/file và 85 KB tổng. '
         'Không chứa secret, credential, .env, CI workflow, script chạy lệnh, mã khai thác hoặc lời khẳng định đã test. '
         'Không có quyền đọc repo hiện có; không tự giả định mã đã được tích hợp. '
+        'Để có thể chạy sandbox ở v0.5, nếu viết Python hãy có ít nhất một test_*.py ở thư mục gốc; '
+        'nếu viết JavaScript hãy có ít nhất một *.test.js dùng node:test; '
+        'tập tin test phải kiểm tra logic thật, không chỉ chứa assert vô nghĩa. '
         'Khi thiếu thông tin, tạo module độc lập và nêu giả định trong summary.'
     )
     message = (f'Dự án: {project["name"]}\nPlatform: {project["platform"]}\nÝ tưởng: {project["idea"][:2000]}\n'

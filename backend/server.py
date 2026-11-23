@@ -9,6 +9,7 @@ from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
 import coding_factory
+import verification_factory
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
@@ -75,6 +76,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS chat(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,agent_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS coding_jobs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, spec TEXT NOT NULL, status TEXT NOT NULL, proposal_a TEXT, proposal_b TEXT, review_a TEXT, review_b TEXT, manifest TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_coding_jobs_project ON coding_jobs(project_id,status);
+        CREATE TABLE IF NOT EXISTS coding_verifications(id TEXT PRIMARY KEY,job_id TEXT NOT NULL,project_id TEXT NOT NULL,verdict TEXT NOT NULL,report_json TEXT NOT NULL,created_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS idx_coding_verifications_job ON coding_verifications(job_id,created_at);
         CREATE TABLE IF NOT EXISTS github_exports(artifact_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, pr_url TEXT,pr_number INTEGER, branch TEXT,error TEXT, updated_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_task_project ON tasks(project_id,position);
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
@@ -413,7 +416,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
-                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=list_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.4.0')); return
+                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=list_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.5.0')); return
             if path.startswith('/api/projects/') and path.endswith('/coding'):
                 pid = path.split('/')[3]
                 with LOCK,db() as c:
@@ -425,6 +428,9 @@ class Handler(SimpleHTTPRequestHandler):
                 parts = path.strip('/').split('/')
                 if len(parts) in (3,4) and parts[:2]==['api','coding']:
                     with LOCK,db() as c:
+                        if len(parts)==4 and parts[3]=='verifications':
+                            coding_factory.detail(c,parts[2])
+                            self.send_json(200,{'verifications': verification_factory.list_reports(c,parts[2])});return
                         if len(parts)==4 and parts[3]=='download':
                             data=coding_factory.export_zip(c,parts[2])
                             self.send_zip('orbit-coding-'+parts[2]+'.zip',data);return
