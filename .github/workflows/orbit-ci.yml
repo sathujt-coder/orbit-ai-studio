@@ -44,3 +44,45 @@ jobs:
         run: |
           node --check web/app.js
           node --check web/world3d.js
+
+  web-e2e:
+    name: Browser E2E — Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Playwright package
+        run: npm install --no-save --ignore-scripts playwright@1.56.1
+      - name: Install Chromium browser
+        run: npx playwright install --with-deps chromium
+      - name: Start isolated ORBIT backend
+        run: |
+          export AI_PROVIDER=demo AI_HOST=127.0.0.1 AI_PORT=8787
+          export AI_COMPANY_DB="$RUNNER_TEMP/orbit-web-e2e.sqlite"
+          python backend/server.py > "$RUNNER_TEMP/orbit-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/orbit-server.pid"
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8787/api/bootstrap > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/orbit-server.log"
+          exit 1
+      - name: Run real Chromium E2E
+        run: node --test tests/browser/web-first.test.cjs
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-web-e2e-logs
+          path: ${{ runner.temp }}/orbit-server.log
+          retention-days: 7

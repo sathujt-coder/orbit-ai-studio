@@ -36,8 +36,8 @@ STAGES = [
     dict(id='qa', name='Quality Assurance', short='QA', team='Quy trình chất lượng', deliverable='Test strategy & quality process', description='Chiến lược kiểm thử, tiêu chuẩn chất lượng', icon='✓', color='#e1d27d', approval=False),
     dict(id='qc', name='Quality Control', short='QC', team='Kiểm thử', deliverable='Test cases & defect report', description='Kịch bản test, kiểm soát lỗi, đánh giá release', icon='⊞', color='#faac88', approval=False),
     dict(id='security', name='Security', short='SEC', team='An toàn', deliverable='Threat model & security review', description='Threat model, phân quyền, dữ liệu, đánh giá rủi ro', icon='⬡', color='#fd8797', approval=True),
-    dict(id='devops', name='DevOps / Release', short='OPS', team='Phát hành', deliverable='CI/CD & store release checklist', description='Build, CI/CD, giám sát, hồ sơ phát hành', icon='↗', color='#83ddb9', approval=True),
-    dict(id='marketing', name='Growth Marketing', short='MKT', team='Tăng trưởng', deliverable='Launch & growth playbook', description='ASO, chiến dịch, kênh thu hút và đo retention', icon='✦', color='#ecb7ff', approval=True),
+    dict(id='devops', name='DevOps / Release', short='OPS', team='Phát hành', deliverable='Web CI/CD & deployment checklist', description='Build, CI/CD, giám sát, hồ sơ phát hành', icon='↗', color='#83ddb9', approval=True),
+    dict(id='marketing', name='Growth Marketing', short='MKT', team='Tăng trưởng', deliverable='Web launch & growth playbook', description='SEO, onboarding, chiến dịch, kênh thu hút và đo retention', icon='✦', color='#ecb7ff', approval=True),
 ]
 STAGE_IDS = [s['id'] for s in STAGES]
 STAGE_BY_ID = {s['id']: s for s in STAGES}
@@ -88,7 +88,7 @@ def init_db():
             if 'run_id' not in columns:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN run_id TEXT NOT NULL DEFAULT ''")
         if c.execute('SELECT count(*) AS n FROM projects').fetchone()['n'] == 0:
-            create_project('KnowledgeNest · AI Knowledge Vault', 'Ứng dụng Flutter lưu link/video/bài viết từ web và mạng xã hội, tự động phân loại bằng AI, có tìm kiếm ngữ nghĩa, đánh dấu và xem lại.', 'Flutter + Web', c=c)
+            create_project('KnowledgeNest · AI Knowledge Vault', 'Ứng dụng Web lưu link/video/bài viết từ internet và mạng xã hội, tự động phân loại bằng AI, có tìm kiếm, đánh dấu và xem lại; Mobile chỉ sau nghiệm thu Web.', 'Web app', c=c)
 
 
 def create_project(name, idea, platform, c=None):
@@ -416,7 +416,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
-                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=list_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.5.0')); return
+                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=list_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.6.0-web-first')); return
             if path.startswith('/api/projects/') and path.endswith('/coding'):
                 pid = path.split('/')[3]
                 with LOCK,db() as c:
@@ -480,7 +480,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/projects':
                 name=str(body.get('name','')).strip();idea=str(body.get('idea','')).strip()
                 if len(name)<3 or len(idea)<10: raise ValueError('Tên tối thiểu 3 ký tự, ý tưởng tối thiểu 10 ký tự')
-                with LOCK,db() as c: pid=create_project(name,idea,str(body.get('platform','Web + Mobile')),c)
+                with LOCK,db() as c: pid=create_project(name,idea,str(body.get('platform','Web app')),c)
                 self.send_json(201,{'project_id':pid});return
             if path.startswith('/api/projects/'):
                 spl=path.strip('/').split('/')
