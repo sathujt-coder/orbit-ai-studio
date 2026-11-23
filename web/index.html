@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090f1d"><title>ORBIT AI — Autonomous Software Studio</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-icon"><span>✺</span></div><div class="brand-copy"><b>ORBIT<span> AI</span></b><small>AUTONOMOUS STUDIO</small></div></div>
+    <div class="space-label">WORKSPACE</div>
+    <nav class="side-nav" id="sideNav">
+      <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Tổng quan <i></i></button>
+      <button class="nav-item" data-view="departments"><span class="nav-icon">▦</span> Phòng ban <span class="nav-count">12</span></button>
+      <button class="nav-item" data-view="workflow"><span class="nav-icon">↗</span> Quy trình <span class="nav-count">12</span></button>
+      <button class="nav-item" data-view="coding"><span class="nav-icon">⌨</span> AI Coding Factory</button>
+      <button class="nav-item" data-view="github"><span class="nav-icon">⑂</span> GitHub Delivery</button>
+      <button class="nav-item" data-view="artifacts"><span class="nav-icon">▤</span> Tài liệu <span class="nav-count" id="sidebarDocs">0</span></button>
+    </nav>
+    <div class="sidebar-divider"></div>
+    <div class="space-row"><span class="space-label">DỰ ÁN</span><button class="plain-icon" id="newProjectShortcut" title="Tạo dự án">＋</button></div>
+    <div class="project-side" id="projectSide"></div>
+    <div class="sidebar-bottom">
+      <div class="system-status"><span class="status-light"></span><div><b>Hệ thống sẵn sàng</b><small id="systemModel">Đang kết nối...</small></div></div>
+      <div class="sidebar-foot"><span>ORBIT AI STUDIO</span><span>V0.4</span></div>
+    </div>
+  </aside>
+
+  <div class="body-shell">
+    <header class="topbar"><div class="breadcrumb"><span>Studio</span><b>/</b><strong id="breadcrumbProject">Workspace</strong></div>
+      <div class="topbar-actions"><span class="header-date" id="headerDate"></span><span class="header-badge"><span></span> LIVE CONTROL</span><div class="profile-avatar">AI</div></div>
+    </header>
+    <main class="main-content" id="mainContent">
+      <div class="page-heading"><div><div class="eyebrow"><span class="tiny-star">✳</span> AUTONOMOUS SOFTWARE COMPANY</div><h1>Trung tâm điều hành <em>AI</em></h1><p>12 phòng ban · 24 agent · 2 lớp làm việc và phản biện độc lập</p></div><button class="btn primary new-project-btn" id="newProjectBtn"><span>＋</span> Dự án mới</button></div>
+      <div class="stats-row" id="statsRow">
+        <div class="metric"><div class="metric-head">TỔNG AGENT <span class="metric-glyph">◈</span></div><div class="metric-value">24 <span class="metric-unit">AGENTS</span></div><div class="metric-foot"><span class="mini-dot mint"></span> 12 cặp làm việc độc lập</div></div>
+        <div class="metric"><div class="metric-head">PHÒNG BAN <span class="metric-glyph purple">▦</span></div><div class="metric-value">12 <span class="metric-unit">TEAMS</span></div><div class="metric-foot"><span class="mini-dot purple"></span> Toàn bộ vòng đời sản phẩm</div></div>
+        <div class="metric"><div class="metric-head">TIẾN ĐỘ DỰ ÁN <span class="metric-glyph amber">⌁</span></div><div class="metric-value" id="statPercent">0<span class="metric-unit">%</span></div><div class="metric-foot" id="statProgress">0/12 giai đoạn hoàn thành</div></div>
+        <div class="metric"><div class="metric-head">QUALITY REVIEWS <span class="metric-glyph teal">✓</span></div><div class="metric-value" id="statReviews">0</div><div class="metric-foot"><span class="mini-dot mint"></span> Kiểm tra chéo A ↔ B</div></div>
+      </div>
+
+      <div class="workspace-grid" id="overviewSection">
+        <section class="world-panel">
+          <div class="panel-top"><div><div class="section-label">LIVE SIMULATION <span class="live-pill"><i></i> 3D WORKSPACE</span></div><h2>Văn phòng AI ảo</h2></div><div class="world-top-right"><span class="project-indicator" id="worldActive">● Sẵn sàng</span><button class="outline-icon" id="resetCamera" title="Đặt lại góc nhìn">⟳</button></div></div>
+          <div class="world-wrap" id="worldWrap"><canvas id="world" aria-label="Bản đồ văn phòng 3D, kéo để xoay, cuộn để phóng to"></canvas><div class="world-labels" id="worldLabels"></div>
+            <div class="world-hint"><span class="hint-icon">⌁</span> Kéo để xoay <span class="hint-divider">·</span> Cuộn để zoom <span class="hint-divider">·</span> Chọn phòng ban</div>
+            <div class="world-axis"><span class="axis-icon">✥</span><span>3D VIEW</span></div>
+          </div>
+          <div class="world-bottom"><div class="legend"><span><i class="dot idle"></i> Chờ việc</span><span><i class="dot work"></i> Đang làm</span><span><i class="dot review"></i> Review</span><span><i class="dot done"></i> Hoàn thành</span><span><i class="dot blocked"></i> Chờ duyệt / Cần sửa</span></div><div class="world-counter"><span id="worldCount">12</span> PHÒNG BAN</div></div>
+        </section>
+        <section class="inspector" id="departmentsSection">
+          <div class="inspect-top"><div class="section-label">DEPARTMENT INSPECTOR</div><div class="on-air"><i></i> LIVE STATUS</div></div>
+          <div class="dept-head"><div class="dept-icon" id="deptIcon">⌘</div><div><small id="deptCode">TECH LEAD / DEPT. 06</small><h2 id="deptName">Tech Lead</h2></div></div>
+          <p class="dept-description" id="deptDescription">Lựa chọn phòng ban để xem công việc và nhân sự.</p>
+          <div class="department-status"><span>TRẠNG THÁI</span><b class="state-chip" id="deptStatus">Đang chờ</b></div>
+          <div class="inspect-divider"></div>
+          <div class="members-head"><b>Nhân sự AI</b><span>02 AGENTS</span></div>
+          <div id="agentMembers" class="agent-members"></div>
+          <div class="deliverable-section"><div class="section-mini">ĐẦU RA CẦN BÀN GIAO</div><p id="deptDeliverable">Architecture & ADR</p></div>
+          <div class="inspect-actions"><button class="btn subtle" id="openChat"><span>✳</span> Trao đổi với agent</button><button class="btn outline" id="deptViewArtifacts">▤ Xem tài liệu</button></div>
+        </section>
+      </div>
+
+      <section class="pipeline-card" id="workflowSection"><div class="section-heading"><div><div class="section-label">SOFTWARE DELIVERY LIFECYCLE</div><h2>Quy trình phát triển sản phẩm</h2><p>Mỗi giai đoạn: 2 bản độc lập → review chéo → hợp nhất → quality gate</p></div><div class="pipeline-controls"><button class="btn outline" id="nextStage">▶ Chạy 1 bước</button><button class="btn primary" id="runPipeline">✳ Chạy quy trình</button><button class="btn danger hidden" id="pausePipeline">Ⅱ Tạm dừng</button></div></div>
+        <div class="pipeline-track" id="pipelineTrack"></div>
+        <div class="quality-footer"><div class="shield-glyph">⬡</div><div><b>Độc lập trước · Phản biện sau</b><small>Agent A và B tạo bản nháp riêng; chỉ được đọc bài nhau ở vòng đánh giá. Cả hai phải duyệt mới qua gate. Security, DevOps và Marketing cần bạn phê duyệt.</small></div><span class="quality-tag">HUMAN-IN-THE-LOOP</span></div>
+      </section>
+
+      <section class="github-panel" id="codingSection">
+        <div class="section-heading">
+          <div><div class="section-label">AI CODING FACTORY · V0.4</div><h2>DEV-A / DEV-B · Viết mã &amp; phản biện</h2>
+            <p>Hai giải pháp độc lập → review chéo A ↔ B → quality gate → tải bản mã đã duyệt. Không chạy hoặc đẩy mã tự động.</p>
+          </div><span class="file-count" id="codingMode">DEMO</span>
+        </div>
+        <div class="github-grid">
+          <div class="github-card">
+            <form id="codingForm" class="coding-form">
+              <label class="github-label" for="codingSpec">Yêu cầu chức năng / User Story</label>
+              <textarea id="codingSpec" required minlength="15" maxlength="4000" rows="5" placeholder="Ví dụ: Xây dựng module Flutter lưu bài viết, có validate URL và unit test..."></textarea>
+              <div class="github-controls"><button class="btn primary" type="submit" id="codingStart">✳ Bắt đầu hai agent</button><button class="btn outline" type="button" id="codingRefresh">⟳ Làm mới</button></div>
+            </form>
+            <p class="github-subtext">Chế độ DEMO chỉ sinh mã minh họa. Khi kết nối Ollama/API, agent tạo mã thật nhưng vẫn chưa chạy test hoặc kiểm chứng bảo mật. Có thể phát sinh chi phí API.</p>
+          </div>
+          <div class="github-card">
+            <div class="section-mini">CODING JOBS &amp; REVIEW EVIDENCE</div>
+            <div id="codingJobs" class="coding-jobs">Chưa có job.</div>
+            <pre id="codingDetail" class="github-preview">Chọn một job để xem tiến độ, 2 phương án và kết quả review.</pre>
+            <a id="codingDownload" class="btn outline hidden" download>Tải bản mã đã qua review ↧</a>
+          </div>
+        </div>
+      </section>
+      <section class="github-panel" id="githubSection">
+        <div class="section-heading">
+          <div><div class="section-label">GITHUB DELIVERY · HUMAN APPROVAL</div><h2>GitHub &amp; Draft Pull Requests</h2>
+            <p>Chỉ xuất tài liệu final đã qua review A ↔ B. Không tự merge, sửa code hay phát hành store.</p>
+          </div>
+          <span class="file-count" id="githubConnBadge">LOCAL CONFIG</span>
+        </div>
+        <div class="github-grid">
+          <div class="github-card">
+            <div class="section-mini">REPOSITORY ĐÍCH</div>
+            <a id="githubRepoLink" target="_blank" rel="noopener noreferrer">sathujt-coder/orbit-ai-studio</a>
+            <p id="githubConnection">Đang kiểm tra cấu hình GitHub trên máy chủ...</p>
+            <label class="github-label" for="githubArtifact">Tài liệu đã đạt quality gate</label>
+            <select id="githubArtifact" aria-label="Chọn bản final đã duyệt"><option value="">Chưa có tài liệu đủ điều kiện</option></select>
+            <div class="github-controls"><button class="btn outline" id="githubPreview">Kiểm tra trước khi gửi</button><button class="btn primary" id="githubCreate" disabled>Tạo draft PR ↗</button></div>
+            <p class="github-subtext">Cần bật ORBIT_GITHUB_WRITES=1 và đặt GITHUB_TOKEN ở backend. Không nhập token vào ứng dụng web.</p>
+          </div>
+          <div class="github-card">
+            <div class="section-mini">QUALITY &amp; EXPORT HISTORY</div>
+            <pre id="githubPreviewText" class="github-preview">Chọn tài liệu và nhấn “Kiểm tra trước khi gửi”.</pre>
+            <div id="githubHistory" class="github-history">Chưa có pull request nào được ghi nhận từ ORBIT.</div>
+          </div>
+        </div>
+      </section>
+      <div class="lower-grid"><section class="activity-panel"><div class="section-heading small"><div><div class="section-label">ACTIVITY STREAM</div><h2>Nhật ký hoạt động</h2></div><span class="refresh-label"><span class="status-light"></span> Cập nhật tự động</span></div><div class="activity-feed" id="activityFeed"></div></section>
+        <section class="artifact-panel" id="artifactsSection"><div class="section-heading small"><div><div class="section-label">DOCUMENT VAULT</div><h2>Kho tài liệu & review</h2></div><span id="artifactTotal" class="file-count">0 FILES</span></div><div class="artifact-list" id="artifactList"></div><div class="artifact-bottom"><span>Mọi bản nháp và review được lưu trong SQLite</span><button id="showAllArtifacts" class="text-button">Xem tất cả ↗</button></div></section></div>
+      <footer class="main-footer">ORBIT AI · 3D Autonomous Software Studio <span>Local-first orchestration · Demo ≠ production deployment</span></footer>
+    </main>
+  </div>
+</div>
+
+<div class="modal-backdrop hidden" id="createModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal"><div class="modal-head"><div><div class="section-label">NEW WORKSPACE</div><h2 id="modalTitle">Khởi tạo dự án mới</h2></div><button class="close-btn" data-close="createModal">×</button></div><form id="newProjectForm"><label>Tên dự án<input required minlength="3" maxlength="100" name="name" placeholder="Ví dụ: My AI Product"></label><label>Mô tả ý tưởng<textarea required minlength="10" maxlength="10000" rows="5" name="idea" placeholder="Mô tả vấn đề người dùng, đối tượng mục tiêu, tính năng chính..." ></textarea></label><label>Nền tảng<select name="platform"><option>Flutter + Web</option><option>Web app</option><option>iOS + Android</option><option>SaaS + API</option></select></label><div class="modal-actions"><button type="button" class="btn outline" data-close="createModal">Hủy</button><button class="btn primary" type="submit">＋ Tạo 12 phòng ban</button></div></form></div></div>
+<div class="modal-backdrop hidden" id="artifactModal" role="dialog" aria-modal="true"><div class="modal modal-large"><div class="modal-head"><div><div class="section-label" id="artifactModalMeta">ARTIFACT</div><h2 id="artifactModalTitle">Chi tiết tài liệu</h2></div><button class="close-btn" data-close="artifactModal">×</button></div><div class="document-body" id="artifactBody"></div><div class="modal-actions"><button class="btn outline" id="copyArtifact">⧉ Sao chép</button><button class="btn primary" data-close="artifactModal">Đóng</button></div></div></div>
+<div class="modal-backdrop hidden" id="chatModal" role="dialog" aria-modal="true"><div class="modal modal-chat"><div class="modal-head"><div><div class="section-label">DIRECT AGENT COMMUNICATION</div><h2 id="chatTitle">Trao đổi với Agent</h2></div><button class="close-btn" data-close="chatModal">×</button></div><div class="chat-feed" id="chatFeed"></div><form id="chatForm" class="chat-form"><textarea id="chatInput" placeholder="Giao nhiệm vụ / yêu cầu phản biện..." rows="2" required></textarea><button class="btn primary" type="submit">Gửi ↗</button></form></div></div>
+<div class="toast-wrap" id="toastWrap"></div>
+<script src="/world3d.js"></script><script src="/app.js"></script>
+</body></html>

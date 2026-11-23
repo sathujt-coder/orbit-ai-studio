@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+company.sqlite
+company.sqlite-wal
+company.sqlite-shm
+*.log
+.env
+.DS_Store
