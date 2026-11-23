@@ -16,7 +16,7 @@ def proposal(offset):
     return validate_proposal({'summary':'Independent Web candidate', 'files':[
         {'path':'tsconfig.json','content':json.dumps({'compilerOptions':{
             'strict':True,'noEmit':True,'target':'ES2022','module':'ESNext',
-            'moduleResolution':'Bundler','types':[]}})},
+            'moduleResolution':'Bundler','allowImportingTsExtensions':True,'types':[]}})},
         {'path':'src/math.ts','content':f'export function add(a: number, b: number): number {{ return a + b + {offset}; }}\n'},
         {'path':'src/math.test.ts','content':
          '// @ts-ignore: node built-in types are not included in the offline fixture\n'
