@@ -25,7 +25,7 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     await page.locator('#newProjectForm input[name=name]').fill(name);
     await page.locator('#newProjectForm textarea[name=idea]').fill('Test web application end to end with real Chromium and backend persistence');
     await page.locator('#newProjectForm button[type=submit]').click();
-    await page.locator('#createModal.hidden').waitFor({timeout: 15000});
+    await page.locator('#createModal').waitFor({state: 'hidden', timeout: 15000});
     await page.getByText(name, {exact: true}).first().waitFor({timeout: 15000});
     const state = await page.evaluate(async () => {
       const projects = (await (await fetch('/api/bootstrap')).json()).projects;
