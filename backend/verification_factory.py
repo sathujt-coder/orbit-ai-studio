@@ -181,7 +181,7 @@ def _execute_docker(image, workspace, command, runner, timeout, trace_label):
         output = (completed.stdout or '') + '\n' + (completed.stderr or '')
         result.update(executed=True, exit_code=completed.returncode, passed=completed.returncode == 0,
                       output=output[-MAX_OUTPUT:])
-        if trace_label in ('python_tests', 'javascript_tests'):
+        if trace_label in ('python_tests', 'javascript_tests', 'typescript_tests'):
             matches = (PY_RAN if trace_label == 'python_tests' else JS_RAN).findall(output)
             count = int(matches[-1]) if matches else 0
             result.update(test_count=count, passed=completed.returncode == 0 and count > 0)
