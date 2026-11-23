@@ -102,13 +102,6 @@ class VerifiedCodePRClient(GitHubClient):
         jid = bundle['job_id']
         if not JOB_ID.fullmatch(jid):
             raise ValueError('Invalid job id')
-        branch = 'orbit/verified-' + jid + '-' + uuid.uuid4().hex[:8]
-        api = '/repos/' + repo
-        meta = self.request('GET', api)
-        base = meta['default_branch']
-        details = self.request('GET', api + '/branches/' + quote(base, safe=''))
-        self.request('POST', api + '/git/refs', {'ref': 'refs/heads/' + branch,
-                                                'sha': details['commit']['sha']})
         selected = bundle.get('selected')
         if selected not in ('A', 'B'):
             raise ValueError('Explicit selected candidate is required')
@@ -122,6 +115,13 @@ class VerifiedCodePRClient(GitHubClient):
                 if not relative.startswith('candidate-' + selected + '/'):
                     raise ValueError('Invalid selected candidate path')
                 safe_path(relative[len('candidate-' + selected + '/'):])
+        branch = 'orbit/verified-' + jid + '-' + uuid.uuid4().hex[:8]
+        api = '/repos/' + repo
+        meta = self.request('GET', api)
+        base = meta['default_branch']
+        details = self.request('GET', api + '/branches/' + quote(base, safe=''))
+        self.request('POST', api + '/git/refs', {'ref': 'refs/heads/' + branch,
+                                                'sha': details['commit']['sha']})
         for f in bundle['files']:
             path = f['path']
             if not path.startswith('agent-proposals/' + jid + '/'):
