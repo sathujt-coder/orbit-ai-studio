@@ -25,9 +25,17 @@ jobs:
         run: |
           test -f backend/server.py
           test -f backend/coding_factory.py
+          test -f backend/verification_factory.py
+          test -f backend/verified_pr.py
+          test -f tools/verify_coding_job.py
+          test -f tools/publish_verified_code.py
           test -f web/app.js
           test -f web/world3d.js
           test -f tests/test_coding_factory.py
+          test -f tests/test_verification_factory.py
+          test -f tests/test_verified_pr.py
+      - name: Release preflight
+        run: python tools/validate_release.py
       - name: Compile Python
         run: python -m compileall -q backend tools tests
       - name: Run test suite

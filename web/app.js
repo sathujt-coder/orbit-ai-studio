@@ -5,12 +5,12 @@ const $=id=>document.getElementById(id), statusMap={queued:'Đang chờ',draftin
 const activeStatuses=['drafting','reviewing','synthesizing'],completedStatuses=['done','approved'];
 const esc=str=>String(str??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ago=date=>{let n=(Date.now()-new Date(date).getTime())/1000;if(n<60)return 'Vừa xong';if(n<3600)return Math.floor(n/60)+' phút trước';if(n<86400)return Math.floor(n/3600)+' giờ trước';return new Date(date).toLocaleDateString('vi-VN')};
-let codingJobs=[],codingSelected='',codingBusy=false,codingDetail=null;
+let codingJobs=[],codingSelected='',codingBusy=false,codingDetail=null,codingVerifications=[];
 let githubConfig=null,githubExports=[],githubSelected='',githubVerified='',githubBusy=false;
 let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')||'',selectedDept='techlead',selectedAgent='techlead-A',world=null,loading=false,documentText='',showAll=false,artifactFilter=null,chatSending=false;
 async function api(path,method='GET',body){let opts={method,headers:{'Content-Type':'application/json','X-ORBIT-UI':'1'}};if(body!==undefined)opts.body=JSON.stringify(body);const r=await fetch(path,opts);let v;try{v=await r.json()}catch{throw Error('Máy chủ không phản hồi JSON')};if(!r.ok)throw Error(v.error||'Lỗi không xác định');return v}
 function toast(msg,isError=false){let el=document.createElement('div');el.className='toast'+(isError?' error':'');el.textContent=msg;$('toastWrap').append(el);setTimeout(()=>el.remove(),4500)}
-function setProject(pid){projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='techlead';selectedAgent='techlead-A';artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
+function setProject(pid){projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='techlead';selectedAgent='techlead-A';artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
 async function init(){try{bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.mode+' / '+bootstrap.provider.modelA;
  $('headerDate').textContent=new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'numeric',month:'long'});
  bindEvents();renderSidebar();await loadState();await loadGithubConfig();await loadGithubExports();await loadCodingJobs();setInterval(loadState,1400);setInterval(loadCodingJobs,4000)}catch(err){toast('Không thể kết nối backend: '+err.message,true);$('activityFeed').innerHTML='<div class="empty"><span>⚠</span><b>Chưa kết nối máy chủ</b><small>Mở ứng dụng tại http://127.0.0.1:8787 sau khi chạy python3 backend/server.py</small></div>'}}
@@ -44,7 +44,7 @@ function bindEvents(){for(let el of [$('newProjectBtn'),$('newProjectShortcut')]
  $('chatForm').addEventListener('submit',sendChat);
  $('codingForm').addEventListener('submit',startCoding);
  $('codingRefresh').addEventListener('click',loadCodingJobs);
- $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){codingSelected=btn.dataset.job;await loadCodingDetail();renderCoding()}});
+ $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){codingSelected=btn.dataset.job;codingVerifications=[];await loadCodingDetail();renderCoding()}});
  $('githubArtifact').addEventListener('change',e=>{githubSelected=e.target.value;githubVerified='';$('githubPreviewText').textContent='Chọn Kiểm tra trước khi gửi để xác minh quality gate.';renderGitHub()});
  $('githubPreview').addEventListener('click',previewGitHub);$('githubCreate').addEventListener('click',createGitHubPR);
  document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('[data-view]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const section=({overview:'overviewSection',departments:'departmentsSection',workflow:'workflowSection',artifacts:'artifactsSection',coding:'codingSection',github:'githubSection'})[btn.dataset.view];$(section).scrollIntoView({behavior:'smooth',block:'start'})}));
@@ -54,7 +54,7 @@ async function run(mode){try{await api('/api/projects/'+projectId+'/run','POST',
 
 async function startCoding(e){e.preventDefault();if(codingBusy||!projectId)return;
  const spec=$('codingSpec').value.trim();if(spec.length<15)return;codingBusy=true;$('codingStart').disabled=true;
- try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});codingSelected=r.job_id;codingDetail=null;
+ try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});codingSelected=r.job_id;codingDetail=null;codingVerifications=[];
   $('codingSpec').value='';toast('DEV-A và DEV-B đã nhận job. Code chỉ được tải khi cả hai review đạt.');await loadCodingJobs();await loadCodingDetail();}
  catch(err){toast(err.message,true)}finally{codingBusy=false;$('codingStart').disabled=false}}
 async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
@@ -64,19 +64,20 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
 async function loadCodingDetail(){if(!codingSelected)return;
- try{codingDetail=await api('/api/coding/'+encodeURIComponent(codingSelected));renderCoding()}
+ try{const id=codingSelected;codingDetail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');if(id!==codingSelected)return;codingVerifications=v.verifications||[];renderCoding()}
  catch(err){toast(err.message,true)}}
 function renderCoding(){if(!bootstrap)return;
- $('codingMode').textContent=bootstrap.provider.mode==='demo'?'DEMO · NO REAL CODE':'AI MODEL · NO EXECUTION';
+ $('codingMode').textContent=bootstrap.provider.mode==='demo'?'DEMO · NO REAL CODE':'AI MODEL · SANDBOX CLI OPT-IN';
  const list=$('codingJobs');list.replaceChildren();if(!codingJobs.length){list.textContent='Chưa có job coding. Hãy giao một user story.';return}
  for(const j of codingJobs){const btn=document.createElement('button');btn.type='button';btn.className='coding-job'+(j.id===codingSelected?' selected':'');btn.dataset.job=j.id;
  const label=document.createElement('b');label.textContent=j.id+' · '+j.status;const summary=document.createElement('small');summary.textContent=j.spec.slice(0,110);btn.append(label,summary);list.append(btn)}
  if(codingDetail&&codingDetail.id===codingSelected){const j=codingDetail,lines=['JOB '+j.id,'Trạng thái: '+j.status,'Feature: '+j.spec,''];
  for(const lane of ['a','b']){const p=j['proposal_'+lane],r=j['review_'+lane];if(p)lines.push('DEV-'+lane.toUpperCase()+' proposal: '+p.files.map(f=>f.path).join(', '));if(r)lines.push('Review '+r.reviewer+' → '+r.author+': '+r.verdict+' '+r.score+'/100 | '+r.feedback)}
- if(j.status==='ready')lines.push('Quality gate PASS · Code chưa chạy test và chưa ghi GitHub.');if(j.error)lines.push('Lỗi: '+j.error);
+ if(j.status==='ready')lines.push('Review gate PASS · Chưa có bảo đảm mã đã chạy test. Sandbox chỉ chạy qua CLI với xác nhận rõ ràng.');if(j.error)lines.push('Lỗi: '+j.error);
  $('codingDetail').textContent=lines.join('\n');
+ const verified=$('codingVerification');if(verified){const entry=codingVerifications[0];verified.textContent=entry?'SANDBOX VERIFICATION · '+entry.verdict.toUpperCase()+'\nEvidence: '+entry.id+'\nGate: '+entry.report.gate+'\nA: '+(entry.report.lanes?.A?.status||'unknown')+' · B: '+(entry.report.lanes?.B?.status||'unknown')+'\n'+entry.created_at:'Chưa có bằng chứng sandbox. Xem docs/RELEASE_NOTES_0.5.md để xác minh qua CLI.';}
  const link=$('codingDownload');link.classList.toggle('hidden',j.status!=='ready');if(j.status==='ready')link.href='/api/coding/'+encodeURIComponent(j.id)+'/download';else link.removeAttribute('href');
- }else{$('codingDetail').textContent='Chọn một job để xem tiến độ và kết quả.';$('codingDownload').classList.add('hidden')}
+ }else{$('codingDetail').textContent='Chọn một job để xem tiến độ và kết quả.';if($('codingVerification'))$('codingVerification').textContent='Chưa chọn job để xem bằng chứng sandbox.';$('codingDownload').classList.add('hidden')}
 }
 async function loadGithubConfig(){try{githubConfig=await api('/api/github/status');renderGitHub()}catch(err){toast('GitHub config: '+err.message,true)}}
 async function loadGithubExports(){if(!projectId)return;let pid=projectId;try{const result=await api('/api/projects/'+encodeURIComponent(pid)+'/github');if(pid!==projectId)return;githubExports=result.exports||[];renderGitHub()}catch(err){toast(err.message,true)}}

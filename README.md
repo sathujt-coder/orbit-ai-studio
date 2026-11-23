@@ -1,8 +1,8 @@
-# ORBIT AI — Autonomous Software Studio (MVP 0.4)
+# ORBIT AI — Autonomous Software Studio (MVP 0.5)
 
 **Công ty phần mềm AI ảo với văn phòng 3D, 12 phòng ban / 24 agent, review chéo A ↔ B, workflow trạng thái, human approval, chat agent và kho tài liệu.**
 
-> **Phạm vi chính xác:** Bản này là MVP điều phối đa agent **có thể chạy**. Chế độ `demo` mô phỏng đầu ra, không thực hiện nghiên cứu hay viết/deploy phần mềm thật. Kết nối Ollama/API giúp agent tạo đầu ra AI thật (tài liệu, đặc tả, đánh giá) nhưng hiện **chưa** thực thi mã trong sandbox, push GitHub, chạy Flutter build, kiểm thử ứng dụng thật hoặc tự xuất bản App Store / Google Play. Các tích hợp production nằm trong `docs/PRODUCTION_ROADMAP.md`.
+> **Phạm vi chính xác:** Bản này là MVP điều phối đa agent **có thể chạy**. Chế độ `demo` mô phỏng đầu ra, không thực hiện nghiên cứu hay viết/deploy phần mềm thật. Kết nối Ollama/API giúp agent tạo đầu ra AI thật (tài liệu, đặc tả, đánh giá) và v0.5 hỗ trợ **xác minh mã Python/JavaScript trong Docker qua CLI sau phê duyệt**; tuy nhiên vẫn chưa chạy Flutter build, kiểm thử ứng dụng thật hoặc tự xuất bản App Store / Google Play. Các tích hợp production nằm trong `docs/PRODUCTION_ROADMAP.md`.
 
 ## 1. Chạy ngay (không yêu cầu npm, Docker hoặc API key)
 
@@ -206,7 +206,7 @@ For exact publishing, access-scope, migration, safety and branch-protection inst
 
 No authenticated access to the user's remote GitHub repository is implied by this downloaded package.
 
-## 10. v0.4 — AI Coding Factory (agent tạo code, review chéo)
+## 10. v0.5 — AI Coding Factory (agent tạo code, review chéo)
 
 Trong dashboard chọn **AI Coding Factory**. Gõ một feature/user story và chạy DEV-A + DEV-B:
 
@@ -221,3 +221,10 @@ Trong dashboard chọn **AI Coding Factory**. Gõ một feature/user story và c
 
 **GitHub Plugin trong ChatGPT khác với token GitHub dành cho backend ORBIT.** Không lưu token trong file repo hoặc gửi token qua chat.
 
+
+
+## ORBIT v0.5 — Docker sandbox verification (opt-in)
+
+Version 0.5 adds a **CLI-only**, explicit approval flow for independently executing tested Python/JavaScript coding proposals in restricted Docker containers, storing test evidence, and optionally creating a draft GitHub PR under `agent-proposals/`. It does not execute untrusted code on the host and never automatically merges/deploys. The dashboard remains read-only for execution evidence. Docker images must be digest-pinned, and Docker must be installed and configured separately. **No Docker-based execution has been performed as part of the CI unit tests.**
+
+Read [v0.5 release notes](docs/RELEASE_NOTES_0.5.md) for prerequisites, exact opt-in commands, and security limitations.
