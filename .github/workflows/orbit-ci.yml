@@ -87,3 +87,21 @@ jobs:
           name: orbit-web-e2e-logs
           path: ${{ runner.temp }}/orbit-server.log
           retention-days: 7
+
+  web-typescript-docker:
+    name: Real Docker TypeScript sandbox — two candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build offline-runtime toolchain image
+        run: docker build --pull --tag orbit-web-ts:ci --file tools/web-sandbox/Dockerfile .
+      - name: Run real isolated Docker checks for both candidates
+        run: PYTHONPATH=tests python tools/web-sandbox/real_docker_smoke.py
