@@ -1,29 +1,37 @@
-# ORBIT AI Studio — GitHub delivery plan
+# ORBIT AI Studio — GitHub delivery status
 
-Target: `sathujt-coder/orbit-ai-studio`.
+Repository: `sathujt-coder/orbit-ai-studio`  
+Working branch: `feat/orbit-v04-foundation`  
+PR: https://github.com/sathujt-coder/orbit-ai-studio/pull/1
 
-## Scope
-The validated local ORBIT v0.4 bundle includes 12 departments, 24 agents, a 3D office interface, independent proposals, cross-review, quality gates, task history, a GitHub-delivery module and a coding artifact exporter.
+## v0.4 application source imported
 
-**Important:** This foundation PR only sets up repository hygiene and CI. It does not contain the full v0.4 source bundle. Do not merge it as a product release until the complete application source has been uploaded and CI passes.
+The complete v0.4 MVP source bundle has been imported into this PR. The repository contains `backend/`, `web/`, `tests/`, `tools/`, `docs/`, a 3D frontend, agent orchestration, cross-review, Coding Factory and GitHub integration code.
 
-## Upload the existing v0.4 ZIP
+- 12 departments, 24 agents and independent A/B proposals.
+- Review gates and human approval for sensitive stages.
+- Coding Factory emits candidate source artifacts and reviewed ZIPs.
+- GitHub delivery can create draft PRs when explicitly configured.
+- This is a **local MVP**, not a secure public SaaS and not a fully autonomous production code/deploy agent.
 
-1. Download `orbit-ai-software-studio-v04-coding-factory.zip` from the ChatGPT conversation.
-2. Extract it. The application files live inside `ai-studio-company/`.
-3. Clone the repository and check out `feat/orbit-v04-foundation`.
-4. Copy the *contents* of `ai-studio-company/` to repository root. Preserve `.github/`, `backend/`, `web/`, `tests/`, `tools/`, `docs/`, `README.md`, `start.sh` and `.gitignore`.
-5. Run `python3 -m unittest discover -s tests -v`, `node --check web/app.js`, and `node --check web/world3d.js`.
-6. Commit and push. GitHub Actions will validate the full codebase.
+## Validation performed outside GitHub Actions
 
-## Quality / security safeguards
+On the imported source archive:
+- `python3 -m unittest discover -s tests -v`: **30 tests passed**.
+- `python3 -m compileall -q backend tools tests`: **passed**.
+- `node --check web/app.js` and `node --check web/world3d.js`: **passed**.
 
-- No tokens, credentials, `.env` files, or generated SQLite databases in Git.
-- Code and cross-review results must be independently verified; AI-generated approvals are not substitutes for executed tests or security audits.
-- Require human approval before merging, publishing to stores, or deploying to production.
-- Keep the MVP bound to localhost; it has no production authentication/RBAC.
-- Never run generated code outside a sandbox.
+GitHub Actions must also complete successfully for this PR. Do not treat local checks as CI evidence.
 
-## Next milestone
+## Review and release conditions
 
-Implement actual coding-agent isolated worktrees, sandboxed execution, deterministic acceptance tests, PR-based delivery and independent security review, then release automation gated by human approval.
+1. Open PR #1 and verify GitHub Actions status.
+2. Independently review generated code and critical security controls.
+3. Do not merge until all CI jobs pass and the human owner approves.
+4. The application must remain bound to localhost; production authentication/RBAC, sandbox execution, rate limiting, and deployment safeguards are incomplete.
+5. Do not commit tokens, `.env` files, test databases, or private data.
+6. Do not enable automatic merge or deployment on this PR.
+
+## Next milestone (v0.5)
+
+Introduce isolated agent workspaces, sandboxed code execution, deterministic acceptance tests and independent security checks. Connect changes to PR review/CI, with human approval before merging or publishing apps.
