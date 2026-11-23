@@ -20,6 +20,7 @@ def main(argv=None, client_type=VerifiedCodePRClient):
     parser = argparse.ArgumentParser(description='Open a draft GitHub PR for sandbox-verified code')
     parser.add_argument('--job-id', required=True)
     parser.add_argument('--repo', required=True)
+    parser.add_argument('--decision', type=Path, required=True, help='Tech Lead decision JSON from an authorized, audited workflow')
     parser.add_argument('--db', type=Path, default=ROOT / 'company.sqlite')
     parser.add_argument('--apply', action='store_true', help='Explicitly write code under agent-proposals/ and create draft PR')
     parser.add_argument('--confirm', default='', help='Exact confirmation CREATE CODE PR <job id>')
@@ -38,10 +39,15 @@ def main(argv=None, client_type=VerifiedCodePRClient):
             results = list_reports(conn, args.job_id)
             if not results:
                 raise ValueError('No sandbox verification evidence exists')
-            bundle = verified_bundle(job, results[0]['report'])
+            if not args.decision.is_file():
+                raise ValueError('Tech Lead decision JSON is missing')
+            if args.decision.stat().st_size > 50_000:
+                raise ValueError('Tech Lead decision JSON is too large')
+            decision = json.loads(args.decision.read_text(encoding='utf-8'))
+            bundle = verified_bundle(job, results[0]['report'], decision=decision)
             if not args.apply:
                 print(json.dumps({'mode': 'dry-run', 'repo': args.repo,
-                                  'source_prefix': bundle['prefix'],
+                                  'selected': bundle['selected'], 'source_prefix': bundle['prefix'],
                                   'files': [f['path'] for f in bundle['files']],
                                   'reviews': bundle['review_summary'],
                                   'notice': 'No GitHub mutation; pass --apply and explicit --confirm'},
