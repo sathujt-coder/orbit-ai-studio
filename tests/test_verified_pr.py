@@ -9,6 +9,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import verified_pr as vp
 import verification_factory as vf
+import web_candidate_selection as selection
 from test_verification_factory import job, PY_IMG, FakeDocker
 
 
@@ -31,9 +32,12 @@ class VerifiedPRTests(unittest.TestCase):
         self.job = job()
         self.report = vf.verify_job(self.job, python_image=PY_IMG, runner=FakeDocker(),
                                     approval='RUN SANDBOX job-abc')
+        self.decision = selection.decide(self.job, self.report, selected='A', techlead='Human Lead',
+            rationale='Candidate A passes all verification and is simpler to maintain.',
+            confirmation='SELECT DEV-A job-abc')
 
     def test_verified_bundle_only_writes_candidate_prefix(self):
-        bundle = vp.verified_bundle(self.job, self.report)
+        bundle = vp.verified_bundle(self.job, self.report, decision=self.decision)
         self.assertEqual(len(bundle['files']), 3)
         self.assertTrue(all(x['path'].startswith('agent-proposals/job-abc/') for x in bundle['files']))
         self.assertTrue(all(not x['path'].startswith('.github/') for x in bundle['files']))
@@ -41,7 +45,7 @@ class VerifiedPRTests(unittest.TestCase):
 
     def test_draft_pr_does_not_merge_or_deploy(self):
         client = FakeClient()
-        res = client.draft_pr('example/orbit', vp.verified_bundle(self.job, self.report))
+        res = client.draft_pr('example/orbit', vp.verified_bundle(self.job, self.report, decision=self.decision))
         self.assertEqual(res['number'], 2)
         writes = [(method,route) for method,route,_ in client.requests if method in {'POST','PUT'}]
         self.assertEqual(sum(route.endswith('/pulls') for _,route in writes), 1)
@@ -69,10 +73,10 @@ class VerifiedPRTests(unittest.TestCase):
     def test_code_change_after_verification_rejected(self):
         self.job['proposal_b']['files'][0]['content']='def add(*args): return 0'
         with self.assertRaises(ValueError):
-            vp.verified_bundle(self.job,self.report)
+            vp.verified_bundle(self.job,self.report,decision=self.decision)
 
     def test_refuses_untrusted_target_path(self):
-        bundle=vp.verified_bundle(self.job,self.report)
+        bundle=vp.verified_bundle(self.job,self.report,decision=self.decision)
         bundle['files'][0]['path']='.github/workflows/ci.yml'
         client=FakeClient()
         with self.assertRaises(ValueError):
