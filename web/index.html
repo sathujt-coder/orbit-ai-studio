@@ -18,7 +18,7 @@
     <div class="project-side" id="projectSide"></div>
     <div class="sidebar-bottom">
       <div class="system-status"><span class="status-light"></span><div><b>Hệ thống sẵn sàng</b><small id="systemModel">Đang kết nối...</small></div></div>
-      <div class="sidebar-foot"><span>ORBIT AI STUDIO</span><span>V0.5</span></div>
+      <div class="sidebar-foot"><span>ORBIT AI STUDIO</span><span>V0.6 WEB</span></div>
     </div>
   </aside>
 
@@ -64,7 +64,7 @@
 
       <section class="github-panel" id="codingSection">
         <div class="section-heading">
-          <div><div class="section-label">AI CODING FACTORY · V0.5</div><h2>DEV-A / DEV-B · Viết mã &amp; phản biện</h2>
+          <div><div class="section-label">AI CODING FACTORY · WEB FIRST</div><h2>DEV-A / DEV-B · Viết mã &amp; phản biện</h2>
             <p>Hai giải pháp độc lập → review chéo A ↔ B → quality gate → tải bản mã đã duyệt. Không chạy hoặc đẩy mã tự động.</p>
           </div><span class="file-count" id="codingMode">DEMO</span>
         </div>
@@ -72,10 +72,10 @@
           <div class="github-card">
             <form id="codingForm" class="coding-form">
               <label class="github-label" for="codingSpec">Yêu cầu chức năng / User Story</label>
-              <textarea id="codingSpec" required minlength="15" maxlength="4000" rows="5" placeholder="Ví dụ: Xây dựng module Flutter lưu bài viết, có validate URL và unit test..."></textarea>
+              <textarea id="codingSpec" required minlength="15" maxlength="4000" rows="5" placeholder="Ví dụ: Xây dựng tính năng Web quản lý bài viết với REST API, giao diện responsive, kiểm tra dữ liệu và unit test..."></textarea>
               <div class="github-controls"><button class="btn primary" type="submit" id="codingStart">✳ Bắt đầu hai agent</button><button class="btn outline" type="button" id="codingRefresh">⟳ Làm mới</button></div>
             </form>
-            <p class="github-subtext">Chế độ DEMO chỉ sinh mã minh họa. Khi kết nối Ollama/API, agent tạo mã thật nhưng vẫn chưa chạy test hoặc kiểm chứng bảo mật. Có thể phát sinh chi phí API.</p>
+            <p class="github-subtext">Chế độ DEMO chỉ sinh mã minh họa. Khi kết nối Ollama/API, agent có thể tạo mã thật; kiểm thử Docker phải chạy riêng qua CLI sau khi phê duyệt. Web cần nghiệm thu trước khi bắt đầu Mobile. Có thể phát sinh chi phí API.</p>
           </div>
           <div class="github-card">
             <div class="section-mini">CODING JOBS &amp; REVIEW EVIDENCE</div>
@@ -117,7 +117,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop hidden" id="createModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal"><div class="modal-head"><div><div class="section-label">NEW WORKSPACE</div><h2 id="modalTitle">Khởi tạo dự án mới</h2></div><button class="close-btn" data-close="createModal">×</button></div><form id="newProjectForm"><label>Tên dự án<input required minlength="3" maxlength="100" name="name" placeholder="Ví dụ: My AI Product"></label><label>Mô tả ý tưởng<textarea required minlength="10" maxlength="10000" rows="5" name="idea" placeholder="Mô tả vấn đề người dùng, đối tượng mục tiêu, tính năng chính..." ></textarea></label><label>Nền tảng<select name="platform"><option>Flutter + Web</option><option>Web app</option><option>iOS + Android</option><option>SaaS + API</option></select></label><div class="modal-actions"><button type="button" class="btn outline" data-close="createModal">Hủy</button><button class="btn primary" type="submit">＋ Tạo 12 phòng ban</button></div></form></div></div>
+<div class="modal-backdrop hidden" id="createModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal"><div class="modal-head"><div><div class="section-label">NEW WORKSPACE</div><h2 id="modalTitle">Khởi tạo dự án mới</h2></div><button class="close-btn" data-close="createModal">×</button></div><form id="newProjectForm"><label>Tên dự án<input required minlength="3" maxlength="100" name="name" placeholder="Ví dụ: My AI Product"></label><label>Mô tả ý tưởng<textarea required minlength="10" maxlength="10000" rows="5" name="idea" placeholder="Mô tả vấn đề người dùng, đối tượng mục tiêu, tính năng chính..." ></textarea></label><label>Nền tảng<select name="platform"><option>Web app</option><option>SaaS + API</option></select></label><div class="modal-actions"><button type="button" class="btn outline" data-close="createModal">Hủy</button><button class="btn primary" type="submit">＋ Tạo 12 phòng ban</button></div></form></div></div>
 <div class="modal-backdrop hidden" id="artifactModal" role="dialog" aria-modal="true"><div class="modal modal-large"><div class="modal-head"><div><div class="section-label" id="artifactModalMeta">ARTIFACT</div><h2 id="artifactModalTitle">Chi tiết tài liệu</h2></div><button class="close-btn" data-close="artifactModal">×</button></div><div class="document-body" id="artifactBody"></div><div class="modal-actions"><button class="btn outline" id="copyArtifact">⧉ Sao chép</button><button class="btn primary" data-close="artifactModal">Đóng</button></div></div></div>
 <div class="modal-backdrop hidden" id="chatModal" role="dialog" aria-modal="true"><div class="modal modal-chat"><div class="modal-head"><div><div class="section-label">DIRECT AGENT COMMUNICATION</div><h2 id="chatTitle">Trao đổi với Agent</h2></div><button class="close-btn" data-close="chatModal">×</button></div><div class="chat-feed" id="chatFeed"></div><form id="chatForm" class="chat-form"><textarea id="chatInput" placeholder="Giao nhiệm vụ / yêu cầu phản biện..." rows="2" required></textarea><button class="btn primary" type="submit">Gửi ↗</button></form></div></div>
 <div class="toast-wrap" id="toastWrap"></div>
