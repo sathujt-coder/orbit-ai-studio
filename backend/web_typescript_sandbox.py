@@ -6,6 +6,7 @@ adapter; integration with the legacy Python/JS verifier is a future change.
 """
 from __future__ import annotations
 from pathlib import PurePosixPath
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -38,6 +39,13 @@ def plan_web(proposal):
     return {'files':paths, 'ts_files':ts, 'tests':tests, 'blockers':errors,
             'sha256':plan_lane({'files':proposal['files']})['sha256']}
 
+def immutable_web_image(image):
+    # Docker's local image ID is a content-addressed SHA-256 of its config.
+    # This is distinct from a registry manifest digest, but immutable locally.
+    if isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+        return image
+    return pinned_image(image)
+
 def verify_web(job, *, image, approval, runner=subprocess.run, timeout=25):
     if approval != 'RUN WEB SANDBOX ' + str(job.get('id','')):
         raise PermissionError('Explicit RUN WEB SANDBOX <job-id> confirmation required')
@@ -52,7 +60,7 @@ def verify_web(job, *, image, approval, runner=subprocess.run, timeout=25):
     if any(p['blockers'] for p in plans.values()):
         result['lanes']={lane:{'status':'blocked','reasons':p['blockers']} for lane,p in plans.items()}
         return result
-    image=pinned_image(image)
+    image=immutable_web_image(image)
     for lane,proposal in proposals.items():
         plan=plans[lane]
         with tempfile.TemporaryDirectory(prefix='orbit-web-') as tmp:
