@@ -14,6 +14,10 @@ MAX_RESPONSE=4_000_000
 class ProviderError(RuntimeError):
     pass
 
+class RoutingError(ProviderError):
+    """No eligible pre-dispatch pair; no provider request has been sent."""
+    pass
+
 class ConcurrencyError(ProviderError):
     """A bounded local inference slot could not be acquired; no request was sent."""
     pass

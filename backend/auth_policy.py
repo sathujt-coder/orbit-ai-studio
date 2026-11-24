@@ -14,6 +14,7 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        if path=='/api/provider/routing':return ('','provider_routing_read')
         if path=='/api/provider/settings':return ('','provider_settings_read')
         if path=='/api/provider/usage':return ('','provider_usage_read')
         if path=='/api/provider/resources':return ('','provider_resources_read')
@@ -22,13 +23,14 @@ def scope(c,method,path,query='',body=None):
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/queue(?:/'+ID+r')?',path)
         if m:return (m[1],'read')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance|usage|cost)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance|usage|cost|routing)',path)
         if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
         m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
         if m:return (resource_project(c,'coding_jobs',m[1]),'read')
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
+        if path=='/api/provider/routing/preview':return ('','provider_routing_preview')
         if path=='/api/provider/resources/models':return ('','provider_resource_models')
         if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])

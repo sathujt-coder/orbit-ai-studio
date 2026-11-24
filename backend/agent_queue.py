@@ -33,10 +33,11 @@ def ensure_schema(c):
         seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES agent_queue(id),
         status TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL)""")
 
-def fingerprint(lanes):
+def fingerprint(lanes,routing=None):
     # Bind nonsecret provider settings, including endpoint and presence of credentials.
-    return hashlib.sha256(json.dumps({k:dict(ps.lane_form(v),key_configured=bool(v.api_key))
-        for k,v in lanes.items()},sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    base={k:dict(ps.lane_form(v),key_configured=bool(v.api_key)) for k,v in lanes.items()}
+    if routing is not None:base['routing_policy']=routing
+    return hashlib.sha256(json.dumps(base,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 def event(c,identifier,status,reason,now):
     c.execute('INSERT INTO agent_queue_events(task_id,status,reason,created_at) VALUES(?,?,?,?)',(identifier,status,reason,now))
@@ -56,7 +57,7 @@ def get(c,pid,identifier):
     if not row:raise ValueError('Queue task not found')
     return row
 
-def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,priority=5,dependency_id=None,retry_of=None,now=None):
+def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,priority=5,dependency_id=None,retry_of=None,now=None,routing=None):
     now=int(time.time()) if now is None else now
     if not permitted(c,actor,pid):raise PermissionError('Project write permission required')
     if kind not in ('pipeline','coding') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
@@ -74,7 +75,7 @@ def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,prior
     c.execute("""INSERT INTO agent_queue(id,project_id,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,
          provider_revision,provider_fingerprint,status,available_at,created_at,updated_at)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)""",
-         (identifier,pid,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,revision,fingerprint(lanes),now,now,now))
+         (identifier,pid,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,revision,fingerprint(lanes,routing),now,now,now))
     event(c,identifier,'queued','accepted',now)
     return identifier
 
