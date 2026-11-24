@@ -129,7 +129,13 @@ def boundary(c,row,result,now,stamp,stage=None):
     if result=='needs_revision':
         fail(c,row,'quality_gate',now,stamp);return
     if row['kind']=='coding':
-        change(c,row,'succeeded',result,now,control='',checkpoint_stage=stage);return
+        # The persisted job is authoritative. Recheck inside the queue completion
+        # transaction, not just the dispatcher's earlier result.
+        persisted=c.execute('SELECT status FROM coding_jobs WHERE id=? AND project_id=?',
+                            (row['coding_job_id'],row['project_id'])).fetchone()
+        if result!='ready' or not persisted or persisted[0]!='ready':
+            fail(c,row,'coding_completion_mismatch',now,stamp);return
+        change(c,row,'succeeded','ready',now,control='',checkpoint_stage=stage);return
     if row['control']=='cancel':
         change(c,row,'cancelled','cancelled_at_boundary',now,control='',checkpoint_stage=stage);return
     if result=='awaiting_approval':
@@ -183,7 +189,7 @@ def recover(c,now,stamp):
 
 def view(c,pid):
     fields='id,project_id,kind,mode,coding_job_id,priority,dependency_id,retry_of,provider_revision,status,control,reason,checkpoint_stage,attempts,deferrals,available_at,created_at,updated_at'
-    rows=c.execute('SELECT '+fields+' FROM agent_queue WHERE project_id=? ORDER BY rowid DESC LIMIT 100',(pid,)).fetchall()
+    rows=c.execute('SELECT '+fields+',(SELECT j.status FROM coding_jobs j WHERE j.id=agent_queue.coding_job_id AND j.project_id=agent_queue.project_id) AS coding_status FROM agent_queue WHERE project_id=? ORDER BY rowid DESC LIMIT 100',(pid,)).fetchall()
     totals={r[0]:r[1] for r in c.execute('SELECT status,COUNT(*) FROM agent_queue WHERE project_id=? GROUP BY status',(pid,))}
     return {'schema':'orbit.agent-queue.v1','project_id':pid,'tasks':[dict(r) for r in rows],'counts':totals,'truncated':sum(totals.values())>len(rows)}
 

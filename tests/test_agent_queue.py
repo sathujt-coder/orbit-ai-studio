@@ -140,3 +140,40 @@ with agent_queue.dispatcher_lock(server.DB_PATH):
             with sqlite3.connect(database) as db:
                 self.assertEqual(db.execute('SELECT status FROM agent_queue ORDER BY priority DESC').fetchall(),[('interrupted',),('succeeded',)])
                 self.assertEqual(db.execute("SELECT t.status FROM tasks t JOIN agent_queue q ON q.project_id=t.project_id WHERE t.stage_id='po' ORDER BY q.priority DESC").fetchall(),[('needs_revision',),('done',)])
+
+    def test_coding_completion_requires_persisted_ready_status(self):
+        i=self.add(kind='coding',jid='j')
+        row=self.claim()
+        self.c.execute("UPDATE coding_jobs SET status='generating' WHERE id='j'")
+        q.boundary(self.c,row,'ready',101,'stamp')
+        self.assertEqual(self.state('p',i),'dead')
+        self.assertEqual(q.get(self.c,'p',i)['reason'],'coding_completion_mismatch')
+        self.assertEqual(q.view(self.c,'p')['tasks'][0]['coding_status'],'failed')
+    def test_coding_completion_snapshot_consistent(self):
+        i=self.add(kind='coding',jid='j')
+        row=self.claim()
+        self.c.execute("UPDATE coding_jobs SET status='ready' WHERE id='j'")
+        q.boundary(self.c,row,'ready',101,'stamp')
+        task=q.view(self.c,'p')['tasks'][0]
+        self.assertEqual((task['status'],task['coding_status']),('succeeded','ready'))
+    def test_actual_dispatcher_coding_completion(self):
+        import os,subprocess
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            env=dict(os.environ,AI_COMPANY_DB=str(Path(directory)/'queue.sqlite'),AI_PROVIDER='demo',AI_PROVIDER_A='demo',AI_PROVIDER_B='demo',PYTHONPATH=str(root/'backend'))
+            script="""import server,auth_store,agent_queue
+server.init_db()
+with server.db() as c:
+    pid=server.create_project('Coding test','Dispatcher coding completion fixture','Web app',c)
+    auth_store.create_user(c,'fixture','fixture-password-123')
+    auth_store.grant(c,'fixture',pid,'owner')
+result=server.enqueue_coding(pid,'fixture','Implement a demo queue dependent web feature')
+assert server.dispatch_one()
+with server.db() as c:
+    task=agent_queue.view(c,pid)['tasks'][0]
+    job=c.execute('SELECT status FROM coding_jobs WHERE id=?',(result['job_id'],)).fetchone()
+    assert task['id']==result['queue_id'] and task['coding_job_id']==result['job_id']
+    assert (task['status'],task['coding_status'],job[0])==('succeeded','ready','ready'),(task,job[0])
+assert not server.dispatch_one()
+"""
+            subprocess.run([sys.executable,'-c',script],env=env,check=True,timeout=30)
