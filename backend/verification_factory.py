@@ -66,6 +66,10 @@ def safe_job(job):
     expected = [{'path': f['path'], 'sha256': f['sha256']} for f in proposals['A']['files']]
     if expected != manifest['files']:
         raise ValueError('Proposal A no longer matches the reviewed SHA-256 manifest')
+    if 'candidate_files' in manifest:
+        for lane,proposal in proposals.items():
+            if manifest['candidate_files'].get(lane)!=[{'path':f['path'],'sha256':f['sha256']} for f in proposal['files']]:
+                raise ValueError('Proposal '+lane+' no longer matches reviewed manifest')
     return proposals
 
 

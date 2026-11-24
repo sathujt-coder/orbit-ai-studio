@@ -199,6 +199,7 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn):
         # Candidate is proposal A, cross-reviewed by DEV-B; both reviews are required.
         manifest = {'selected': 'A', 'files': [{k:f[k] for k in ('path','sha256')} for f in a['files']],
                     'reviewed_by': ['DEV-A', 'DEV-B'], 'mode': 'demo' if model_call is None else 'model',
+                    'candidate_files': {lane:[{k:f[k] for k in ('path','sha256')} for f in proposal['files']] for lane,proposal in (('A',a),('B',b))},
                     'tested': False, 'executed': False}
         update('ready' if approved else 'needs_revision',
                review_a=json.dumps(ra, ensure_ascii=False), review_b=json.dumps(rb, ensure_ascii=False),
