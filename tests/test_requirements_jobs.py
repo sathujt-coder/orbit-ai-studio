@@ -45,6 +45,20 @@ class RequirementsQueueTests(unittest.TestCase):
         return jobs.latest(self.c,'p')
     def body(self,row):
         return dict(queue_id=row['queue_id'],digest=row['digest'],expected_version=row['base_version'],confirmation='ADOPT AI REQUIREMENTS')
+    def test_storage_recomputes_convergence_instead_of_trusting_claim(self):
+        evidence=self.evidence()
+        evidence.update(no_op_repair=False,convergence=dict(passed=True),
+            quality_revision=dict(before_document=document(),before_review=dict(blocking=['Reviewer defect'])))
+        ready,findings,progress=jobs.quality_gate(evidence,self.contract())
+        self.assertTrue(findings['passed'])
+        self.assertFalse(ready)
+        self.assertTrue(progress['no_op'])
+        self.assertFalse(progress['passed'])
+        i=self.add();row=q.claim(self.c,9999999999,'t')
+        result=jobs.persist(self.c,'p',i,evidence,self.lanes,'t')
+        self.assertEqual(result,'needs_revision')
+        q.boundary(self.c,row,result,9999999999,'t')
+        self.assertFalse(jobs.latest(self.c,'p')['can_adopt'])
     def test_adopt_provenance_and_gate(self):
         i=self.add();row=self.finish(i)
         self.assertTrue(row['can_adopt'])

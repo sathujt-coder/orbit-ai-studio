@@ -15,7 +15,7 @@ IDEA=("A small web app for readers to save URLs and list their saved links. "
 # the test author's scope contract. The independent original semantic checks remain.
 SCOPE_CONTRACT=dict(rules=[
     dict(id='SC-1',kind='functional',required=True,evidence='save URLs',
-        matches=[['save','saving','saved','store','storing'],['url','urls','link','links']]),
+        matches=[['save','saving','store','storing','persist','persisting'],['url','urls','link','links']]),
     dict(id='SC-2',kind='functional',required=True,evidence='list their saved links',
         matches=[['list','listing','display','view','retrieve'],['url','urls','link','links']]),
     dict(id='SC-3',kind='nonfunctional',required=True,evidence='an unauthorized cross-project read must be denied',
@@ -26,7 +26,10 @@ SCOPE_CONTRACT=dict(rules=[
         'manage own projects','create projects','create a project','delete projects','delete a project',
         'mobile app','sharing','external integrations'],
     nonblocking_questions=['How many users will use the app?','What is the average number of saved links per user?',
-        'How will users access the app?'])
+        'How will users access the app?'],
+    # Test-author policy: descriptive observational counts are not MVP limits.
+    deferred_metric_subjects=['users','saved links per user','projects per user'],
+    problem_source='A small web app for readers to save URLs and list their saved links.')
 
 def require(ok,message):
     if not ok:raise RuntimeError(message)
@@ -78,18 +81,37 @@ def main():
                 re.search(r'\b(register|registration|sign.up|create (?:a |new )?projects?|delete (?:a |existing )?projects?|manage (?:their |own )?projects?|project management)\b',
                     r['description']+' '+' '.join(r['acceptance']),re.I)
                 for r in document['requirements'] if r['kind']=='functional')
+            # A past false positive counted "saved" as an action. Require an actual
+            # save/store/persist verb and link object within one functional requirement.
+            checks['explicit_save_action']=any(
+                re.search(r'\b(save|saving|store|storing|persist|persisting)\b',r['description']+' '+' '.join(r['acceptance']),re.I)
+                and re.search(r'\b(urls?|links?)\b',r['description']+' '+' '.join(r['acceptance']),re.I)
+                for r in document['requirements'] if r['kind']=='functional')
             report['fixture_checks']=checks
             report['final_review']=evidence['final_review']
             report['scope_findings']=evidence.get('scope_findings')
             report['scope_repair']=evidence.get('scope_repair')
             report['false_approval_detected']=evidence.get('false_approval_detected')
             report['no_op_repair']=evidence.get('no_op_repair')
+            report['convergence']=evidence.get('convergence')
+            report['review_audit']=evidence.get('review_audit')
+            report['quality_revision']=evidence.get('quality_revision')
+            report['ready_for_human_review']=evidence.get('ready_for_human_review')
             report['open_questions']=document['open_questions']
             require(all(checks.values()),'Essential fixture scope missing or unrequested scope added')
             require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review: '+queued['reason'])
             require(evidence['ready_for_human_review'],'Final review or open questions block adoption')
             import requirements_scope as sc
             require(sc.assess(document,sc.validate(IDEA,SCOPE_CONTRACT))['passed'],'Independent scope contract enforcement failed')
+            require(jobs.quality_gate(evidence,sc.validate(IDEA,SCOPE_CONTRACT))[0],'Independent convergence gate failed')
+            audits=evidence['review_audit']
+            expected_reviews=[('requirements_cross_review','A'),('requirements_cross_review','B'),('requirements_final_review','B')]
+            if evidence.get('scope_recheck'):expected_reviews.append(('requirements_scope_recheck','B'))
+            if evidence.get('quality_revision') is not None:expected_reviews.append(('requirements_quality_recheck','B'))
+            require([(x['phase'],x['lane']) for x in audits]==expected_reviews,'Review audit sequence mismatch')
+            require(evidence['false_approval_detected']==any(x['false_approval'] for x in audits),'False approval audit mismatch')
+            require(audits[-1]['document_digest']==sc.digest(document) and audits[-1]['scope_passed'],'Latest review is not bound to accepted content')
+            require(evidence['convergence'] is None or evidence['convergence']['passed'],'Semantic convergence failed')
             with server.db() as c:
                 adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
                     expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
@@ -147,6 +169,7 @@ def main():
             report['quality_revision_calls']=2 if revised_quality else 0
             report['scope_recheck_calls']=int(scope_recheck)
             gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs+(2 if revised_quality else 0)+int(scope_recheck) and not (scope_recheck and revised_quality) and repairs<=(4 if revised_quality else 3) and len(calls)<=20 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+                review_audit_complete=True,semantic_convergence=evidence['convergence'] is None or evidence['convergence']['passed'],
                 scope_contract_enforced=evidence['scope_findings']['passed'] and not evidence['no_op_repair'] and evidence['scope_contract']==sc.validate(IDEA,SCOPE_CONTRACT),
                 department_evidence=collaboration['research_mode']=='input_analysis_only' and all(
                     set(collaboration[d]['proposals'])==set(collaboration[d]['reviews'])=={'A','B'} for d in ('research','ba')),

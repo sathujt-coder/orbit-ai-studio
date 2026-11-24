@@ -111,3 +111,35 @@ fixture idea and independent semantic checks remain; the fixture now supplies an
 explicit test-author contract, so a future PASS is for contracted discovery, not
 unconstrained free-text inference. 14 baseline calls, either a fresh scope recheck
 or 2 model revision calls plus existing format repairs, at most 20 calls.
+
+## P6.1g — Semantic convergence and hardened quality gate (pending CI)
+The 9db0238 real run completed 16 calls but blocked on an unapproved observational
+question. Its initial targeted projection removed one unsupported item and two
+explicitly deferred questions, while the subsequent model revision merely
+renumbered requirements and copied review commentary into product metadata.
+A saved URL appearing in a list was also incorrectly accepted as a save action.
+This increment keeps the original fixture idea, contract coverage, independent
+review, human adoption/approval and 20-call ceiling; it strengthens them:
+- Optional human-confirmed deferred_metric_subjects permits only exact descriptive
+  count topics in tightly bounded question templates. Existing exact question
+  deferrals remain. Unknown topics, limits, access/authorization decisions and
+  other wording fail closed. No model can authorize deferral.
+- Reject review commentary in PRD fields. On contaminated problem, use only a
+  confirmed exact problem_source quote; for contaminated goals/scope use required
+  source quotes, preserving clean entries. Other contamination remains blocking.
+- Recover missing required coverage from already generated, valid A/B draft
+  requirements and their exclusive linked stories, recording source lane/ID.
+  Never create new requirement text or weaken coverage checks.
+- Content digest ignores generated IDs, collection order, case and whitespace;
+  convergence requires fewer defects, no newly introduced deterministic defects,
+  and no lost required coverage. Unresolved questions cannot disappear in repair
+  without an explicit contract deferral. Reviewer-only issues still need fresh
+  independent review and human judgment.
+- Record false approval checks for both PO cross-reviews, initial final review
+  and the applicable fresh recheck; compare against the document's deterministic
+  findings. Recompute final scope and convergence at persistence and adoption.
+- Offline acceptance checks actual save-action wording, full review audit sequence
+  and digest binding, final scope and convergence. Report evidence even when BLOCK.
+The optional fixture metric-topic policy and exact problem quote are test-author
+decisions, not model-generated permissions. Literal checks and normalized content
+identity are not general semantic reasoning. Human approval remains mandatory.

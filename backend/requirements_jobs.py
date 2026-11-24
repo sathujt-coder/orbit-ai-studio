@@ -43,6 +43,28 @@ def input_for(c,pid,identifier):
     if not row:raise ValueError('Discovery input not found')
     return row
 
+def quality_gate(evidence,contract):
+    """Recompute content and convergence independently at storage/adoption."""
+    if contract is None:return False,None,None
+    document=pr.validate(evidence['document'])
+    findings=sc.assess(document,contract)
+    revision=evidence.get('quality_revision')
+    progress=None
+    try:
+        if revision is not None:
+            progress=sc.convergence(revision['before_document'],document,contract,
+                revision['before_review'],evidence['final_review'])
+        elif evidence.get('scope_recheck'):
+            initial=evidence['initial_final_review']
+            progress=sc.convergence(initial['document'],document,contract,
+                initial['review'],evidence['final_review'])
+    except (KeyError,TypeError,ValueError):
+        return False,findings,None
+    ready=bool(findings['passed'] and evidence['ready_for_human_review']
+        and not evidence.get('no_op_repair') and not evidence['final_review']['blocking']
+        and not document['open_questions'] and (progress is None or progress['passed']))
+    return ready,findings,progress
+
 def persist(c,pid,identifier,evidence,lanes,stamp):
     row=agent_queue.get(c,pid,identifier)
     if row['kind']!='requirements' or row['status']!='running':raise ValueError('Discovery task not running')
@@ -51,10 +73,11 @@ def persist(c,pid,identifier,evidence,lanes,stamp):
     mp.require_distinct_real(lanes)
     document=pr.validate(evidence['document'])
     contract=sc.validate(snapshot['idea'],json.loads(snapshot['scope_contract'])) if snapshot['scope_contract'] else None
-    findings=sc.assess(document,contract) if contract is not None else None
-    evidence=dict(evidence,scope_contract=contract,scope_findings=findings)
-    ready=bool(findings and findings['passed'] and evidence['ready_for_human_review']
-        and not evidence.get('no_op_repair') and not evidence['final_review']['blocking'] and not document['open_questions'])
+    ready,findings,progress=quality_gate(evidence,contract)
+    final_mismatch=bool(findings and sc.hard_issues(findings) and not evidence['final_review']['blocking'])
+    evidence=dict(evidence,scope_contract=contract,scope_findings=findings,convergence=progress,
+        false_approval_detected=bool(evidence.get('false_approval_detected') or final_mismatch),
+        ready_for_human_review=ready)
     payload=pr.canonical(evidence)
     if len(payload.encode())>250000:raise ValueError('Discovery evidence too large')
     digest=hashlib.sha256(pr.canonical(document).encode()).hexdigest()
@@ -78,6 +101,10 @@ def latest(c,pid):
     current=pr.latest(c,pid)
     data['can_adopt']=bool(data['status']=='succeeded' and data['ready'] and data['adopted_version'] is None
         and data['scope_contract'] is not None and data['base_version']==(current['version'] if current else 0))
+    if data['can_adopt']:
+        snapshot=input_for(c,pid,data['queue_id'])
+        contract=sc.validate(snapshot['idea'],data['scope_contract'])
+        data['can_adopt']=quality_gate(data['evidence'],contract)[0]
     return data
 
 def adopt(c,pid,actor,body,stamp):
@@ -90,8 +117,8 @@ def adopt(c,pid,actor,body,stamp):
         raise ValueError('Current reviewed discovery and matching base version/digest required')
     snapshot=input_for(c,pid,row['queue_id'])
     contract=sc.validate(snapshot['idea'],row['scope_contract'])
-    if not sc.assess(row['evidence']['document'],contract)['passed'] or row['evidence'].get('no_op_repair'):
-        raise ValueError('Scope contract gate failed')
+    if not quality_gate(row['evidence'],contract)[0]:
+        raise ValueError('Scope contract or convergence gate failed')
     data=pr.save(c,pid,actor,dict(expected_version=body['expected_version'],document=row['evidence']['document']),stamp)
     if data['current']['digest']!=row['digest']:raise RuntimeError('Discovery digest mismatch')
     c.execute('INSERT INTO requirement_discovery_adoptions VALUES(?,?,?,?,?)',
