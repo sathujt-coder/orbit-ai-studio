@@ -10,6 +10,10 @@ import model_provider as mp
 
 class Fixture(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
+    def do_GET(self):
+        self.server.received.append((self.path,self.headers.get('Authorization'),None))
+        raw=json.dumps({'data':[{'id':'local-model'},{'id':'cloud-model'},{'id':'local-model'}]}).encode()
+        self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.server.received.append((self.path,self.headers.get('Authorization'),body))
@@ -88,3 +92,11 @@ class ProviderTests(unittest.TestCase):
         mp.chat(lane,'s','u',schema=schema,repair_temperature=0.25,max_tokens=128)
         self.assertEqual(self.servers[0].received[0][2]['options']['temperature'],0.25)
         with self.assertRaises(ValueError):mp.chat(lane,'s','u',schema=schema,repair_temperature=0.9)
+
+    def test_list_models_and_runtime_context(self):
+        from dataclasses import replace
+        lane=replace(mp.load_config(dict(self.env,AI_PROVIDER_A='ollama'))['A'],context_window=4096,max_tokens=512,temperature=0.2)
+        self.assertEqual(mp.list_models(lane),['local-model'])
+        self.assertEqual(self.servers[0].received[0][:2],('/v1/models','Bearer fixture-a'))
+        mp.chat(lane,'s','u',runtime_settings=True)
+        self.assertEqual(self.servers[0].received[1][2]['options'],{'temperature':0.2,'num_predict':512,'num_ctx':4096})

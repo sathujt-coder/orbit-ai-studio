@@ -9,6 +9,7 @@ test('provider settings operator access and persisted demo settings',async()=>{
  await page.goto(base+'/providers.html');
  await page.locator('#settings').waitFor({state:'visible'});
  assert.equal(await page.locator('fieldset').count(),2);
+ const denied=await ctx.request.post(base+'/api/provider/settings',{headers:{Origin:base,'X-ORBIT-UI':'1'},data:{}});assert.equal(denied.status(),403);
  const response=await ctx.request.get(base+'/api/provider/settings');assert.equal(response.status(),200);
  const data=await response.json();assert.equal(data.credential_storage,'deployment_environment_only');
  // Save unchanged demo config; must not trigger inference or affect other browser tests.

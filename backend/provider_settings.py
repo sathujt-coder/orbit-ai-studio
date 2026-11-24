@@ -105,6 +105,7 @@ def save(c,actor,body,env,initial):
 
 def network_action(body,env,initial,action):
     global _LAST_NETWORK
+    if action not in ('probe','models'):raise ValueError('Unknown network action')
     if set(body)!={'lanes','confirmation'} or body['confirmation']!='TEST AI CONNECTION':
         raise ValueError('Explicit TEST AI CONNECTION required')
     lanes=validate(body['lanes'],env,initial)

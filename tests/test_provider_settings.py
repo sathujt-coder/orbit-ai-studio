@@ -51,6 +51,15 @@ class SettingsTests(unittest.TestCase):
         with patch.dict('os.environ',{'ORBIT_PROVIDER_ADMINS':'operator'}):
             for user,expected in [('operator',200),('project-owner',403)]:
                 token=auth_store.login(self.c,user,'fixture-password-123')
-                import hashlib
-                headers={'Cookie':'orbit_session='+token}
+                headers={'Cookie':auth_http.COOKIE+'='+token}
                 self.assertEqual(auth_policy.check(self.c,'GET','/api/provider/settings','',{},headers,8787)[0],expected)
+
+    def test_post_requires_csrf_and_global_admin(self):
+        auth_store.ensure_schema(self.c)
+        auth_store.create_user(self.c,'operator','fixture-password-123')
+        token=auth_store.login(self.c,'operator','fixture-password-123')
+        h={'Cookie':auth_http.COOKIE+'='+token,'Origin':'http://127.0.0.1:8787'}
+        with patch.dict('os.environ',{'ORBIT_PROVIDER_ADMINS':'operator'}):
+            self.assertEqual(auth_policy.check(self.c,'POST','/api/provider/settings','',self.body(),h,8787)[0],403)
+            h['X-ORBIT-CSRF']=auth_http.csrf_for(token)
+            self.assertEqual(auth_policy.check(self.c,'POST','/api/provider/settings','',self.body(),h,8787)[0],200)

@@ -341,8 +341,9 @@ def run_pipeline(pid, mode):
         if RUNNING.get(pid,{}).get('running'): raise ValueError('Dự án này đang chạy')
         with db() as c:
             if not c.execute('SELECT 1 FROM projects WHERE id=?',(pid,)).fetchone(): raise ValueError('Không tìm thấy dự án')
+        lanes=provider_snapshot()[1]
         RUNNING[pid]={'running':True,'pause':False,'mode':mode}
-        threading.Thread(target=pipeline_worker,args=(pid,mode,provider_snapshot()[1]),daemon=True).start()
+        threading.Thread(target=pipeline_worker,args=(pid,mode,lanes),daemon=True).start()
 
 
 def approve_stage(pid,sid):
