@@ -140,3 +140,24 @@ jobs:
         run: docker build -t orbit-react:ci tools/react-sandbox
       - name: Run two real offline React fixtures
         run: python tools/react-sandbox/smoke.py
+
+  p4-fixture-e2e:
+    name: P4 workflow — trusted HTTP fixtures and real Docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pull Python image and resolve immutable digest
+        run: |
+          docker pull python:3.12-alpine
+          image="$(docker image inspect python:3.12-alpine --format '{{index .RepoDigests 0}}')"
+          echo "ORBIT_P4_FIXTURE_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Exercise complete fixture workflow in isolated SQLite and Docker
+        run: python -m unittest discover -s tests -p test_p4_e2e.py -v
