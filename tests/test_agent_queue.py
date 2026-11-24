@@ -86,3 +86,57 @@ class QueueTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     with q.dispatcher_lock(path):pass
             with q.dispatcher_lock(path):pass
+
+    def test_next_stage_dependency_waits_for_approval(self):
+        i=self.add(mode='next');dep=self.add(kind='coding',jid='j',dep=i)
+        r=self.claim();self.c.execute("UPDATE tasks SET status='awaiting_approval' WHERE stage_id='po'")
+        q.boundary(self.c,r,'awaiting_approval',100,'stamp','po')
+        self.assertEqual(self.state('p',i),'waiting_approval');self.assertIsNone(self.claim())
+        self.c.execute("UPDATE tasks SET status='approved' WHERE stage_id='po'")
+        self.act(i,'resume');self.assertEqual(self.state('p',i),'succeeded')
+        self.assertEqual(self.claim(101)['id'],dep)
+    def test_real_process_crash_and_restart(self):
+        import os,subprocess,time
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            database=Path(directory)/'queue.sqlite'
+            env=dict(os.environ,AI_COMPANY_DB=str(database),AI_PROVIDER='demo',AI_PROVIDER_A='demo',AI_PROVIDER_B='demo',PYTHONPATH=str(root/'backend'))
+            setup="""import server,auth_store,agent_queue
+server.init_db()
+with server.db() as c:
+    a=server.create_project('Crash test','Crash recovery fixture','Web app',c)
+    b=server.create_project('Pending test','Pending recovery fixture','Web app',c)
+    auth_store.create_user(c,'fixture','fixture-password-123')
+    for pid in (a,b):auth_store.grant(c,'fixture',pid,'owner')
+    for pid,priority in ((a,9),(b,1)):agent_queue.enqueue(c,pid,'pipeline','fixture',0,server.MODEL_LANES,mode='next',priority=priority)
+"""
+            subprocess.run([sys.executable,'-c',setup],env=env,check=True,timeout=15)
+            # Real process is killed after a durable claim and partial stage update.
+            crash="""import server,agent_queue,time
+with agent_queue.dispatcher_lock(server.DB_PATH):
+    with server.db() as c:
+        row=agent_queue.claim(c,int(time.time()),server.now())
+        c.execute("UPDATE tasks SET status='drafting' WHERE project_id=? AND stage_id='po'",(row['project_id'],))
+    print('CLAIMED',flush=True)
+    time.sleep(60)
+"""
+            process=subprocess.Popen([sys.executable,'-c',crash],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            try:
+                deadline=time.monotonic()+10
+                while time.monotonic()<deadline:
+                    with sqlite3.connect(database) as db:
+                        if db.execute("SELECT COUNT(*) FROM agent_queue WHERE status='running'").fetchone()[0]==1:break
+                    time.sleep(.05)
+                else:self.fail('Child did not claim task')
+                process.kill();process.wait(timeout=5)
+            finally:
+                if process.poll() is None:process.kill();process.wait(timeout=5)
+            restart="""import server,agent_queue,time
+with agent_queue.dispatcher_lock(server.DB_PATH):
+    with server.db() as c:agent_queue.recover(c,int(time.time()),server.now())
+    assert server.dispatch_one()
+"""
+            subprocess.run([sys.executable,'-c',restart],env=env,check=True,timeout=15)
+            with sqlite3.connect(database) as db:
+                self.assertEqual(db.execute('SELECT status FROM agent_queue ORDER BY priority DESC').fetchall(),[('interrupted',),('succeeded',)])
+                self.assertEqual(db.execute("SELECT t.status FROM tasks t JOIN agent_queue q ON q.project_id=t.project_id WHERE t.stage_id='po' ORDER BY q.priority DESC").fetchall(),[('needs_revision',),('done',)])

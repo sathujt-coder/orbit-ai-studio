@@ -128,12 +128,14 @@ def boundary(c,row,result,now,stamp,stage=None):
         fail(c,row,'execution_failed',now,stamp);return
     if result=='needs_revision':
         fail(c,row,'quality_gate',now,stamp);return
-    if row['kind']=='coding' or row['mode']=='next':
+    if row['kind']=='coding':
         change(c,row,'succeeded',result,now,control='',checkpoint_stage=stage);return
     if row['control']=='cancel':
         change(c,row,'cancelled','cancelled_at_boundary',now,control='',checkpoint_stage=stage);return
     if result=='awaiting_approval':
         change(c,row,'waiting_approval','stage_approval_required',now,control='',checkpoint_stage=stage);return
+    if row['mode']=='next':
+        change(c,row,'succeeded',result,now,control='',checkpoint_stage=stage);return
     if row['control']=='pause':
         change(c,row,'paused','paused_at_boundary',now,control='',checkpoint_stage=stage);return
     if next_stage(c,row['project_id']) is None:
@@ -151,13 +153,18 @@ def control(c,pid,identifier,actor,action,now,stamp,priority=None):
     elif action=='cancel' and status in ('queued','paused','waiting_approval'):
         change(c,row,'cancelled','cancelled_by_user',now,control='');coding_terminal(c,row,'failed','queue_cancelled',stamp)
     elif action in ('pause','cancel') and status=='running' and row['kind']=='pipeline':
+        if row['control']=='cancel' and action=='pause':raise ValueError('Cancellation already requested')
         change(c,row,'running',action+'_requested',now,control=action)
     elif action=='resume' and status in ('paused','waiting_approval'):
         if row['kind']=='pipeline':
             stage=next_stage(c,pid)
             if stage is not None and stage['status']!='queued':raise ValueError('Resolve the stage quality/approval gate before resuming')
         if not permitted(c,row['actor'],pid):raise ValueError('Original submitter no longer has write permission; cancel and submit again')
-        change(c,row,'queued','resumed',now,control='',available_at=now)
+        if status=='waiting_approval' and row['kind']=='pipeline' and row['mode']=='next' and row['checkpoint_stage']:
+            approved=c.execute('SELECT status FROM tasks WHERE project_id=? AND stage_id=?',(pid,row['checkpoint_stage'])).fetchone()
+            if not approved or approved[0]!='approved':raise ValueError('Stage approval required')
+            change(c,row,'succeeded','stage_approved',now,control='')
+        else:change(c,row,'queued','resumed',now,control='',available_at=now)
     else:raise ValueError('Invalid transition; running coding jobs cannot be interrupted')
     return get(c,pid,identifier)
 

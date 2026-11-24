@@ -38,6 +38,7 @@ RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
 QUEUE_WAKE = threading.Event()
 QUEUE_STOP = threading.Event()
+QUEUE_THREAD = None
 
 STAGES = [
     dict(id='po', name='Product Owner', short='PO', team='Sản phẩm', deliverable='Product vision & roadmap', description='Định hình vấn đề, mục tiêu, KPI và phạm vi MVP', icon='◎', color='#54d6fa', approval=False),
@@ -522,7 +523,8 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/healthz':
                 try:
                     with LOCK,db() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
-                    self.send_json(200,{'status':'ok'})
+                    if QUEUE_THREAD is not None and not QUEUE_THREAD.is_alive():self.send_json(503,{'status':'unavailable','reason':'queue_dispatcher_stopped'})
+                    else:self.send_json(200,{'status':'ok'})
                 except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
                 return
             if path=='/api/auth/session':
@@ -542,6 +544,7 @@ class Handler(SimpleHTTPRequestHandler):
                     else:
                         data=agent_queue.view(c,pid)
                         data['can_write']=agent_queue.permitted(c,self.auth_context[0],pid)
+                        data['dispatcher_running']=bool(QUEUE_THREAD and QUEUE_THREAD.is_alive())
                 self.send_json(200,data);return
             if path=='/api/provider/resources':
                 self.send_json(200,RESOURCE_MANAGER.snapshot(include_gpu=True));return
@@ -729,6 +732,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    global QUEUE_THREAD
     if HOST not in ('127.0.0.1','localhost') and not (TRANSPORT.secure and os.getenv('ORBIT_ALLOW_TLS_BIND')=='1'):
         raise SystemExit('Non-loopback binding requires explicit TLS configuration and opt-in')
     tls=TRANSPORT.context() if TRANSPORT.secure else None
@@ -738,7 +742,7 @@ def main():
         with LOCK,db() as c:agent_queue.recover(c,int(time.time()),now())
         srv=ThreadingHTTPServer((HOST,PORT),Handler)
         if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
-        worker=threading.Thread(target=queue_worker,daemon=True);worker.start()
+        worker=threading.Thread(target=queue_worker,daemon=True);QUEUE_THREAD=worker;worker.start()
         print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
         try: srv.serve_forever()
         except KeyboardInterrupt: pass
