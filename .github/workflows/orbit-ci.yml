@@ -24,6 +24,8 @@ jobs:
       - name: Verify source files were delivered
         run: |
           test -f backend/server.py
+          test -f backend/model_provider.py
+          test -f tools/probe_models.py
           test -f backend/coding_factory.py
           test -f backend/verification_factory.py
           test -f backend/verified_pr.py
