@@ -12,6 +12,8 @@ on:
       - backend/model_routing.py
       - backend/inference_guard.py
       - backend/monitoring.py
+      - tools/offline_stress.py
+      - tools/stress_common.py
       - tools/offline_budget_smoke.py
       - tools/offline_routing_smoke.py
       - tools/offline_concurrency_smoke.py
@@ -90,6 +92,9 @@ jobs:
       - name: Verify budget admission against actual offline model
         run: |
           timeout 8m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_budget_smoke.py --report /report/protection.json --confirm 'RUN LOCAL BUDGET'
+      - name: P5.9 real 24-agent offline stress smoke (not 24h)
+        run: |
+          timeout 12m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" python:3.12-slim python /repo/tools/offline_stress.py --profile smoke --report /report/stress-smoke.json --confirm 'RUN LOCAL STRESS SMOKE'
       - name: Verify actual Ollama container resource bounds
         if: always()
         run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources.json"
