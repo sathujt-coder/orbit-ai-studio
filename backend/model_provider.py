@@ -14,6 +14,9 @@ MAX_RESPONSE=4_000_000
 class ProviderError(RuntimeError):
     pass
 
+class OutputError(ProviderError):
+    """A response was incomplete or unusable; a bounded format retry is allowed."""
+
 @dataclass(frozen=True)
 class Lane:
     lane:str
@@ -88,14 +91,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
 
-def chat(lane,system,user,*,max_tokens=None):
+def chat(lane,system,user,*,max_tokens=None,schema=None):
     if lane.provider=='demo':raise ProviderError('Demo lane cannot call a real provider')
     payload={'model':lane.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
              'temperature':0.45,'stream':False}
-    if max_tokens is not None:payload['max_tokens']=max_tokens
+    native=schema is not None and lane.provider=='ollama'
+    endpoint=lane.base_url+'/chat/completions'
+    if native:
+        endpoint=lane.base_url[:-3]+'/api/chat'
+        payload.pop('temperature')
+        payload['format']=schema
+        payload['options']={'temperature':0,'num_predict':max_tokens or 4096}
+    elif max_tokens is not None:payload['max_tokens']=max_tokens
     headers={'Content-Type':'application/json','Accept':'application/json'}
     if lane.api_key:headers['Authorization']='Bearer '+lane.api_key
-    request=urllib.request.Request(lane.base_url+'/chat/completions',
+    request=urllib.request.Request(endpoint,
         data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers=headers,method='POST')
     # Prevent automatic redirect or proxy environment from forwarding lane credentials.
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
@@ -104,10 +114,17 @@ def chat(lane,system,user,*,max_tokens=None):
             raw=response.read(MAX_RESPONSE+1)
         if len(raw)>MAX_RESPONSE:raise ProviderError('Provider response too large')
         data=json.loads(raw)
-        content=data['choices'][0]['message']['content']
-        if not isinstance(content,str):raise ProviderError('Invalid model response')
+        if native:
+            if data.get('done') is not True or data.get('done_reason')=='length':
+                raise OutputError('Incomplete structured output')
+            content=data['message']['content']
+        else:
+            choice=data['choices'][0]
+            if schema is not None and choice.get('finish_reason')=='length':raise OutputError('Incomplete structured output')
+            content=choice['message']['content']
+        if not isinstance(content,str):raise OutputError('Invalid model content')
         content=re.sub(r'<think>[\s\S]*?</think>','',content,flags=re.I).strip()
-        if not content or len(content)>100_000:raise ProviderError('Empty or oversized model content')
+        if not content or len(content)>100_000:raise OutputError('Empty or oversized model content')
         return content
     except urllib.error.HTTPError as exc:
         code=exc.code

@@ -13,6 +13,7 @@ from pathlib import PurePosixPath
 import re
 import threading
 import zipfile
+import model_provider
 
 MAX_FILES = 8
 MAX_FILE_BYTES = 18_000
@@ -101,6 +102,32 @@ def demo_proposal(project, spec, lane):
     return validate_proposal(obj)
 
 
+# The native Ollama schema constrains syntax; local validation still decides validity.
+PROPOSAL_SCHEMA={'type':'object','properties':{
+    'summary':{'type':'string','description':'Short implementation summary'},
+    'files':{'type':'array','minItems':1,'maxItems':8,'items':{
+        'type':'object','properties':{'path':{'type':'string'},'content':{'type':'string'}},
+        'required':['path','content'],'additionalProperties':False}}},
+    'required':['summary','files'],'additionalProperties':False}
+REVIEW_SCHEMA={'type':'object','properties':{
+    'verdict':{'type':'string','enum':['APPROVE','REQUEST_CHANGES']},
+    'score':{'type':'integer','minimum':0,'maximum':100},
+    'feedback':{'type':'string','minLength':1}},
+    'required':['verdict','score','feedback'],'additionalProperties':False}
+
+class StructuredReplyError(ValueError):
+    pass
+
+def structured_reply(model_call,system,message,lane,schema,validate):
+    """At most two attempts. Retry invalid format, never a valid negative review."""
+    for attempt in range(2):
+        prompt=message if not attempt else message+'\nPrevious reply was invalid. Return a complete JSON object matching the schema. Keep it concise.'
+        try:
+            raw=model_call.structured(system,prompt,lane,schema)
+            return validate(raw)
+        except (ValueError,model_provider.OutputError):
+            if attempt:raise StructuredReplyError('Structured output invalid after two attempts') from None
+
 def generate_proposal(model_call, project, spec, context, lane):
     if model_call is None:
         return demo_proposal(project, spec, lane)
@@ -118,6 +145,12 @@ def generate_proposal(model_call, project, spec, context, lane):
     message = (f'Dự án: {project["name"]}\nPlatform: {project["platform"]}\nÝ tưởng: {project["idea"][:2000]}\n'
                f'Feature cần phát triển:\n{spec}\nBối cảnh tài liệu:\n{context[:5000]}\n'
                f'Bạn là agent DEV-{lane}. Hãy đưa cách giải quyết độc lập, ưu tiên rõ API, data validation và testability.')
+    if callable(getattr(model_call,'structured',None)):
+        concise=('You are an independent software developer. Return one JSON object with summary and files (path, content). '
+                 'Implement the requested feature and real tests. Python: root test_*.py with unittest; JS: *.test.js with node:test. '
+                 'Use only safe relative paths; no secrets, shell scripts, CI files or claims that tests ran. '
+                 'Keep code and JSON concise; obey the file limits (8 files, 18 KB each, 85 KB total).')
+        return structured_reply(model_call,concise,message,lane,PROPOSAL_SCHEMA,validate_proposal)
     return validate_proposal(model_call(system, message, lane))
 
 
@@ -134,23 +167,23 @@ def review_proposal(model_call, project, spec, target, reviewer, author):
         'input validation, thiếu logic quan trọng. Yêu cầu thay đổi nếu chưa đủ bằng chứng. '
         'Bạn không thể chạy code; không giả vờ đã chạy test.'
     )
-    raw = model_call(system, f'Feature: {spec}\nProject: {project["name"]}\n'
-                     f'Bạn DEV-{reviewer} phải review bản DEV-{author} dưới đây:\n'
-                     + render_proposal(target), reviewer)
-    obj = parse_json(raw)
-    if not isinstance(obj, dict):
-        raise ValueError('Reviewer không trả object JSON')
-    verdict = obj.get('verdict')
-    score = obj.get('score')
-    if verdict not in ('APPROVE', 'REQUEST_CHANGES') or type(score) is not int or not 0 <= score <= 100:
-        raise ValueError('Reviewer trả kết quả không hợp lệ; fail closed')
-    feedback = str(obj.get('feedback') or '').strip()
-    if not feedback:
-        raise ValueError('Reviewer không giải thích kết quả')
-    if score < 80:
-        verdict = 'REQUEST_CHANGES'
-    return {'reviewer': reviewer, 'author': author, 'verdict': verdict,
-            'score': score, 'feedback': feedback[:2400]}
+    message=(f'Feature: {spec}\nProject: {project["name"]}\n'
+             f'You are DEV-{reviewer}, reviewing only the proposal from DEV-{author}:\n'+render_proposal(target))
+    def validate(raw):
+        obj=parse_json(raw)
+        if not isinstance(obj,dict):raise ValueError('Reviewer must return an object')
+        verdict,score,feedback=obj.get('verdict'),obj.get('score'),obj.get('feedback')
+        if verdict not in ('APPROVE','REQUEST_CHANGES') or type(score) is not int or not 0<=score<=100:
+            raise ValueError('Invalid reviewer verdict or score')
+        if not isinstance(feedback,str) or not feedback.strip():raise ValueError('Reviewer feedback required')
+        if score<80:verdict='REQUEST_CHANGES'
+        return {'reviewer':reviewer,'author':author,'verdict':verdict,'score':score,'feedback':feedback.strip()[:2400]}
+    if callable(getattr(model_call,'structured',None)):
+        concise=('You are an independent code reviewer. Check correctness, requirements, security and real test coverage. '
+                 'Return JSON with verdict APPROVE or REQUEST_CHANGES, integer score 0-100, and specific feedback. '
+                 'Reject blocking defects or inadequate evidence. Never claim to have executed tests.')
+        return structured_reply(model_call,concise,message,reviewer,REVIEW_SCHEMA,validate)
+    return validate(model_call(system,message,reviewer))
 
 
 def begin(conn_factory, lock, pid, spec, new_id, now, log_fn, runner):
@@ -180,6 +213,7 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn):
                       (status, now(), *values.values(), jid, pid))
             log_fn(c, pid, 'dev', None, 'info' if status in ('generating','reviewing','ready') else 'warning',
                    'Coding Factory job ' + jid + ' → ' + status)
+    phase='initialize'
     try:
         with lock, conn_factory() as c:
             project = c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
@@ -190,11 +224,18 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn):
         context = context_fn(pid, 'dev')
         update('generating')
         # Separate prompts without sharing proposals: A and B are independent at creation time.
+        phase='generate_A'
         a = generate_proposal(model_call, project, spec, context, 'A')
+        update('generating',proposal_a=json.dumps(a,ensure_ascii=False))
+        phase='generate_B'
         b = generate_proposal(model_call, project, spec, context, 'B')
-        update('reviewing', proposal_a=json.dumps(a, ensure_ascii=False), proposal_b=json.dumps(b, ensure_ascii=False))
+        update('reviewing',proposal_b=json.dumps(b,ensure_ascii=False))
+        phase='review_A'
         ra = review_proposal(model_call, project, spec, b, 'A', 'B')
+        update('reviewing',review_a=json.dumps(ra,ensure_ascii=False))
+        phase='review_B'
         rb = review_proposal(model_call, project, spec, a, 'B', 'A')
+        phase='finalize'
         approved = all(v['verdict'] == 'APPROVE' and v['score'] >= 80 for v in (ra, rb))
         # Candidate is proposal A, cross-reviewed by DEV-B; both reviews are required.
         manifest = {'selected': 'A', 'files': [{k:f[k] for k in ('path','sha256')} for f in a['files']],
@@ -205,7 +246,11 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn):
                review_a=json.dumps(ra, ensure_ascii=False), review_b=json.dumps(rb, ensure_ascii=False),
                manifest=json.dumps(manifest, ensure_ascii=False))
     except Exception as exc:
-        update('failed', error=(str(exc)[:600]))
+        # Persist a bounded, non-sensitive diagnostic; never raw model output.
+        kind=('structured_output_invalid' if isinstance(exc,StructuredReplyError) else
+              'provider_failure' if isinstance(exc,model_provider.ProviderError) else
+              'validation_error' if isinstance(exc,ValueError) else 'internal_error')
+        update('failed',error=phase+':'+kind)
 
 
 def list_jobs(conn, pid):
