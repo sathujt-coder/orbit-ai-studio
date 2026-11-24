@@ -68,3 +68,31 @@ class CollaborationTests(unittest.TestCase):
             discovery.collaborate(lambda *args:'{}','Save links')
         with self.assertRaises(ValueError):
             discovery.parse_brief(json.dumps(dict(audience=['x'*241],needs=['x'],hypotheses=[],unknowns=[])),discovery.RESEARCH_SCHEMA)
+
+class RepairTests(unittest.TestCase):
+    def test_missing_nonfunctional_is_repaired_once(self):
+        calls=[]
+        def call(lane,phase,system,user,schema):
+            calls.append((lane,phase,json.loads(user)))
+            if schema is discovery.REVIEW_SCHEMA:
+                return json.dumps(dict(blocking=[],feedback=['Review fixture']))
+            d=document()
+            if lane=='A' and phase=='requirements_proposal':
+                d['requirements'][1]['kind']='functional'
+            return json.dumps(d)
+        result=discovery.discover(call,'Save links')
+        self.assertTrue(result['ready_for_human_review'])
+        self.assertEqual(len(calls),7)
+        self.assertEqual(calls[1][:2],('A','requirements_proposal_repair'))
+        self.assertIn('Both functional and nonfunctional',calls[1][2]['validation_error'])
+    def test_invalid_repair_fails_closed_and_no_provider_retry(self):
+        calls=[]
+        def invalid(*args):
+            calls.append(args);return '{}'
+        with self.assertRaises(discovery.InvalidDocument):discovery.discover(invalid,'Save links')
+        self.assertEqual(len(calls),2)
+        calls.clear()
+        def unavailable(*args):
+            calls.append(args);raise discovery.mp.ProviderError('offline')
+        with self.assertRaises(discovery.mp.ProviderError):discovery.discover(unavailable,'Save links')
+        self.assertEqual(len(calls),1)

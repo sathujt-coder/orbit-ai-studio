@@ -104,6 +104,52 @@ jobs:
           path: ${{ runner.temp }}/orbit-server.log
           retention-days: 7
 
+  requirements-browser:
+    name: P6.1 Browser E2E — isolated synthetic inference
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Start isolated HTTP and durable queue fixture
+        run: |
+          export ORBIT_REQUIREMENTS_BROWSER_FIXTURE=1 AI_PROVIDER=ollama AI_MODEL_A=fixture-a AI_MODEL_B=fixture-b AI_HOST=127.0.0.1 AI_PORT=8787 ORBIT_MAX_RUN_CALLS=17
+          export AI_COMPANY_DB="$RUNNER_TEMP/requirements-browser.sqlite"
+          python tests/browser/requirements_fixture.py > "$RUNNER_TEMP/requirements-browser.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/requirements-browser.pid"
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/requirements-browser.log"
+          exit 1
+      - name: Requirements Chromium acceptance
+        run: node --test tests/browser/requirements.test.cjs
+      - name: Retain browser diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p61-browser-diagnostics
+          path: ${{ runner.temp }}/requirements-browser.log
+          retention-days: 7
+      - name: Stop fixture
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
+
   web-typescript-docker:
     name: Real Docker TypeScript sandbox — two candidates
     runs-on: ubuntu-24.04

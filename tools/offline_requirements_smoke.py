@@ -26,7 +26,7 @@ def main():
                 AI_MODEL_B='qwen2.5:3b',AI_BASE_URL='http://127.0.0.1:11434/v1',
                 AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
                 AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',ORBIT_BUDGET_MODE='enforce',
-                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='14')
+                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='17')
             import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
             import requirements_jobs as jobs, auth_store
             server.init_db()
@@ -42,7 +42,9 @@ def main():
             report['queue_status']=queued['status'];report['queue_reason']=queued['reason']
             evidence=queued['evidence']
             report['discovery']=evidence
-            require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review')
+            with server.db() as c:
+                report['attempts']=[dict(r) for r in c.execute('SELECT agent_id,lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
+            require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review: '+queued['reason'])
             with server.db() as c:
                 adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
                     expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
@@ -91,11 +93,21 @@ def main():
             expected += [('po-A','requirements_proposal'),('po-B','requirements_proposal'),('po-A','requirements_cross_review'),
                 ('po-B','requirements_cross_review'),('po-A','requirements_synthesis'),('po-B','requirements_final_review')]
             collaboration=evidence['collaboration']
-            gates.update(real_calls=[(x['agent_id'],x['purpose']) for x in calls]==expected and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+            # Optional, bounded repair immediately after each document phase. No extra calls
+            # or arbitrary retries can satisfy this sequence gate.
+            index=0;sequence_ok=True;repairs=0
+            for agent,phase in expected:
+                if index>=len(calls) or (calls[index]['agent_id'],calls[index]['purpose'])!=(agent,phase):
+                    sequence_ok=False;break
+                index+=1
+                if phase in ('requirements_proposal','requirements_synthesis') and index<len(calls) and (calls[index]['agent_id'],calls[index]['purpose'])==(agent,phase+'_repair'):
+                    repairs+=1;index+=1
+            report['repair_calls']=repairs
+            gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs and repairs<=3 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
                 department_evidence=collaboration['research_mode']=='input_analysis_only' and all(
                     set(collaboration[d]['proposals'])==set(collaboration[d]['reviews'])=={'A','B'} for d in ('research','ba')),
-                token_ledger=usage['requests']==usage['complete_calls']==14,
-                local_cost=cost['local_assumed_zero_calls']==14, no_budget_leak=guard['totals']['held_calls']==0,
+                token_ledger=usage['requests']==usage['complete_calls']==len(calls),
+                local_cost=cost['local_assumed_zero_calls']==len(calls), no_budget_leak=guard['totals']['held_calls']==0,
                 no_active_inference=server.CONCURRENCY.snapshot()['active']==0)
             report.update(gates=gates,calls=calls,token_usage=usage,cost=cost)
             require(all(gates.values()),'Acceptance gate failed')

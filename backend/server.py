@@ -474,14 +474,15 @@ def dispatch_one():
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
             agent_queue.boundary(c,current,result,int(time.time()),now(),stage)
-    except Exception:
+    except Exception as error:
         # Do not log raw prompts/errors or automatically replay uncertain execution.
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
             if current['status']=='running':
                 if row['kind']=='pipeline' and stage:
                     c.execute("UPDATE tasks SET status='needs_revision' WHERE project_id=? AND stage_id=? AND status IN ('drafting','reviewing','synthesizing')",(pid,stage))
-                agent_queue.fail(c,current,'execution_failed',int(time.time()),now())
+                reason=('requirements_invalid_output:'+error.phase if isinstance(error,requirements_discovery.InvalidDocument) else 'execution_failed')
+                agent_queue.fail(c,current,reason,int(time.time()),now())
     return True
 
 def queue_worker():

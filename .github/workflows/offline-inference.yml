@@ -4,6 +4,7 @@ on:
     paths:
       - backend/model_provider.py
       - backend/product_requirements.py
+      - backend/requirements_jobs.py
       - backend/requirements_discovery.py
       - tools/offline_requirements_smoke.py
       - tests/test_requirements_discovery.py

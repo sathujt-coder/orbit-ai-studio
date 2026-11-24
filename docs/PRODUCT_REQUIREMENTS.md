@@ -47,3 +47,17 @@ The existing human-authored UI and legacy pipeline remain unchanged.
 - One durable queue task uses a shared distinct routed A/B pair (not six different models), 14 bounded tracked calls, per-department agent IDs and existing guards. No automatic replay. A deployment must allow at least 14 calls per discovery run, subject to all other budget limits.
 - Full handoffs are included in existing project-scoped evidence and shown in the Requirements UI. No auto-adoption or auto-approval.
 - Real offline smoke now checks exact 14-call phase/agent provenance, department handoffs, token/cost ledgers and existing approval invariants. Browser E2E specific to Requirements and live human sign-off are still pending.
+
+## P6.1e — Browser and final acceptance gates (pending CI)
+- P6.1b real-model CI exposed missing functional/nonfunctional coverage. Keep strict validation;
+  at most one corrective inference per PO document phase, no retry on provider/admission failures.
+  14 normal calls, up to 3 format repairs; the configured run budget must permit the chosen limit.
+  Repair attempts are tracked separately; an invalid repair blocks the task.
+- Offline acceptance checks exact phase/agent order including bounded repairs, actual model token
+  ledger, queue/evidence persistence, adoption and approval. Failed runs include sanitized attempt metadata.
+- Dedicated Chromium job uses actual HTTP, RBAC, CSRF, queue and SQLite with explicitly synthetic
+  model transport in a test-only process. It must never count as real inference evidence.
+- Browser gates cover queue submission, evidence, adoption, reviewer approval, revision invalidation,
+  cross-project access, rejected/stale adoption, and unsaved edit protection.
+- Final engineering acceptance requires both current-commit regression/browser and real offline
+  acceptance PASS, plus review of requirements.json. Production sign-off and P5.9 soak remain separate.
