@@ -4,6 +4,7 @@ from urllib.parse import parse_qs
 import auth_store
 import auth_http
 import hmac
+import provider_settings
 
 ID=r'[A-Za-z0-9_-]{1,100}'
 def resource_project(c,table,identifier):
@@ -13,6 +14,7 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        if path=='/api/provider/settings':return ('','provider_settings_read')
         if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance)',path)
@@ -22,6 +24,8 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
+        if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models'):
+            return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):
             pid=body.get('project_id','')
@@ -50,6 +54,9 @@ def check(c,method,path,query,body,headers,port,transport=None):
     if target is None:return 404,None
     pid,action=target
     if action in ('authenticated','create'):return 200,(user,pid,action)
+    if action.startswith('provider_'):
+        if provider_settings.is_admin(user):return 200,(user,'',action)
+        auth_http.audit(c,user,action,'denied');return 403,None
     if not pid or not c.execute('SELECT 1 FROM projects WHERE id=?',(pid,)).fetchone():
         auth_http.audit(c,user,'resource_scope','denied')
         return 403,None

@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - backend/model_provider.py
+      - backend/provider_settings.py
       - backend/coding_factory.py
       - backend/server.py
       - tools/offline_sandbox_gate.py
