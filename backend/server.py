@@ -15,12 +15,14 @@ import auth_http
 import auth_policy
 import acceptance_store
 import model_provider
+import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
 DB_PATH = Path(os.environ.get('AI_COMPANY_DB', str(ROOT / 'company.sqlite')))
 HOST = os.environ.get('AI_HOST', '127.0.0.1')
 PORT = int(os.environ.get('AI_PORT', '8787'))
+TRANSPORT = transport_security.load(os.environ)
 MODEL_LANES = model_provider.load_config(os.environ)
 PROVIDER = model_provider.mode(MODEL_LANES)
 MODEL_A = MODEL_LANES['A'].model
@@ -367,6 +369,9 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(WEB),**kwargs)
     def log_message(self,format,*args): pass
     def end_headers(self):
+        if TRANSPORT.secure:self.send_header('Strict-Transport-Security','max-age=300')
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('X-Frame-Options','DENY')
         self.send_header('Referrer-Policy','no-referrer')
         self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -381,24 +386,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(raw)))
-        self.send_header('Cache-Control','no-store')
-        self.send_header('X-Content-Type-Options','nosniff')
         for key,value in (headers or {}).items(): self.send_header(key,value)
         self.end_headers(); self.wfile.write(raw)
     def json_body(self):
         length=int(self.headers.get('Content-Length','0'))
-        if length>30000: raise ValueError('Dữ liệu quá lớn')
+        if not 0<=length<=30000: raise ValueError('Dữ liệu quá lớn')
         return json.loads(self.rfile.read(length) or '{}')
     def request_is_local(self):
-        host = self.headers.get('Host','').split(':')[0].lower()
-        if host not in ('localhost','127.0.0.1','[::1]'):
-            return False
-        origin = self.headers.get('Origin')
-        if origin:
-            allowed = {f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
-            if origin not in allowed:
-                return False
-        return True
+        return transport_security.request_allowed(TRANSPORT,self.headers,PORT,self.client_address[0])
     def send_zip(self, filename, data):
         self.send_response(200)
         self.send_header('Content-Type','application/zip')
@@ -414,7 +409,7 @@ class Handler(SimpleHTTPRequestHandler):
         with LOCK,db() as c:return auth_policy.visible_projects(c,self.auth_context[0])
     def guard(self,method,path,body=None):
         with LOCK,db() as c:
-            status,context=auth_policy.check(c,method,path,urlparse(self.path).query,body,self.headers,PORT)
+            status,context=auth_policy.check(c,method,path,urlparse(self.path).query,body,self.headers,PORT,transport=TRANSPORT)
         if status!=200:
             self.send_json(status,{'error':{401:'Authentication required',403:'Access denied',404:'Endpoint không tồn tại'}[status]});return False
         self.auth_context=context
@@ -431,7 +426,7 @@ class Handler(SimpleHTTPRequestHandler):
                 except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
                 return
             if path=='/api/auth/session':
-                with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers)
+                with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
             if path in ('/','/index.html','/access.html'):
@@ -502,7 +497,7 @@ class Handler(SimpleHTTPRequestHandler):
             body=self.json_body()
             if path in ('/api/auth/login','/api/auth/logout'):
                 with LOCK,db() as c:
-                    status,data,headers=auth_http.handle(c,path,self.headers,body,PORT)
+                    status,data,headers=auth_http.handle(c,path,self.headers,body,PORT,transport=TRANSPORT)
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
@@ -569,11 +564,14 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    if HOST not in ('127.0.0.1','localhost'):
-        raise SystemExit('ORBIT is localhost-only until HTTPS/staging security is reviewed')
+    if HOST not in ('127.0.0.1','localhost') and not (TRANSPORT.secure and os.getenv('ORBIT_ALLOW_TLS_BIND')=='1'):
+        raise SystemExit('Non-loopback binding requires explicit TLS configuration and opt-in')
+    tls=TRANSPORT.context() if TRANSPORT.secure else None
+    os.umask(0o077)
     init_db()
     srv=ThreadingHTTPServer((HOST,PORT),Handler)
-    print(f'AI Studio Company → http://{HOST}:{PORT} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
+    if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
+    print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally:srv.server_close()

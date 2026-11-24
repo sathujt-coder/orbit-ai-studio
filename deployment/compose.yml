@@ -1,0 +1,30 @@
+services:
+  orbit:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    environment:
+      AI_HOST: 0.0.0.0
+      AI_PORT: "8443"
+      ORBIT_ALLOW_TLS_BIND: "1"
+      ORBIT_HTTPS_ORIGIN: "https://localhost:8443"
+      ORBIT_TLS_CERT: /tls/cert.pem
+      ORBIT_TLS_KEY: /tls/key.pem
+      AI_PROVIDER: demo
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - orbit-data:/data
+      - ./tls:/tls:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 2
+volumes:
+  orbit-data:

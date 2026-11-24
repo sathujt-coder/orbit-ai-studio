@@ -6,3 +6,10 @@ company.sqlite-shm
 *.log
 .env
 .DS_Store
+
+deployment/tls/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.pem
+*.key
