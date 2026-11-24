@@ -2,7 +2,7 @@
 """HTTPS smoke against a local isolated container with explicitly trusted test cert."""
 import json,ssl,sys,urllib.request,urllib.error
 from http.cookiejar import CookieJar
-origin='https://localhost:8443'
+origin=sys.argv[2] if len(sys.argv)>2 else 'https://localhost:8443'
 context=ssl.create_default_context(cafile=sys.argv[1])
 jar=CookieJar()
 opener=urllib.request.build_opener(urllib.request.HTTPSHandler(context=context),urllib.request.HTTPCookieProcessor(jar))
