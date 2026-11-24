@@ -97,7 +97,24 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
 
-def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None,runtime_settings=False):
+def token_usage(data,native):
+    def count(value):return value if type(value) is int and 0<=value<=1_000_000_000 else None
+    data=data if isinstance(data,dict) else {}
+    raw=data if native else data.get('usage')
+    raw=raw if isinstance(raw,dict) else {}
+    i=count(raw.get('prompt_eval_count' if native else 'prompt_tokens'))
+    o=count(raw.get('eval_count' if native else 'completion_tokens'))
+    t=None if native else count(raw.get('total_tokens'))
+    coverage='unknown'
+    if i is not None and o is not None:
+        if t is not None and t!=i+o:
+            coverage='inconsistent';t=None
+        else:coverage='complete';t=i+o
+    elif any(x is not None for x in (i,o,t)):coverage='partial'
+    return {'input_tokens':i,'output_tokens':o,'total_tokens':t,'coverage':coverage,
+            'source':('ollama_native' if native else 'openai_usage') if coverage!='unknown' else 'none'}
+
+def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None,runtime_settings=False,usage_observer=None):
     if lane.provider=='demo':raise ProviderError('Demo lane cannot call a real provider')
     if runtime_settings and max_tokens is None:max_tokens=lane.max_tokens
     payload={'model':lane.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
@@ -125,11 +142,13 @@ def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None,
         data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers=headers,method='POST')
     # Prevent automatic redirect or proxy environment from forwarding lane credentials.
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+    started=time.monotonic();usage=token_usage(None,native);status='provider_error'
     try:
         with opener.open(request,timeout=lane.timeout) as response:
             raw=response.read(MAX_RESPONSE+1)
         if len(raw)>MAX_RESPONSE:raise ProviderError('Provider response too large')
         data=json.loads(raw)
+        usage=token_usage(data,native)
         if native:
             if data.get('done') is not True or data.get('done_reason')=='length':
                 raise OutputError('Incomplete structured output','truncated_or_incomplete')
@@ -141,22 +160,28 @@ def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None,
         if not isinstance(content,str):raise OutputError('Invalid model content','non_string_content')
         content=re.sub(r'<think>[\s\S]*?</think>','',content,flags=re.I).strip()
         if not content or len(content)>100_000:raise OutputError('Empty or oversized model content','empty_or_oversized_content')
+        status='ok'
         return content
+    except OutputError:
+        status='output_error';raise
     except urllib.error.HTTPError as exc:
         code=exc.code
         exc.close()
         raise ProviderError('Lane '+lane.lane+' provider HTTP '+str(code)) from None
     except (OSError,ValueError,KeyError,IndexError,TypeError,urllib.error.URLError):
         raise ProviderError('Lane '+lane.lane+' provider connection or response failed') from None
+    finally:
+        if usage_observer is not None:
+            usage_observer(dict(usage,status=status,elapsed_ms=round((time.monotonic()-started)*1000)))
 
-def probe(lanes):
+def probe(lanes,chat_fn=None):
     """Explicit caller opt-in required. Sends no project data; does not return raw output."""
     require_distinct_real(lanes)
     results={}
     for name,lane in lanes.items():
         started=time.monotonic()
         try:
-            reply=chat(lane,'Reply with exactly ORBIT_READY and nothing else.','ORBIT connection check',max_tokens=64)
+            reply=(chat_fn or chat)(lane,'Reply with exactly ORBIT_READY and nothing else.','ORBIT connection check',max_tokens=64)
             results[name]={'status':'responded','instruction_match':reply=='ORBIT_READY'}
         except ProviderError as exc:
             results[name]={'status':'failed','error':str(exc)}

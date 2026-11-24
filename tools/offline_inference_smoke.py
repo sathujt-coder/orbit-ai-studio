@@ -59,7 +59,7 @@ def main():
                     fd=os.open(db_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
                 os.environ.update(AI_COMPANY_DB=str(db_path),AI_PROVIDER='demo')
                 for k in ('AI_PROVIDER_A','AI_PROVIDER_B'):os.environ.pop(k,None)
-                import server,coding_factory as cf
+                import server,coding_factory as cf,usage_store
                 server.init_db()
                 with server.db() as c:
                     pid=server.create_project('Local inference smoke','Small independent Web backend arithmetic module for a synthetic test only.','Web app',c)
@@ -80,12 +80,13 @@ def main():
                 recoveries=[]
                 repair_events=[]
                 repair_sampling=set()
+                job_ref={'id':None}
                 def model(system,user,lane):
                     calls.append(lane)
-                    return model_provider.chat(lanes[lane],system,user,max_tokens=2048)
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],max_tokens=2048)
                 def structured(system,user,lane,schema):
                     calls.append(lane)
-                    return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048,
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],schema=schema,max_tokens=2048,
                                                repair_temperature=0.25 if lane in repair_sampling and schema is generation.FILE_SCHEMA else None)
                 model.structured=structured
                 def diagnostic(lane,schema,attempt,code):
@@ -106,17 +107,24 @@ def main():
                     finally:repair_sampling.discard(lane)
                 model.repair_candidate=intelligent
                 def worker(jid,project):
+                    job_ref['id']=jid
                     try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding,repair=repair)
                     finally:done.set()
                 jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,worker)
                 if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
-                with server.db() as c:j=cf.detail(c,jid)
+                with server.db() as c:
+                    j=cf.detail(c,jid)
+                    usage=usage_store.summary(c,pid,1)
+                report['token_usage']=usage
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,'intelligent_repairs':repair_events,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
                     'review_gate_passed':j['status']=='ready','private_db_retained':bool(a.db_output),'candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}
                 # A rejected review is a functioning gate, not successful acceptance.
                 code=0 if j['status']=='ready' else 2
+                if code==0 and (usage['totals']['requests']!=len(calls) or usage['totals']['complete_calls']!=len(calls) or usage['totals']['total_tokens'] is None or usage['totals']['total_tokens']<=0):
+                    report['usage_gate']='BLOCK';code=2
+                else:report['usage_gate']='PASS' if code==0 else 'not_accepted'
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__

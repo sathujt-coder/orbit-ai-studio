@@ -22,7 +22,8 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header('Location',self.server.redirect)
             self.end_headers()
             return
-        result=json.dumps({'done':True,'done_reason':'stop','message':{'content':'{"ok":true}'}} if self.path=='/api/chat' else {'choices':[{'message':{'content':'ORBIT_READY'}}]}).encode()
+        default={'done':True,'done_reason':'stop','message':{'content':'{"ok":true}'}} if self.path=='/api/chat' else {'choices':[{'message':{'content':'ORBIT_READY'}}]}
+        result=json.dumps(getattr(self.server,'response_override',None) or default).encode()
         self.send_response(200)
         self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(result)))
@@ -100,3 +101,31 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(self.servers[0].received[0][:2],('/v1/models','Bearer fixture-a'))
         mp.chat(lane,'s','u',runtime_settings=True)
         self.assertEqual(self.servers[0].received[1][2]['options'],{'temperature':0.2,'num_predict':512,'num_ctx':4096})
+
+    def test_usage_observer_reports_actual_http_metadata(self):
+        events=[]
+        lane=mp.load_config(self.env)['A']
+        self.servers[0].response_override={'choices':[{'message':{'content':'ORBIT_READY'}}],
+            'usage':{'prompt_tokens':11,'completion_tokens':4,'total_tokens':15}}
+        self.assertEqual(mp.chat(lane,'s','u',usage_observer=events.append),'ORBIT_READY')
+        self.assertEqual(len(events),1)
+        self.assertEqual((events[0]['input_tokens'],events[0]['output_tokens'],events[0]['total_tokens'],events[0]['status']),(11,4,15,'ok'))
+        self.servers[0].response_override={'choices':[{'finish_reason':'length','message':{'content':'{}'}}],
+            'usage':{'prompt_tokens':12,'completion_tokens':7,'total_tokens':19}}
+        with self.assertRaises(mp.OutputError):mp.chat(lane,'s','u',schema={'type':'object'},usage_observer=events.append)
+        self.assertEqual((events[1]['status'],events[1]['total_tokens']),('output_error',19))
+        self.servers[0].response_override=None
+        mp.chat(lane,'s','u',usage_observer=events.append)
+        self.assertEqual(events[2]['coverage'],'unknown')
+        self.assertIsNone(events[2]['total_tokens'])
+        self.servers[0].redirect=self.url(1)+'/chat/completions'
+        with self.assertRaises(mp.ProviderError):mp.chat(lane,'s','u',usage_observer=events.append)
+        self.assertEqual((events[3]['status'],events[3]['coverage']),('provider_error','unknown'))
+        self.assertEqual(len(events),4)
+    def test_native_usage_observer(self):
+        events=[]
+        lane=mp.load_config(dict(self.env,AI_PROVIDER_A='ollama'))['A']
+        self.servers[0].response_override={'done':True,'done_reason':'stop','message':{'content':'{}'},
+            'prompt_eval_count':20,'eval_count':9}
+        mp.chat(lane,'s','u',schema={'type':'object'},usage_observer=events.append)
+        self.assertEqual((events[0]['source'],events[0]['total_tokens']),('ollama_native',29))

@@ -15,9 +15,10 @@ def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
         if path=='/api/provider/settings':return ('','provider_settings_read')
+        if path=='/api/provider/usage':return ('','provider_usage_read')
         if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance|usage)',path)
         if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
         m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
         if m:return (resource_project(c,'coding_jobs',m[1]),'read')
