@@ -8,6 +8,7 @@ import argparse
 import ast
 import hashlib
 import json
+import re
 from pathlib import Path
 import sqlite3
 import sys
@@ -70,7 +71,22 @@ def contract_command():
             'import sys,json;sys.path.insert(0,"/work");from main import add;'
             +'print(json.dumps([add(a,b) for a,b in '+repr(CASES)+']))']
 def sanitized(step):
-    return {k:step.get(k) for k in ('step','image','executed','passed','exit_code','test_count')}
+    result={k:step.get(k) for k in ('step','image','executed','passed','exit_code','test_count')}
+    if step['passed']:return result
+    if not step['executed'] or step['exit_code'] in (125,126,127):
+        result['diagnostic']='sandbox_infrastructure_failure'
+    elif step['step']=='independent_add_contract':
+        result['diagnostic']='independent_contract_failed'
+    else:
+        # Fixed labels only: no raw output, paths, prompts, test inputs or secrets.
+        output=step.get('output','')
+        labels=('ModuleNotFoundError','ImportError','NameError','TypeError','AttributeError','SyntaxError','IndentationError','AssertionError','ValueError')
+        found=[label for label in labels if re.search(r'(?m)^'+label+r':',output)]
+        result['diagnostic']=','.join(found) if found else ('no_tests_discovered' if not step.get('test_count') else 'unit_test_failed')
+        counts=re.search(r'FAILED \(([^)]+)\)',output)
+        if counts:
+            result['failure_counts']={k:int(v) for k,v in re.findall(r'\b(failures|errors)=(\d{1,6})\b',counts[1])}
+    return result
 
 def verify(j,image,approval,runner=None):
     import subprocess
@@ -115,6 +131,40 @@ def verify(j,image,approval,runner=None):
     report['gate']='PASS' if all(v['status']=='passed' for v in report['lanes'].values()) else 'BLOCK'
     report['completed_at']=vf.utc_now()
     return report
+
+def repair_plan(j,report):
+    """Trusted operator's next-round plan, tied to the exact reviewed source."""
+    proposals=vf.safe_job(j)
+    if (report.get('profile')!=PROFILE or report.get('job_id')!=j['id'] or
+        report.get('project_id')!=j['project_id'] or report.get('gate')!='BLOCK' or
+        set(report.get('lanes',{}))!={'A','B'}):
+        raise ValueError('Previous blocked sandbox report required')
+    result={}
+    for lane,p in proposals.items():
+        item=report['lanes'][lane]
+        if item.get('sha256')!=vf.plan_lane(p)['sha256']:
+            raise ValueError('Repair evidence source hash mismatch')
+        status=item.get('status')
+        if status not in ('passed','blocked','failed'):raise ValueError('Unexpected lane status')
+        steps=item.get('steps',[])
+        if any(s.get('diagnostic')=='sandbox_infrastructure_failure' or not s.get('executed') or s.get('exit_code') in (125,126,127) for s in steps):
+            raise ValueError('Fix sandbox infrastructure instead of regenerating code')
+        if status=='passed':
+            if len(steps)!=2 or {s.get('step') for s in steps}!={'python_tests','independent_add_contract'} or not all(s.get('passed') is True for s in steps):
+                raise ValueError('Missing passing evidence')
+            result[lane]={'proposal':p,'reuse':True,'feedback':''}
+        else:
+            reasons=[]
+            if status=='blocked':
+                # Static scanner reason is authored by the trusted gate, not model output.
+                reasons.append('Static gate: '+str(item.get('reason','unsupported syntax'))[:160])
+            for s in steps:
+                if not s.get('passed'):
+                    reasons.append(str(s.get('step'))+': '+str(s.get('diagnostic','failed'))[:100])
+            result[lane]={'proposal':p,'reuse':False,'feedback':'; '.join(reasons) or 'Sandbox gate failed'}
+    if all(x['reuse'] for x in result.values()):raise ValueError('No failed lane to repair')
+    return result
+
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)

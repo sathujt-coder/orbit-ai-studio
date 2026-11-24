@@ -35,7 +35,7 @@ jobs:
           docker exec orbit-download ollama pull qwen2.5-coder:1.5b
           docker exec orbit-download ollama pull qwen2.5:1.5b
           docker rm -f orbit-download
-      - name: Run inference with no external network
+      - name: Start inference runtime with no external network
         run: |
           mkdir -p "$RUNNER_TEMP/offline-report" "$RUNNER_TEMP/offline-private"
           chmod 700 "$RUNNER_TEMP/offline-private"
@@ -45,12 +45,28 @@ jobs:
             if docker exec orbit-airgap ollama list; then break; fi
             sleep 1
           done
-          docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" --mount "type=bind,src=$RUNNER_TEMP/offline-private,dst=/private" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --db-output /private/job.sqlite --report /report/report.json --confirm 'RUN LOCAL INFERENCE'
-      - name: Verify actual AI candidates in isolated Docker sandboxes
+      - name: Generate, review, sandbox and repair up to two times
         run: |
           image="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
-          jid="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow"]["job_id"])' "$RUNNER_TEMP/offline-report/report.json")"
-          python tools/offline_sandbox_gate.py --db "$RUNNER_TEMP/offline-private/job.sqlite" --inference-report "$RUNNER_TEMP/offline-report/report.json" --image "$image" --output "$RUNNER_TEMP/offline-report/sandbox.json" --confirm "RUN OFFLINE SANDBOX $jid"
+          for round in 0 1 2; do
+            extra=()
+            if [ "$round" -gt 0 ]; then
+              prev=$((round-1))
+              extra=(--repair-db "/private/round-$prev.sqlite" --repair-report "/report/round-$prev-sandbox.json")
+            fi
+            echo "P4.6 attempt $((round+1))/3"
+            timeout 8m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" --mount "type=bind,src=$RUNNER_TEMP/offline-private,dst=/private" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --db-output "/private/round-$round.sqlite" --report "/report/round-$round-inference.json" --confirm 'RUN LOCAL INFERENCE' "${extra[@]}"
+            jid="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow"]["job_id"])' "$RUNNER_TEMP/offline-report/round-$round-inference.json")"
+            status=0
+            python tools/offline_sandbox_gate.py --db "$RUNNER_TEMP/offline-private/round-$round.sqlite" --inference-report "$RUNNER_TEMP/offline-report/round-$round-inference.json" --image "$image" --output "$RUNNER_TEMP/offline-report/round-$round-sandbox.json" --confirm "RUN OFFLINE SANDBOX $jid" || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "P4.6 PASS on attempt $((round+1))"
+              exit 0
+            fi
+            if [ "$status" -ne 2 ]; then exit "$status"; fi
+          done
+          echo "P4.6 BLOCK: repair budget exhausted"
+          exit 2
       - name: Retain model inference evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -30,3 +30,29 @@ class OfflineSandboxTests(unittest.TestCase):
         self.assertEqual(g.verify(self.fixture(),PY_IMG,'RUN OFFLINE SANDBOX job-abc',runner)['gate'],'BLOCK')
     def test_confirmation_required(self):
         with self.assertRaises(PermissionError):g.verify(self.fixture(),PY_IMG,'wrong')
+
+    def test_safe_diagnostics(self):
+        step={'step':'python_tests','image':PY_IMG,'executed':True,'passed':False,'exit_code':1,'test_count':1,'output':'NameError: secret model text\nFAILED (errors=1)'}
+        d=g.sanitized(step)
+        self.assertEqual(d['diagnostic'],'NameError')
+        self.assertEqual(d['failure_counts'],{'errors':1})
+        self.assertNotIn('secret',json.dumps(d))
+    def test_repair_keeps_passing_lane_and_binds_hash(self):
+        j=self.fixture()
+        def runner(argv,**kwargs):
+            return subprocess.CompletedProcess(argv,0,json.dumps([a+b for a,b in g.CASES]) if 'unittest' not in argv else 'Ran 1 test in 0.001s\nOK','')
+        report=g.verify(j,PY_IMG,'RUN OFFLINE SANDBOX job-abc',runner)
+        report['gate']='BLOCK'
+        report['lanes']['B'].update(status='blocked',steps=[],reason='only unittest import allowed')
+        plan=g.repair_plan(j,report)
+        self.assertTrue(plan['A']['reuse'])
+        self.assertFalse(plan['B']['reuse'])
+        self.assertIn('only unittest import',plan['B']['feedback'])
+        report['lanes']['B']['sha256']='wrong'
+        with self.assertRaises(ValueError):g.repair_plan(j,report)
+    def test_infrastructure_failure_not_repaired(self):
+        j=self.fixture()
+        def runner(argv,**kwargs):
+            return subprocess.CompletedProcess(argv,125,'','docker error')
+        report=g.verify(j,PY_IMG,'RUN OFFLINE SANDBOX job-abc',runner)
+        with self.assertRaisesRegex(ValueError,'infrastructure'):g.repair_plan(j,report)

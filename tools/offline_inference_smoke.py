@@ -6,7 +6,13 @@ from contextlib import nullcontext
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 import model_provider
+import sqlite3
+import offline_sandbox_gate as sandbox_gate
+from contextlib import closing
 MODELS=('qwen2.5-coder:1.5b','qwen2.5:1.5b')
+SPEC=('Implement exactly main.py and test_main.py. main.py: a single function add(a,b) returning the sum of two integers; no imports, calls, decorators or complex syntax. '
+      'test_main.py: use exactly import unittest and from main import add; subclass unittest.TestCase, write test_ methods using self.assertEqual with correct expected sums, including zero and negatives. '
+      'No other imports, aliases, typing, loops, f-strings, extra files or unittest.main call; unittest discovery runs the tests. Return the JSON files object.')
 def get_json(path):
     with urllib.request.build_opener(urllib.request.ProxyHandler({}),model_provider.NoRedirect()).open('http://127.0.0.1:11434'+path,timeout=15) as r:
         raw=r.read(2_000_001)
@@ -21,12 +27,16 @@ def main():
     p.add_argument('--model-a',default=MODELS[0]);p.add_argument('--model-b',default=MODELS[1])
     p.add_argument('--report',type=Path,required=True)
     p.add_argument('--db-output',type=Path,help='Optional new private SQLite file to retain candidates for human review')
+    p.add_argument('--repair-db',type=Path)
+    p.add_argument('--repair-report',type=Path)
     p.add_argument('--workflow',action='store_true',help='Run independent generation and cross review, not code execution')
     p.add_argument('--confirm',required=True)
     a=p.parse_args()
     if a.confirm!='RUN LOCAL INFERENCE':p.error('Explicit confirmation RUN LOCAL INFERENCE required')
     if a.report.exists():p.error('Report path already exists')
     if a.db_output and (not a.workflow or a.db_output.exists() or a.db_output.resolve()==a.report.resolve()):p.error('DB output must be a distinct new file, with --workflow')
+    if bool(a.repair_db)!=bool(a.repair_report) or (a.repair_db and not (a.workflow and a.db_output)):
+        p.error('Repair requires previous DB + sandbox report, workflow and new private DB')
     report={'schema':'orbit.offline-inference.v1','mode':'local_ollama','network_isolation':'not asserted by this script','sandbox_verified':False,'production_approved':False,'git_writes':False}
     code=1
     try:
@@ -54,6 +64,17 @@ def main():
                 server.init_db()
                 with server.db() as c:
                     pid=server.create_project('Local inference smoke','Small independent Web backend arithmetic module for a synthetic test only.','Web app',c)
+                repair=None
+                if a.repair_db:
+                    previous=json.loads(a.repair_report.read_text())
+                    if previous.get('models')!=report['models']:raise ValueError('Repair must use the same model digests')
+                    with closing(sqlite3.connect(a.repair_db.resolve().as_uri()+'?mode=ro',uri=True)) as old:
+                        old.row_factory=sqlite3.Row
+                        previous_job=cf.detail(old,previous['job_id'])
+                    if previous_job['spec']!=SPEC:raise ValueError('Repair benchmark scope mismatch')
+                    repair=sandbox_gate.repair_plan(previous_job,previous)
+                    report['repair']={'parent_job_id':previous_job['id'],'reused_lanes':[k for k,v in repair.items() if v['reuse']],
+                                      'regenerated_lanes':[k for k,v in repair.items() if not v['reuse']]}
                 done=threading.Event()
                 calls=[]
                 def model(system,user,lane):
@@ -64,9 +85,9 @@ def main():
                     return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048)
                 model.structured=structured
                 def worker(jid,project):
-                    try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding)
+                    try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding,repair=repair)
                     finally:done.set()
-                jid=cf.begin(server.db,server.LOCK,pid,'Implement main.py with def add(a,b) returning the sum of two integers and test_main.py with unittest tests. Use only Python standard library. Return the required JSON files object. No other files.',server.uid,server.now,server.log,worker)
+                jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,worker)
                 if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
                 with server.db() as c:j=cf.detail(c,jid)
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),
