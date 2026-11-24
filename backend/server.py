@@ -15,6 +15,7 @@ import auth_http
 import auth_policy
 import acceptance_store
 import model_provider
+import provider_settings
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +75,7 @@ def init_db():
     with LOCK, db() as c:
         auth_store.ensure_schema(c)
         acceptance_store.ensure_schema(c)
+        provider_settings.ensure_schema(c)
         c.executescript('''
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,idea TEXT NOT NULL,platform TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,stage_id TEXT NOT NULL,position INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'queued',started_at TEXT,finished_at TEXT,approved_at TEXT,FOREIGN KEY(project_id) REFERENCES projects(id));
@@ -171,13 +173,22 @@ def get_preceding(pid, stage_id):
     return '\n\n'.join('['+s+'] '+indexed[s][:1200] for s in STAGE_IDS[:ix] if s in indexed)[-7500:]
 
 
+def provider_snapshot():
+    with LOCK,db() as c:return provider_settings.load(c,os.environ,MODEL_LANES)
+
+def snapshot_call(lanes):
+    def call(system,user,lane='A'):
+        return model_provider.chat(lanes[lane],system,user,runtime_settings=True)
+    def structured(system,user,lane,schema):
+        return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=lanes[lane].max_tokens,runtime_settings=True)
+    call.structured=structured
+    return call
+
 def model_call(system,user,lane='A'):
-    if lane not in MODEL_LANES:raise ValueError('Unknown model lane')
-    return model_provider.chat(MODEL_LANES[lane],system,user)
+    return snapshot_call(provider_snapshot()[1])(system,user,lane)
 
 def structured_model_call(system,user,lane,schema):
-    if lane not in MODEL_LANES:raise ValueError('Unknown model lane')
-    return model_provider.chat(MODEL_LANES[lane],system,user,schema=schema,max_tokens=4096)
+    return snapshot_call(provider_snapshot()[1]).structured(system,user,lane,schema)
 model_call.structured=structured_model_call
 
 
@@ -228,7 +239,9 @@ def parse_review(raw):
         return 'REQUEST_CHANGES',0,'Không phân tích được JSON review; yêu cầu làm lại. Raw: '+raw[:500]
 
 
-def run_stage(pid, sid):
+def run_stage(pid, sid, lanes=None):
+    lanes=provider_snapshot()[1] if lanes is None else lanes
+    mode=model_provider.mode(lanes);llm=snapshot_call(lanes)
     run_id=uid()
     with LOCK,db() as c:
         project=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
@@ -238,7 +251,7 @@ def run_stage(pid, sid):
     drafts={}
     for lane in ('A','B'):
         aid=f'{sid}-{lane}'
-        if PROVIDER=='demo':
+        if mode=='demo':
             time.sleep(.32)
             draft=demo_draft(project,sid,lane)
         else:
@@ -250,18 +263,18 @@ def run_stage(pid, sid):
                f'Giai đoạn: {s["name"]}\nDeliverable: {s["deliverable"]}\n'
                f'Vai trò agent: {lane}. ' + ('Thiên về tạo giải pháp và xác định scope.' if lane=='A' else 'Đề xuất phương án khác độc lập, tập trung rủi ro, tính khả thi.')
                +f'\nBối cảnh các giai đoạn trước (chỉ để tham khảo):\n{context}')
-            draft=model_call(system,user,lane)
+            draft=llm(system,user,lane)
         drafts[lane]=draft
         save_artifact(pid,sid,aid,'draft',draft,run_id)
         set_status(pid,sid,'drafting',f'{aid} hoàn thành bản đề xuất độc lập.',aid)
     set_status(pid,sid,'reviewing',f'{s["name"]}: hai agent review chéo, không tự chấm bài của mình.')
     votes=[]
     for reviewer,author in (('A','B'),('B','A')):
-        if PROVIDER=='demo':
+        if mode=='demo':
             time.sleep(.3)
             verdict,score,feedback='APPROVE',(89 if reviewer=='A' else 92),f'Đã rà soát phương án {author}: cần kiểm chứng giả định và thêm số liệu thực tế trước khi production.'
         else:
-            raw=model_call('Bạn là chuyên gia audit chất lượng. Chỉ trả JSON hợp lệ; không dùng markdown code fence.',review_prompt(sid,author,reviewer,drafts[author]),reviewer)
+            raw=llm('Bạn là chuyên gia audit chất lượng. Chỉ trả JSON hợp lệ; không dùng markdown code fence.',review_prompt(sid,author,reviewer,drafts[author]),reviewer)
             verdict,score,feedback=parse_review(raw)
         if verdict=='APPROVE' and score<80:
             verdict='REQUEST_CHANGES'
@@ -273,7 +286,7 @@ def run_stage(pid, sid):
         set_status(pid,sid,'needs_revision','Ít nhất một reviewer yêu cầu chỉnh sửa. Xem feedback và chạy lại giai đoạn.','', 'warning')
         return 'needs_revision'
     set_status(pid,sid,'synthesizing','Tổng hợp ý kiến của hai agent thành bản cuối đã review.')
-    if PROVIDER=='demo':
+    if mode=='demo':
         final=(f'# {s["deliverable"]} · Bản hợp nhất\n\n'
                f'> DEMO: ví dụ minh họa workflow, chưa phải deliverable được AI nghiên cứu/triển khai thật.\n\n'
                f'## Phương án A\n{drafts["A"][:3500]}\n\n## Góc nhìn độc lập B\n{drafts["B"][:2700]}\n\n'
@@ -283,7 +296,7 @@ def run_stage(pid, sid):
               'Giữ các quyết định có căn cứ, nêu rõ các điểm chưa xác minh, acceptance criteria và next steps. '
               'Không tuyên bố đã thực thi code, test hay phát hành nếu chưa thực hiện.\n\n'
               f'A:\n{drafts["A"][:9000]}\n\nB:\n{drafts["B"][:9000]}')
-        final=model_call('Bạn tổng hợp deliverable đã được review chéo. Trả về Markdown rõ ràng.',user,'A')
+        final=llm('Bạn tổng hợp deliverable đã được review chéo. Trả về Markdown rõ ràng.',user,'A')
     save_artifact(pid,sid,f'{sid}-A','final',final,run_id)
     if s['approval']:
         set_status(pid,sid,'awaiting_approval',f'{s["name"]} hoàn tất review; đang đợi chủ dự án phê duyệt.','','warning')
@@ -292,8 +305,9 @@ def run_stage(pid, sid):
     return 'done'
 
 
-def pipeline_worker(pid, mode):
+def pipeline_worker(pid, mode, lanes=None):
     try:
+        lanes=provider_snapshot()[1] if lanes is None else lanes
         while True:
             with LOCK,db() as c:
                 tasks=rows(c,'SELECT stage_id,status FROM tasks WHERE project_id=? ORDER BY position',(pid,))
@@ -308,7 +322,7 @@ def pipeline_worker(pid, mode):
                 next_task=t
                 break
             if not next_task or RUNNING.get(pid,{}).get('pause'): break
-            result=run_stage(pid,next_task['stage_id'])
+            result=run_stage(pid,next_task['stage_id'],lanes)
             if result!='done' or mode=='next': break
     except Exception as ex:
         traceback.print_exc()
@@ -327,8 +341,9 @@ def run_pipeline(pid, mode):
         if RUNNING.get(pid,{}).get('running'): raise ValueError('Dự án này đang chạy')
         with db() as c:
             if not c.execute('SELECT 1 FROM projects WHERE id=?',(pid,)).fetchone(): raise ValueError('Không tìm thấy dự án')
+        lanes=provider_snapshot()[1]
         RUNNING[pid]={'running':True,'pause':False,'mode':mode}
-        threading.Thread(target=pipeline_worker,args=(pid,mode),daemon=True).start()
+        threading.Thread(target=pipeline_worker,args=(pid,mode,lanes),daemon=True).start()
 
 
 def approve_stage(pid,sid):
@@ -348,6 +363,7 @@ def retry_stage(pid,sid):
 
 
 def agent_chat(pid,aid,message):
+    lanes=provider_snapshot()[1];llm=snapshot_call(lanes)
     sid=aid.rsplit('-',1)[0]
     if sid not in STAGE_BY_ID or aid not in [f'{sid}-A',f'{sid}-B']: raise ValueError('Agent không hợp lệ')
     if not message.strip(): raise ValueError('Nội dung trống')
@@ -355,7 +371,7 @@ def agent_chat(pid,aid,message):
         p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Không tìm thấy dự án')
         c.execute('INSERT INTO chat VALUES(?,?,?,?,?,?)',(uid(),pid,aid,'user',message[:2500],now()))
-    if PROVIDER=='demo':
+    if model_provider.mode(lanes)=='demo':
         reply=(f'[DEMO] Tôi là {aid}, phụ trách {STAGE_BY_ID[sid]["name"]}. '
                f'Với yêu cầu “{message[:110]}”, tôi đề xuất: (1) xác định đầu ra và tiêu chí chấp nhận; '
                '(2) tách giả định khỏi bằng chứng; (3) để agent còn lại review độc lập trước khi kết luận. '
@@ -363,7 +379,7 @@ def agent_chat(pid,aid,message):
     else:
         with LOCK,db() as c: p=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
         context=get_preceding(pid,sid)
-        reply=model_call(f'Bạn là {aid}, {STAGE_BY_ID[sid]["name"]}, một agent của công ty AI. '
+        reply=llm(f'Bạn là {aid}, {STAGE_BY_ID[sid]["name"]}, một agent của công ty AI. '
                          'Trả lời ngắn gọn, thực tế và bằng tiếng Việt. Nếu không chắc, nói rõ giả định.',
                          f'Dự án: {p["name"]}\nBối cảnh:\n{context[:4000]}\n\nYêu cầu từ người quản lý:\n{message[:2500]}',aid[-1])
     with LOCK,db() as c: c.execute('INSERT INTO chat VALUES(?,?,?,?,?,?)',(uid(),pid,aid,'assistant',reply,now()))
@@ -434,14 +450,19 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html'):
-                with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers)
+            if path in ('/','/index.html','/access.html','/providers.html'):
+                with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
+            if path=='/api/provider/settings':
+                with LOCK,db() as c:data=provider_settings.view(c,os.environ,MODEL_LANES)
+                self.send_json(200,data);return
             if path=='/api/bootstrap':
-                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=self.visible_projects(),provider=model_provider.public_config(MODEL_LANES),version='0.6.0-web-first')); return
+                revision,lanes=provider_snapshot()
+                agents=[dict(a,model=lanes[a['lane']].public()['model']) for a in AGENTS]
+                self.send_json(200,dict(stages=STAGES,agents=agents,projects=self.visible_projects(),provider=dict(model_provider.public_config(lanes),revision=revision),provider_admin=provider_settings.is_admin(self.auth_context[0]),version='0.6.0-web-first')); return
             if path.startswith('/api/projects/') and path.endswith('/acceptance'):
                 with LOCK,db() as c: data=acceptance_store.view(c,self.auth_context[1])
                 self.send_json(200,data);return
@@ -489,7 +510,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -506,14 +527,22 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if path=='/api/provider/settings':
+                with LOCK,db() as c:data=provider_settings.save(c,self.auth_context[0],body,os.environ,MODEL_LANES)
+                self.send_json(200,data);return
+            if path in ('/api/provider/probe','/api/provider/models'):
+                data=provider_settings.network_action(body,os.environ,MODEL_LANES,path.rsplit('/',1)[1])
+                self.send_json(200,data);return
             if path=='/api/coding/start':
                 pid = str(body.get('project_id',''))
                 spec = body.get('spec','')
-                llm = None if PROVIDER=='demo' else model_call
+                revision,lanes=provider_snapshot()
+                mode=model_provider.mode(lanes)
+                llm=None if mode=='demo' else snapshot_call(lanes)
                 def runner(jid, project_id):
                     coding_factory.work(db,LOCK,jid,project_id,llm,now,log,get_preceding)
                 jid = coding_factory.begin(db,LOCK,pid,spec,uid,now,log,runner)
-                self.send_json(202, {'job_id':jid,'mode':PROVIDER,'status':'queued'});return
+                self.send_json(202, {'job_id':jid,'mode':mode,'provider_revision':revision,'status':'queued'});return
             if path=='/api/github/preview':
                 with LOCK,db() as c:
                     plan=github_bridge.preview(c,str(body.get('project_id','')),str(body.get('artifact_id','')))

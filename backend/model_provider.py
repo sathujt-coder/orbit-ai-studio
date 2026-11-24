@@ -28,6 +28,9 @@ class Lane:
     model:str
     api_key:str=field(repr=False)
     timeout:int=150
+    temperature:float=0.45
+    context_window:int=8192
+    max_tokens:int=4096
 
     def public(self):
         return {'provider':self.provider,'model':self.model if self.provider!='demo' else 'Demo mode',
@@ -94,10 +97,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
 
-def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None):
+def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None,runtime_settings=False):
     if lane.provider=='demo':raise ProviderError('Demo lane cannot call a real provider')
+    if runtime_settings and max_tokens is None:max_tokens=lane.max_tokens
     payload={'model':lane.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
-             'temperature':0.45,'stream':False}
+             'temperature':lane.temperature,'stream':False}
     native=schema is not None and lane.provider=='ollama'
     endpoint=lane.base_url+'/chat/completions'
     if repair_temperature is not None and (not native or type(repair_temperature) not in (int,float) or not 0<=repair_temperature<=0.5):
@@ -108,6 +112,13 @@ def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None)
         payload['format']=schema
         payload['options']={'temperature':0 if repair_temperature is None else repair_temperature,'num_predict':max_tokens or 4096}
     elif max_tokens is not None:payload['max_tokens']=max_tokens
+    if runtime_settings and lane.provider=='ollama':
+        # Use native Ollama transport for configured context, even for free text.
+        native=True
+        endpoint=lane.base_url[:-3]+'/api/chat'
+        payload.pop('temperature',None);payload.pop('max_tokens',None)
+        payload.setdefault('options',{'temperature':lane.temperature,'num_predict':max_tokens or lane.max_tokens})
+        payload['options']['num_ctx']=lane.context_window
     headers={'Content-Type':'application/json','Accept':'application/json'}
     if lane.api_key:headers['Authorization']='Bearer '+lane.api_key
     request=urllib.request.Request(endpoint,
@@ -152,3 +163,22 @@ def probe(lanes):
         results[name]['elapsed_ms']=round((time.monotonic()-started)*1000)
     return {'mode':'live_probe','lanes':results,'both_responded':all(r['status']=='responded' for r in results.values()),
             'note':'Connectivity only, not model independence, quality or sandbox verification.'}
+
+
+def list_models(lane):
+    if lane.provider=='demo':raise ProviderError('Demo has no real model list')
+    endpoint=lane.base_url+'/models'
+    headers={'Accept':'application/json'}
+    if lane.api_key:headers['Authorization']='Bearer '+lane.api_key
+    request=urllib.request.Request(endpoint,headers=headers,method='GET')
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=lane.timeout) as response:
+            raw=response.read(MAX_RESPONSE+1)
+        if len(raw)>MAX_RESPONSE:raise ValueError('Oversized model list')
+        data=json.loads(raw)['data']
+        if not isinstance(data,list):raise ValueError('Invalid model list')
+        return sorted({x['id'] for x in data[:1000] if isinstance(x,dict) and isinstance(x.get('id'),str)
+                       and 0<len(x['id'])<=200 and all(ord(c)>=32 and ord(c)!=127 for c in x['id']) and
+                       (lane.provider!='ollama' or 'cloud' not in x['id'].lower())})[:200]
+    except (OSError,ValueError,KeyError,TypeError,urllib.error.URLError):
+        raise ProviderError('Model listing failed') from None
