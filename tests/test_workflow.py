@@ -11,9 +11,11 @@ class WorkflowTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         mod.DB_PATH=Path(self.tmp.name)/'test.sqlite'
         mod.PROVIDER='demo'
-        mod.RUNNING.clear()
         mod.init_db()
         self.pid=mod.list_projects()[0]['id']
+        with mod.db() as c:
+            mod.auth_store.create_user(c,'workflow-owner','fixture-password-123')
+            mod.auth_store.grant(c,'workflow-owner',self.pid,'owner')
     def tearDown(self): self.tmp.cleanup()
     def test_roster(self):
         self.assertEqual(len(mod.AGENTS),24)
@@ -48,8 +50,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(count,2)
         with self.assertRaises(ValueError):mod.agent_chat(self.pid,'invalid-A','test')
     def test_one_step_pipeline(self):
-        mod.pipeline_worker(self.pid,'next')
-        statuses=[t['status'] for t in mod.project_state(self.pid)['tasks']]
-        self.assertEqual(statuses[:2],['done','queued'])
+        identifier=mod.enqueue_pipeline(self.pid,'workflow-owner','next')
+        self.assertTrue(mod.project_state(self.pid)['running'])
+        self.assertTrue(mod.dispatch_one())
+        state=mod.project_state(self.pid)
+        self.assertEqual([t['status'] for t in state['tasks']][:2],['done','queued'])
+        self.assertFalse(state['running'])
+        with mod.db() as c:
+            task=mod.agent_queue.get(c,self.pid,identifier)
+            self.assertEqual(task['status'],'succeeded')
+            self.assertEqual(task['checkpoint_stage'],'po')
+            self.assertEqual(task['attempts'],1)
+        self.assertFalse(mod.dispatch_one())
 
 if __name__=='__main__':unittest.main()
