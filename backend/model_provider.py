@@ -14,6 +14,10 @@ MAX_RESPONSE=4_000_000
 class ProviderError(RuntimeError):
     pass
 
+class ConcurrencyError(ProviderError):
+    """A bounded local inference slot could not be acquired; no request was sent."""
+    pass
+
 class ResourceError(ProviderError):
     """Local admission refused before a provider request."""
     pass
