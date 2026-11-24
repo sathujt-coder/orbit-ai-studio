@@ -279,6 +279,7 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn, *, r
         # Persist a bounded, non-sensitive diagnostic; never raw model output.
         kind=('repair_stagnation' if isinstance(exc,StagnationError) else
               'structured_output_invalid' if isinstance(exc,StructuredReplyError) else
+              'resource_pressure' if isinstance(exc,model_provider.ResourceError) else
               'provider_failure' if isinstance(exc,model_provider.ProviderError) else
               'validation_error' if isinstance(exc,ValueError) else 'internal_error')
         update('failed',error=phase+':'+kind)

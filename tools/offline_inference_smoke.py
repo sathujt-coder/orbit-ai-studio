@@ -59,7 +59,7 @@ def main():
                     fd=os.open(db_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
                 os.environ.update(AI_COMPANY_DB=str(db_path),AI_PROVIDER='demo')
                 for k in ('AI_PROVIDER_A','AI_PROVIDER_B'):os.environ.pop(k,None)
-                import server,coding_factory as cf,usage_store,cost_store
+                import server,coding_factory as cf,usage_store,cost_store,resource_manager
                 server.init_db()
                 with server.db() as c:
                     pid=server.create_project('Local inference smoke','Small independent Web backend arithmetic module for a synthetic test only.','Web app',c)
@@ -81,12 +81,13 @@ def main():
                 repair_events=[]
                 repair_sampling=set()
                 job_ref={'id':None}
+                resource_before=server.RESOURCE_MANAGER.snapshot()
                 def model(system,user,lane):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],max_tokens=2048)
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,max_tokens=2048)
                 def structured(system,user,lane,schema):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],schema=schema,max_tokens=2048,
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,schema=schema,max_tokens=2048,
                                                repair_temperature=0.25 if lane in repair_sampling and schema is generation.FILE_SCHEMA else None)
                 model.structured=structured
                 def diagnostic(lane,schema,attempt,code):
@@ -118,6 +119,9 @@ def main():
                     costs=cost_store.summary(c,pid,1)
                 report['token_usage']=usage
                 report['ai_cost']=costs
+                resource_after=server.RESOURCE_MANAGER.snapshot()
+                loaded=resource_manager.loaded_models(lanes['A'])
+                report['resources']={'before':resource_before,'after':resource_after,'local_ollama':loaded}
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,'intelligent_repairs':repair_events,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
@@ -130,6 +134,9 @@ def main():
                 if code==0 and (costs['totals']['requests']!=len(calls) or costs['totals']['local_assumed_zero_calls']!=len(calls) or costs['totals']['total_usd']!='0.000000000000'):
                     report['cost_gate']='BLOCK';code=2
                 else:report['cost_gate']='PASS' if code==0 else 'not_accepted'
+                if code==0 and (resource_after['admission']['allowed']!=len(calls) or resource_after['admission']['blocked'] or loaded['status']!='available' or not loaded['models'] or (resource_after['policy']['mode']=='enforce' and resource_after['metrics']['effective_memory_available_bytes'] is None)):
+                    report['resource_gate']='BLOCK';code=2
+                else:report['resource_gate']='PASS' if code==0 else 'not_accepted'
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__

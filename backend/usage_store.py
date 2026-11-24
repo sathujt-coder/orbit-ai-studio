@@ -33,7 +33,8 @@ def finish(c,identifier,event):
                       event['coverage'],event['source'],identifier))
     if result.rowcount!=1:raise RuntimeError('Usage ledger completion conflict')
 
-def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,**kwargs):
+def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,resource_guard=None,**kwargs):
+    if resource_guard is not None:resource_guard.admit(lane)
     # Commit before calling the provider. A crash leaves a visible pending attempt.
     # Database errors fail closed; do not retry a possibly billable request.
     with lock,conn_factory() as c:identifier=start(c,lane,project_id,agent_id,purpose,run_id)

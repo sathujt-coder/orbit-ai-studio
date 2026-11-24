@@ -6,6 +6,8 @@ on:
       - backend/provider_settings.py
       - backend/usage_store.py
       - backend/cost_store.py
+      - backend/resource_manager.py
+      - tools/resource_container_evidence.py
       - backend/coding_factory.py
       - backend/server.py
       - tools/offline_sandbox_gate.py
@@ -43,7 +45,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/offline-report" "$RUNNER_TEMP/offline-private"
           chmod 700 "$RUNNER_TEMP/offline-private"
-          docker run -d --name orbit-airgap --network none -e OLLAMA_NO_CLOUD=1 -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_CONTEXT_LENGTH=8192 -v orbit-offline-models:/root/.ollama ollama/ollama:latest
+          docker run -d --name orbit-airgap --network none --memory 6g --memory-swap 6g --cpus 2 -e OLLAMA_NO_CLOUD=1 -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_CONTEXT_LENGTH=8192 -v orbit-offline-models:/root/.ollama ollama/ollama:latest
           test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' orbit-airgap)" = none
           for i in $(seq 1 60); do
             if docker exec orbit-airgap ollama list; then break; fi
@@ -59,7 +61,7 @@ jobs:
               extra=(--repair-db "/private/round-$prev.sqlite" --repair-report "/report/round-$prev-sandbox.json")
             fi
             echo "P4.6 attempt $((round+1))/3"
-            timeout 12m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" --mount "type=bind,src=$RUNNER_TEMP/offline-private,dst=/private" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --db-output "/private/round-$round.sqlite" --report "/report/round-$round-inference.json" --confirm 'RUN LOCAL INFERENCE' "${extra[@]}"
+            timeout 12m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" --mount "type=bind,src=$RUNNER_TEMP/offline-private,dst=/private" -e PYTHONDONTWRITEBYTECODE=1 -e ORBIT_RESOURCE_MODE=enforce -e ORBIT_RESOURCE_MIN_FREE_MIB=64 -e ORBIT_RESOURCE_MAX_MEMORY_PERCENT=99 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --db-output "/private/round-$round.sqlite" --report "/report/round-$round-inference.json" --confirm 'RUN LOCAL INFERENCE' "${extra[@]}"
             jid="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow"]["job_id"])' "$RUNNER_TEMP/offline-report/round-$round-inference.json")"
             status=0
             python tools/offline_sandbox_gate.py --db "$RUNNER_TEMP/offline-private/round-$round.sqlite" --inference-report "$RUNNER_TEMP/offline-report/round-$round-inference.json" --image "$image" --output "$RUNNER_TEMP/offline-report/round-$round-sandbox.json" --confirm "RUN OFFLINE SANDBOX $jid" || status=$?
@@ -71,6 +73,9 @@ jobs:
           done
           echo "P4.6 BLOCK: repair budget exhausted"
           exit 2
+      - name: Verify actual Ollama container resource bounds
+        if: always()
+        run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources.json"
       - name: Retain model inference evidence
         if: always()
         uses: actions/upload-artifact@v4
