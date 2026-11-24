@@ -78,12 +78,15 @@ def main():
                 calls=[]
                 diagnostics=[]
                 recoveries=[]
+                repair_events=[]
+                repair_sampling=set()
                 def model(system,user,lane):
                     calls.append(lane)
                     return model_provider.chat(lanes[lane],system,user,max_tokens=2048)
                 def structured(system,user,lane,schema):
                     calls.append(lane)
-                    return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048)
+                    return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048,
+                                               repair_temperature=0.25 if lane in repair_sampling and schema is generation.FILE_SCHEMA else None)
                 model.structured=structured
                 def diagnostic(lane,schema,attempt,code):
                     kind='proposal' if schema is cf.PROPOSAL_SCHEMA else 'review' if schema is cf.REVIEW_SCHEMA else 'single_file'
@@ -97,13 +100,18 @@ def main():
                         event['status']='failed';raise
                 model.structured_diagnostic=diagnostic
                 model.proposal_recovery=recovery
+                def intelligent(model_call,project,spec,context,lane,previous):
+                    repair_sampling.add(lane)
+                    try:return generation.intelligent_repair(model_call,project,spec,context,lane,previous,repair_events)
+                    finally:repair_sampling.discard(lane)
+                model.repair_candidate=intelligent
                 def worker(jid,project):
                     try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding,repair=repair)
                     finally:done.set()
                 jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,worker)
                 if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
                 with server.db() as c:j=cf.detail(c,jid)
-                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,
+                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,'intelligent_repairs':repair_events,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
                     'review_gate_passed':j['status']=='ready','private_db_retained':bool(a.db_output),'candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}

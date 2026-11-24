@@ -45,3 +45,32 @@ class RecoveryTests(unittest.TestCase):
         m=Model([raw])
         cf.generate_proposal(m,self.project,g.BENCHMARK_SPEC,'','A')
         self.assertEqual(len(m.calls),1)
+
+    def prior(self,main=None):
+        return cf.validate_proposal({'summary':'prior','files':[{'path':'main.py','content':main or 'def add(a,b):\n    return a+b'},
+            {'path':'test_main.py','content':json.loads(self.test)['content']}]})
+    def test_targeted_repair_only_replaces_invalid_file(self):
+        prior=self.prior('def add(a,b):\n    return a +\n')
+        m=Model([self.main]);events=[]
+        p=g.intelligent_repair(m,self.project,g.BENCHMARK_SPEC,'','B',{'proposal':prior},events)
+        self.assertEqual(len(m.calls),1)
+        self.assertEqual(cf.source_hashes(p)['test_main.py'],cf.source_hashes(prior)['test_main.py'])
+        self.assertEqual(events[0]['target_files'],['main.py'])
+        self.assertEqual(events[0]['status'],'changed')
+        self.assertIn('PYTHON_SYNTAX',m.calls[0][1])
+    def test_unchanged_full_proposal_switches_to_files(self):
+        prior=self.prior();events=[]
+        changed_main=json.dumps({'content':'def add(a,b):\n    result=a+b\n    return result'})
+        changed_test=json.dumps({'content':'import unittest\nfrom main import add\nclass T(unittest.TestCase):\n    def test_zero(self):\n        self.assertEqual(add(0,0),0)'})
+        m=Model([json.dumps(prior),changed_main,changed_test])
+        p=g.intelligent_repair(m,self.project,g.BENCHMARK_SPEC,'','B',{'proposal':prior},events)
+        self.assertTrue(events[0]['stagnation_detected'])
+        self.assertEqual(events[0]['strategy'],'stagnation_file_repair')
+        self.assertNotEqual(cf.source_hashes(prior),cf.source_hashes(p))
+    def test_repeated_file_source_blocks(self):
+        prior=self.prior();events=[]
+        m=Model([json.dumps(prior),self.main,self.main])
+        with self.assertRaises(cf.StructuredReplyError):
+            g.intelligent_repair(m,self.project,g.BENCHMARK_SPEC,'','B',{'proposal':prior},events)
+        self.assertEqual(events[0]['status'],'blocked')
+        self.assertTrue(events[0]['stagnation_detected'])

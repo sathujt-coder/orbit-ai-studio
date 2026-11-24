@@ -94,17 +94,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
 
-def chat(lane,system,user,*,max_tokens=None,schema=None):
+def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None):
     if lane.provider=='demo':raise ProviderError('Demo lane cannot call a real provider')
     payload={'model':lane.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
              'temperature':0.45,'stream':False}
     native=schema is not None and lane.provider=='ollama'
     endpoint=lane.base_url+'/chat/completions'
+    if repair_temperature is not None and (not native or type(repair_temperature) not in (int,float) or not 0<=repair_temperature<=0.5):
+        raise ValueError('Repair temperature must be 0–0.5 for native structured Ollama')
     if native:
         endpoint=lane.base_url[:-3]+'/api/chat'
         payload.pop('temperature')
         payload['format']=schema
-        payload['options']={'temperature':0,'num_predict':max_tokens or 4096}
+        payload['options']={'temperature':0 if repair_temperature is None else repair_temperature,'num_predict':max_tokens or 4096}
     elif max_tokens is not None:payload['max_tokens']=max_tokens
     headers={'Content-Type':'application/json','Accept':'application/json'}
     if lane.api_key:headers['Authorization']='Bearer '+lane.api_key

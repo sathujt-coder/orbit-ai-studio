@@ -82,27 +82,27 @@ def static_scan(proposal):
         if ext not in SUPPORTED_CODE | SUPPORTED_PASSIVE:
             findings.append({'path': path, 'code': 'UNSUPPORTED_FORMAT', 'severity': 'block'})
             continue
-        if re.search(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}', source):
-            findings.append({'path': path, 'code': 'POSSIBLE_SECRET', 'severity': 'block'})
+        if (secret_match := re.search(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}', source)):
+            findings.append({'path': path, 'code': 'POSSIBLE_SECRET', 'severity': 'block', 'line': source.count('\n',0,secret_match.start())+1})
         if ext == '.py':
             try:
                 syntax = ast.parse(source, filename=path)
-            except SyntaxError:
-                findings.append({'path': path, 'code': 'PYTHON_SYNTAX', 'severity': 'block'})
+            except SyntaxError as exc:
+                findings.append({'path': path, 'code': 'PYTHON_SYNTAX', 'severity': 'block', 'line': exc.lineno})
                 continue
             for node in ast.walk(syntax):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     names = [n.name for n in node.names] if isinstance(node, ast.Import) else [node.module or '']
                     if any(name.split('.')[0] in {'subprocess', 'ctypes'} for name in names):
-                        findings.append({'path': path, 'code': 'DANGEROUS_IMPORT', 'severity': 'block'})
+                        findings.append({'path': path, 'code': 'DANGEROUS_IMPORT', 'severity': 'block', 'line': node.lineno})
                         break
                 elif isinstance(node, ast.Call):
                     if isinstance(node.func, ast.Name) and node.func.id in {'eval', 'exec', 'compile', '__import__'}:
-                        findings.append({'path': path, 'code': 'DYNAMIC_EXECUTION', 'severity': 'block'})
+                        findings.append({'path': path, 'code': 'DYNAMIC_EXECUTION', 'severity': 'block', 'line': node.lineno})
                         break
                     if isinstance(node.func, ast.Attribute) and node.func.attr in {'system', 'popen'}:
                         if isinstance(node.func.value, ast.Name) and node.func.value.id == 'os':
-                            findings.append({'path': path, 'code': 'HOST_COMMAND', 'severity': 'block'})
+                            findings.append({'path': path, 'code': 'HOST_COMMAND', 'severity': 'block', 'line': node.lineno})
                             break
         elif ext == '.js':
             if re.search(r'\bchild_process\b|\beval\s*\(|\bnew\s+Function\s*\(|\bprocess\.env\b', source):

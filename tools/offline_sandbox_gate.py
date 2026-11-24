@@ -30,39 +30,82 @@ COMMON={ast.Module,ast.FunctionDef,ast.arguments,ast.arg,ast.Return,ast.Assign,
 TEST_EXTRA={ast.Import,ast.ImportFrom,ast.alias,ast.ClassDef,ast.Attribute,ast.Call}
 TEST_ATTR={'TestCase','main','assertEqual','assertNotEqual','assertIsInstance','assertTrue','assertFalse','assertRaises'}
 TEST_CALL={'add','int'}
+class NarrowError(ValueError):
+    def __init__(self,message,line=None):
+        super().__init__(message)
+        self.line=line
+
 def narrow_check(source,is_test):
     """Restrict generated code to a tiny arithmetic/unittest subset before Docker."""
     tree=ast.parse(source)
     for n in ast.walk(tree):
         if type(n) not in COMMON|(TEST_EXTRA if is_test else set()):
-            raise ValueError('unsupported syntax: '+type(n).__name__)
+            raise NarrowError('unsupported syntax: '+type(n).__name__,getattr(n,'lineno',None))
         if isinstance(n,ast.Name) and n.id.startswith('_') and not (is_test and n.id=='__name__'):
-            raise ValueError('private name forbidden')
+            raise NarrowError('private name forbidden',getattr(n,'lineno',None))
         if isinstance(n,(ast.FunctionDef,ast.ClassDef)):
-            if n.name.startswith('_') or n.decorator_list:raise ValueError('private or decorated definition')
+            if n.name.startswith('_') or n.decorator_list:raise NarrowError('private or decorated definition',getattr(n,'lineno',None))
         if isinstance(n,ast.Constant):
-            if type(n.value) is int and n.value.bit_length()>128:raise ValueError('integer too large')
-            if isinstance(n.value,str) and len(n.value)>1000:raise ValueError('string too large')
+            if type(n.value) is int and n.value.bit_length()>128:raise NarrowError('integer too large',getattr(n,'lineno',None))
+            if isinstance(n.value,str) and len(n.value)>1000:raise NarrowError('string too large',getattr(n,'lineno',None))
         if isinstance(n,ast.Import) and any(a.name!='unittest' or a.asname for a in n.names):
-            raise ValueError('only unittest import allowed')
+            raise NarrowError('only unittest import allowed',getattr(n,'lineno',None))
         if isinstance(n,ast.ImportFrom) and (n.level or n.module not in ('main','unittest') or any(a.asname or a.name not in ({'add'} if n.module=='main' else {'TestCase','main'}) for a in n.names)):
-            raise ValueError('unexpected from import')
-        if isinstance(n,ast.Attribute) and n.attr not in TEST_ATTR:raise ValueError('unexpected attribute')
+            raise NarrowError('unexpected from import',getattr(n,'lineno',None))
+        if isinstance(n,ast.Attribute) and n.attr not in TEST_ATTR:raise NarrowError('unexpected attribute',getattr(n,'lineno',None))
         if isinstance(n,ast.Call):
             fn=n.func
             if isinstance(fn,ast.Name):
-                if fn.id not in TEST_CALL|{'main'}:raise ValueError('unexpected function call')
+                if fn.id not in TEST_CALL|{'main'}:raise NarrowError('unexpected function call',getattr(n,'lineno',None))
             elif not (isinstance(fn,ast.Attribute) and isinstance(fn.value,ast.Name) and
                       ((fn.value.id=='self' and fn.attr.startswith('assert')) or
                        (fn.value.id=='unittest' and fn.attr=='main'))):
-                raise ValueError('unexpected method call')
+                raise NarrowError('unexpected method call',getattr(n,'lineno',None))
     if not is_test:
         defs=[n for n in tree.body if isinstance(n,ast.FunctionDef)]
         if len(defs)!=1 or defs[0].name!='add' or any(not isinstance(n,ast.FunctionDef) and not (isinstance(n,ast.Expr) and isinstance(n.value,ast.Constant) and isinstance(n.value.value,str)) for n in tree.body):
-            raise ValueError('only add function and optional docstring allowed')
+            raise NarrowError('only add function and optional docstring allowed',1)
         args=defs[0].args
         if len(args.args)!=2 or args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults:
-            raise ValueError('add must take two positional arguments')
+            raise NarrowError('add must take two positional arguments',defs[0].lineno)
+
+EXPECTED_FILES=('main.py','test_main.py')
+STATIC_GUIDANCE={
+    'PYTHON_SYNTAX':'Return valid Python syntax with real newlines and indentation.',
+    'POSSIBLE_SECRET':'Remove credential-like content; write fresh minimal source.',
+    'DANGEROUS_IMPORT':'Remove forbidden imports. main.py must have no imports; tests only unittest and from main import add.',
+    'DYNAMIC_EXECUTION':'Remove dynamic execution calls.',
+    'HOST_COMMAND':'Remove host command calls.',
+    'UNSUPPORTED_FORMAT':'Return only the two requested Python files.',
+}
+def preflight(proposal):
+    plan=vf.plan_lane(proposal)
+    files={f['path']:f['content'] for f in proposal['files']}
+    findings=[]
+    for path in EXPECTED_FILES:
+        if path not in files:findings.append({'path':path,'code':'MISSING_FILE','line':None,'message':'Generate the missing required file.'})
+    if set(files)-set(EXPECTED_FILES):
+        findings.append({'path':None,'code':'EXTRA_FILES','line':None,'message':'Return only main.py and test_main.py.'})
+    for finding in plan['findings']:
+        code=finding['code']
+        findings.append({'path':finding['path'] if finding['path'] in EXPECTED_FILES else None,
+                         'code':code,'line':finding.get('line'),'message':STATIC_GUIDANCE.get(code,'Remove the prohibited construct.')})
+    for reason in plan['blocking_reasons']:
+        if reason!='STATIC_SCAN_BLOCK':
+            findings.append({'path':None,'code':reason,'line':None,'message':'Provide the required Python implementation and tests.'})
+    for path in EXPECTED_FILES:
+        if path not in files:continue
+        try:narrow_check(files[path],path=='test_main.py')
+        except SyntaxError as exc:
+            if not any(f['path']==path and f['code']=='PYTHON_SYNTAX' for f in findings):
+                findings.append({'path':path,'code':'PYTHON_SYNTAX','line':exc.lineno,'message':STATIC_GUIDANCE['PYTHON_SYNTAX']})
+        except NarrowError as exc:
+            findings.append({'path':path,'code':'NARROW_POLICY','line':exc.line,'message':str(exc)})
+    return findings
+
+def feedback_text(findings):
+    return '; '.join(f"{f['path'] or 'proposal'}:{f['line'] or '?'} [{f['code']}] {f['message']}" for f in findings)[:2000]
+
 
 def contract_command():
     # The trusted harness imports only main.py inside a fresh container. The
@@ -103,13 +146,10 @@ def verify(j,image,approval,runner=None):
         plan=vf.plan_lane(p)
         item={'sha256':plan['sha256'],'status':'blocked','steps':[]}
         report['lanes'][lane]=item
-        files={f['path']:f['content'] for f in p['files']}
-        try:
-            if set(files)!={'main.py','test_main.py'} or plan['blocking_reasons']:raise ValueError('unexpected file set or static scan blocker')
-            narrow_check(files['main.py'],False)
-            narrow_check(files['test_main.py'],True)
-        except (ValueError,SyntaxError) as exc:
-            item['reason']=str(exc) if isinstance(exc,ValueError) else 'Python syntax invalid'
+        findings=preflight(p)
+        item['static_findings']=findings
+        if findings:
+            item['reason']=feedback_text(findings)
             continue
         with tempfile.TemporaryDirectory(prefix='orbit-offline-tests-') as work:
             workspace=vf._materialize_proposal(p,work)
@@ -157,11 +197,13 @@ def repair_plan(j,report):
             reasons=[]
             if status=='blocked':
                 # Static scanner reason is authored by the trusted gate, not model output.
-                reasons.append('Static gate: '+str(item.get('reason','unsupported syntax'))[:160])
+                current_findings=preflight(p)
+                reasons.append('Static gate: '+(feedback_text(current_findings) if current_findings else str(item.get('reason','unsupported syntax'))[:160]))
             for s in steps:
                 if not s.get('passed'):
                     reasons.append(str(s.get('step'))+': '+str(s.get('diagnostic','failed'))[:100])
-            result[lane]={'proposal':p,'reuse':False,'feedback':'; '.join(reasons) or 'Sandbox gate failed'}
+            result[lane]={'proposal':p,'reuse':False,'feedback':'; '.join(reasons) or 'Sandbox gate failed',
+                          'static_findings':preflight(p) if status=='blocked' else []}
     if all(x['reuse'] for x in result.values()):raise ValueError('No failed lane to repair')
     return result
 

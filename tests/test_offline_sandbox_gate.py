@@ -56,3 +56,15 @@ class OfflineSandboxTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv,125,'','docker error')
         report=g.verify(j,PY_IMG,'RUN OFFLINE SANDBOX job-abc',runner)
         with self.assertRaisesRegex(ValueError,'infrastructure'):g.repair_plan(j,report)
+
+    def test_static_diagnostics_show_file_rule_and_line(self):
+        p=proposal_py()
+        p=g.cf.validate_proposal({'files':[{'path':'main.py','content':'def add(a,b):\n    return a +\n'},
+            {'path':'test_main.py','content':p['files'][1]['content']}]})
+        f=g.preflight(p)
+        self.assertTrue(any(x['path']=='main.py' and x['code']=='PYTHON_SYNTAX' and x['line']==2 for x in f))
+        self.assertNotIn('return a +',json.dumps(f))
+    def test_narrow_diagnostics_show_import_line(self):
+        p=proposal_py()
+        p=g.cf.validate_proposal({'files':[p['files'][0],{'path':'test_main.py','content':'import os\nimport unittest\n'}]})
+        self.assertTrue(any(x['path']=='test_main.py' and x['code']=='NARROW_POLICY' and x['line']==1 for x in g.preflight(p)))
