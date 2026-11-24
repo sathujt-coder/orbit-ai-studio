@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from coding_factory import safe_path
 from verification_factory import safe_job, plan_lane
-from web_candidate_selection import compare as compare_candidates
+from web_candidate_selection import compare as compare_candidates, react_evidence
 
 TOOLS = Path(__file__).resolve().parents[1] / 'tools'
 if str(TOOLS) not in sys.path:
@@ -42,6 +42,11 @@ def verified_bundle(job, evidence, *, decision=None):
         evidence_lane = lanes[lane]
         if not isinstance(evidence_lane, dict) or evidence_lane.get('status') != 'passed':
             raise ValueError('Both agent lanes must pass in isolated workspaces')
+        if evidence.get('profile') == 'react-welcome-v1':
+            steps = react_evidence(proposal, evidence_lane)
+            summary[lane] = {'source_sha256': evidence_lane['sha256'], 'executed_tests': 1,
+                             'steps': [{'name': steps[0]['step'], 'passed': True, 'test_count': 1, 'image': steps[0]['image']}]}
+            continue
         expected = plan_lane(proposal)
         if expected['blocking_reasons'] or evidence_lane.get('sha256') != expected['sha256']:
             raise ValueError('Verified source hash mismatch or static scan blocker')
@@ -81,7 +86,7 @@ def verified_bundle(job, evidence, *, decision=None):
               'content': f['content']} for f in proposals[lane]['files']]
     redacted = {
         'version': '0.5.0', 'job_id': job['id'], 'project_id': job['project_id'],
-        'verification': {'gate': 'PASS', 'verdict': 'passed', 'created_at': evidence.get('created_at'),
+        'verification': {'profile': evidence.get('profile', 'legacy'), 'gate': 'PASS', 'verdict': 'passed', 'created_at': evidence.get('created_at'),
                          'completed_at': evidence.get('completed_at'), 'lanes': summary},
         'reviews': [job['review_a'], job['review_b']],
         'selection': {'selected': lane, 'techlead': decision['techlead'],

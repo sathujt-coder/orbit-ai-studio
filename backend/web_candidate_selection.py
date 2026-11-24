@@ -15,6 +15,23 @@ def _digest(files):
     data = [{'path': f['path'], 'sha256': f['sha256']} for f in files]
     return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
+def react_evidence(proposal, lane):
+    from react_candidate_gate import plan_react
+    from web_typescript_sandbox import immutable_web_image
+    plan = plan_react(proposal)
+    if plan['blockers'] or lane.get('sha256') != plan['sha256']:
+        raise ValueError('React profile or source mismatch')
+    steps = lane.get('steps')
+    if not isinstance(steps, list) or len(steps) != 1:
+        raise ValueError('Exactly one React render check required')
+    step = steps[0]
+    if (step.get('step') != 'react_welcome_render' or step.get('executed') is not True
+        or step.get('passed') is not True or step.get('exit_code') != 0
+        or type(step.get('test_count')) is not int or step['test_count'] != 1):
+        raise ValueError('React render evidence incomplete')
+    immutable_web_image(step.get('image'))
+    return steps
+
 def compare(job, report):
     """Fail closed unless BOTH independently reviewed candidates passed sandbox."""
     proposals = safe_job(job)
@@ -24,6 +41,11 @@ def compare(job, report):
         raise ValueError('Both candidates must pass sandbox verification')
     if report.get('sandbox', {}).get('runtime') != 'docker' or report.get('approval') != 'local_cli_explicit':
         raise ValueError('Untrusted verification provenance')
+    profile = report.get('profile')
+    if profile not in (None, 'react-welcome-v1'):
+        raise ValueError('Unknown verification profile')
+    if profile and (report.get('project_id') != job.get('project_id') or report['sandbox'].get('network') != 'none'):
+        raise ValueError('React evidence project or network mismatch')
     lanes = report.get('lanes')
     if not isinstance(lanes, dict) or set(lanes) != {'A', 'B'}:
         raise ValueError('Both candidate results required')
@@ -38,7 +60,7 @@ def compare(job, report):
             raise ValueError('Empty sandbox test evidence for DEV-' + lane)
         if any(not isinstance(s, dict) or s.get('executed') is not True or s.get('passed') is not True for s in steps):
             raise ValueError('Sandbox steps are incomplete')
-        test_steps = [s for s in steps if s.get('step') in ('python_tests', 'javascript_tests')]
+        test_steps = react_evidence(proposals[lane], actual) if profile else [s for s in steps if s.get('step') in ('python_tests', 'javascript_tests')]
         if not test_steps or any(type(s.get('test_count')) is not int or s['test_count'] < 1 for s in test_steps):
             raise ValueError('Positive test count required for DEV-' + lane)
         results[lane] = {
@@ -47,6 +69,7 @@ def compare(job, report):
             'test_count': sum(s['test_count'] for s in test_steps),
             'sandbox_steps': len(steps),
             'digest': expected,
+            **({'profile': profile, 'image': test_steps[0]['image']} if profile else {}),
         }
     return {'job_id': job['id'], 'project_id': job.get('project_id'),
             'status': 'awaiting_techlead_decision', 'candidates': results,

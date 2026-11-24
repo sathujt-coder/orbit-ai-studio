@@ -1,0 +1,2 @@
+# React selection evidence
+The fixed react-welcome-v1 report can now be consumed by Tech Lead comparison and verified_bundle. Both lanes must match source hashes, project, offline network declaration, exact render step and immutable image reference. The decision binds the image reference and profile. Only selected code is packaged. Six mock-runner regression tests. No signed evidence or authenticated image allowlist; trusted local operator only. Existing CLI persistence does not yet support React reports. No browser E2E or real AI job. No merge or deployment.
