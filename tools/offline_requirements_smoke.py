@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""P6.1 offline acceptance of structured AI discovery and the revision/approval storage contract."""
+import argparse, copy, json, os, sys, tempfile
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
+
+IDEA=("A small web app for readers to save URLs and list their saved links. "
+      "Users belong to separate projects; a user must not read links from another project. "
+      "Only these features are in scope; no mobile app, sharing, or external integrations. "
+      "Authenticated project membership is provided by the existing platform. "
+      "A saved URL must appear in the list; an unauthorized cross-project read must be denied.")
+
+def require(ok,message):
+    if not ok:raise RuntimeError(message)
+
+def main():
+    p=argparse.ArgumentParser()
+    p.add_argument('--report',type=Path,required=True);p.add_argument('--confirm',required=True)
+    a=p.parse_args()
+    if a.confirm!='RUN LOCAL REQUIREMENTS' or a.report.exists():p.error('Explicit confirmation and new report required')
+    report={'schema':'orbit.offline-requirements.v1','gate':'BLOCK','scope':'synthetic AI discovery plus storage contract; no HTTP/queue or actual human approval','source_commit':os.getenv('STRESS_SOURCE_COMMIT','unknown')}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.environ.update(AI_COMPANY_DB=str(Path(d)/'requirements.sqlite'),AI_PROVIDER='ollama',
+                AI_PROVIDER_A='ollama',AI_PROVIDER_B='ollama',AI_MODEL_A='qwen2.5-coder:3b',
+                AI_MODEL_B='qwen2.5:3b',AI_BASE_URL='http://127.0.0.1:11434/v1',
+                AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
+                AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',ORBIT_BUDGET_MODE='enforce',
+                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='6')
+            import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
+            import requirements_discovery as discovery
+            server.init_db()
+            with server.db() as c:pid=server.create_project('Requirements fixture',IDEA,'Web app',c)
+            lanes=mp.require_distinct_real(server.provider_snapshot()[1]);run=server.uid()
+            require(all(l.provider=='ollama' and l.base_url=='http://127.0.0.1:11434/v1' for l in lanes.values()),'Nonlocal provider forbidden')
+            def call(lane,phase,system,user,schema):
+                return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,
+                    project_id=pid,agent_id='po-'+lane,purpose=phase,run_id=run,runtime_settings=True,
+                    max_tokens=min(2048,lanes[lane].max_tokens),schema=schema,
+                    resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,
+                    budget_guard=server.BUDGET_GUARD)
+            evidence=discovery.discover(call,IDEA)
+            report['discovery']=evidence
+            document=evidence['document']
+            # Independent lightweight fixture checks; not a general semantic quality oracle.
+            functional=' '.join(r['description']+' '+' '.join(r['acceptance']) for r in document['requirements'] if r['kind']=='functional').lower()
+            nonfunctional=' '.join(r['description']+' '+' '.join(r['acceptance']) for r in document['requirements'] if r['kind']=='nonfunctional').lower()
+            checks={'save':('save' in functional or 'store' in functional) and ('url' in functional or 'link' in functional),
+                'list':any(k in functional for k in ('list','display','view','retrieve')),
+                'isolation': 'project' in nonfunctional and any(k in nonfunctional for k in ('denied','deny','unauthorized','prevent','restrict','isolation','cannot','access','only'))}
+            report['fixture_checks']=checks
+            require(all(checks.values()),'Essential fixture scope missing')
+            require(evidence['ready_for_human_review'],'Final review or open questions block adoption')
+            def denied(fn):
+                try:fn()
+                except ValueError:return True
+                return False
+            def approval(row,**kw):
+                return dict(version=row['version'],digest=row['digest'],confirmation='APPROVE PRODUCT REQUIREMENTS') | kw
+            # Simulated authorized human adopts AI draft; this is not real human sign-off.
+            with server.db() as c:
+                blocked_doc=copy.deepcopy(document);blocked_doc['open_questions']=['Fixture unresolved decision']
+                first=pr.save(c,pid,'fixture-author',dict(expected_version=0,document=blocked_doc),server.now())
+                unresolved=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(first['current']),server.now()))
+                current=pr.save(c,pid,'fixture-author',dict(expected_version=1,document=document),server.now())
+                row=current['current']
+                stale=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(first['current']),server.now()))
+                wrong_digest=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(row,digest='wrong'),server.now()))
+                wrong_confirmation=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(row,confirmation='yes'),server.now()))
+                approved=pr.approve(c,pid,'fixture-reviewer',approval(row),server.now())
+            with server.db() as c:
+                persisted=pr.view(c,pid)
+                revised=pr.save(c,pid,'fixture-author',dict(expected_version=2,document=document),server.now())
+                usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
+                calls=[dict(r) for r in c.execute('SELECT lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
+                guard=server.BUDGET_GUARD.view(c,all_projects=True)
+                integrity=c.execute('PRAGMA integrity_check').fetchone()[0]
+                foreign_keys=list(c.execute('PRAGMA foreign_key_check'))
+            gates=dict(unresolved_blocked=unresolved,stale_blocked=stale,wrong_digest_blocked=wrong_digest,
+                wrong_confirmation_blocked=wrong_confirmation,not_ready_before_approval=not current['planning_ready'],
+                ready_after_approval=approved['planning_ready'],approval_persisted=persisted['planning_ready'] and persisted['current']['digest']==row['digest'],
+                new_revision_invalidates=not revised['planning_ready'],database_integrity=integrity=='ok' and not foreign_keys)
+            expected=[('A','requirements_proposal'),('B','requirements_proposal'),('A','requirements_cross_review'),
+                ('B','requirements_cross_review'),('A','requirements_synthesis'),('B','requirements_final_review')]
+            gates.update(real_calls=[(x['lane'],x['purpose']) for x in calls]==expected and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+                token_ledger=usage['requests']==usage['complete_calls']==6,
+                local_cost=cost['local_assumed_zero_calls']==6, no_budget_leak=guard['totals']['held_calls']==0,
+                no_active_inference=server.CONCURRENCY.snapshot()['active']==0)
+            report.update(gates=gates,calls=calls,token_usage=usage,cost=cost)
+            require(all(gates.values()),'Acceptance gate failed')
+            report['gate']='PASS'
+    except Exception as e:
+        report['error_type']=type(e).__name__
+        report['error']=str(e) if isinstance(e,(RuntimeError,ValueError)) else 'See test output'
+    finally:
+        with a.report.open('x',encoding='utf-8') as f:json.dump(report,f,indent=2)
+        print(json.dumps({k:v for k,v in report.items() if k!='discovery'},indent=2))
+    return 0 if report['gate']=='PASS' else 2
+if __name__=='__main__':raise SystemExit(main())
