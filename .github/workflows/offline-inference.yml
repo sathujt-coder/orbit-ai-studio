@@ -5,6 +5,7 @@ on:
       - backend/model_provider.py
       - backend/provider_settings.py
       - backend/usage_store.py
+      - backend/cost_store.py
       - backend/coding_factory.py
       - backend/server.py
       - tools/offline_sandbox_gate.py

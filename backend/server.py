@@ -17,6 +17,7 @@ import acceptance_store
 import model_provider
 import provider_settings
 import usage_store
+import cost_store
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -459,12 +460,22 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html'):
                 with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
+            if path=='/api/provider/rates':
+                with LOCK,db() as c:data=cost_store.rates_view(c,os.environ,MODEL_LANES)
+                self.send_json(200,data);return
+            if path=='/api/provider/cost' or (path.startswith('/api/projects/') and path.endswith('/cost')):
+                days=int(parse_qs(urlparse(self.path).query).get('days',['7'])[0])
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=cost_store.summary(c,pid,days,all_projects=path=='/api/provider/cost')
+                    data['can_manage_budget']=bool(pid and c.execute("SELECT 1 FROM auth_memberships WHERE user_id=? AND project_id=? AND role='owner'",(actor,pid)).fetchone())
+                self.send_json(200,data);return
             if path=='/api/provider/usage' or (path.startswith('/api/projects/') and path.endswith('/usage')):
                 q=parse_qs(urlparse(self.path).query)
                 days=int(q.get('days',['7'])[0])
@@ -524,7 +535,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -541,6 +552,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if path=='/api/provider/rates':
+                with LOCK,db() as c:data=cost_store.save_rate(c,self.auth_context[0],body,os.environ,MODEL_LANES)
+                self.send_json(200,data);return
+            if path.startswith('/api/projects/') and path.endswith('/budget'):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=cost_store.save_budget(c,pid,actor,body)
+                self.send_json(200,data);return
             if path=='/api/provider/settings':
                 with LOCK,db() as c:data=provider_settings.save(c,self.auth_context[0],body,os.environ,MODEL_LANES)
                 self.send_json(200,data);return

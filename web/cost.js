@@ -1,0 +1,32 @@
+(function(){
+'use strict';
+const $=id=>document.getElementById(id);
+let csrf='',names={},rates=[],endpoints=[],sequence=0,report=null,admin=false;
+const money=x=>x==null?'—':'$'+String(x).replace(/(\.\d*?[1-9])0+$/,'$1').replace(/\.0+$/,'.00');
+const label=x=>x==null?'System / Probe':names[x]||x;
+const columns=v=>[money(v.input_usd),money(v.output_usd),money(v.total_usd),v.known_calls+'/'+v.requests];
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});if(r.status===401){location.replace('/account.html');throw Error('Phiên đã hết hạn')}const d=await r.json();if(!r.ok)throw Error(d.error||'Không tải được dữ liệu');return d}
+function row(values){const tr=document.createElement('tr');for(const v of values){const td=document.createElement('td');td.textContent=String(v);tr.append(td)}return tr}
+function render(d){report=d;const t=d.totals;$('kpis').replaceChildren(...[['Chi phí đã biết',money(t.total_usd)],['Input',money(t.input_usd)],['Output',money(t.output_usd)],['Chưa định giá / thiếu số liệu',t.unknown_calls]].map(([k,v])=>{const b=document.createElement('div'),l=document.createElement('span'),n=document.createElement('strong');l.textContent=k;n.textContent=v;b.append(l,n);return b}));
+ $('coverage').textContent='Đủ dữ liệu chi phí: '+t.known_calls+'/'+t.requests+' · Local giả định $0: '+t.local_assumed_zero_calls+' · Có bảng giá: '+t.rated_calls+' · Chưa có giá: '+t.unpriced_calls+' · Lịch sử chưa gắn giá: '+t.legacy_calls+' · Pending: '+t.pending_calls+'.';
+ $('daily').replaceChildren(...d.daily.map(v=>row([v.day,...columns(v)])));
+ $('groups').replaceChildren(...d.by_agent_model.map(v=>row([label(v.project_id),v.agent_id,v.provider+' / '+v.model,v.purpose,...columns(v)])));
+ $('project-section').hidden=d.scope!=='all';$('projects').replaceChildren(...d.by_project.map(v=>row([label(v.project_id),...columns(v)])));
+ $('budget-panel').hidden=!d.budget;$('budget-form').hidden=!d.can_manage_budget;
+ if(d.budget){const b=d.budget;const status={not_configured:'Chưa cấu hình',limit_reached_known:'Đã chạm/vượt giới hạn theo chi phí đã biết',incomplete_data:'Dữ liệu chi phí chưa đầy đủ',near_limit:'Đã đạt ít nhất 80%',within_known_estimate:'Trong giới hạn ước tính'};$('budget-status').textContent=b.month_utc+' · Giới hạn '+money(b.limit_usd)+' · Đã biết '+money(b.known_spend_usd)+' · Còn lại theo số đã biết '+money(b.known_remaining_usd)+' · '+status[b.status]+' · '+b.unknown_calls+' lượt chưa rõ chi phí';$('budget-limit').value=b.limit_usd==null?'':b.limit_usd.replace(/\.?0+$/,'')}
+ $('report').hidden=false;$('status').textContent=d.groups_truncated?'Đã cập nhật; tối đa 200 nhóm, tổng gồm tất cả.':'Đã cập nhật.';
+}
+async function refresh(){const id=++sequence;report=null;$('report').hidden=true;$('status').textContent='Đang tải…';try{const p=$('project').value;if(!p)throw Error('Chưa có dự án được cấp quyền');const d=await api((p==='__all__'?'/api/provider/cost':'/api/projects/'+encodeURIComponent(p)+'/cost')+'?days='+$('days').value);if(id===sequence)render(d)}catch(e){if(id===sequence)$('status').textContent=e.message}}
+const trimRate=x=>x==null?'':String(x).replace(/(\.\d*?[1-9])0+$/,'$1').replace(/\.0+$/,'');
+async function loadRates(){const d=await api('/api/provider/rates');rates=d.rates;endpoints=d.allowed_endpoints;$('endpoint').replaceChildren(...endpoints.map((e,i)=>new Option(e.provider+' · '+e.url,String(i))));
+ $('rates').replaceChildren(...rates.map(v=>{const tr=row([(v.url||'Endpoint không còn duyệt')+' · '+v.model,v.active?money(v.input_usd_per_million):'Vô hiệu',v.active?money(v.output_usd_per_million):'Vô hiệu',v.id]);const td=document.createElement('td'),b=document.createElement('button');b.type='button';b.className='btn outline';b.textContent='Chỉnh sửa';b.disabled=!v.url;b.addEventListener('click',()=>{$('endpoint').value=String(endpoints.findIndex(x=>x.url===v.url&&x.provider===v.provider));$('model').value=v.model;$('input-rate').value=trimRate(v.input_usd_per_million);$('output-rate').value=trimRate(v.output_usd_per_million);$('active').checked=v.active});td.append(b);tr.append(td);return tr}));
+ $('rates-panel').hidden=false;if(d.truncated)$('rate-status').textContent='Hiển thị 200 bảng giá mới nhất.';
+}
+async function submit(e,fn,status){e.preventDefault();const button=e.currentTarget.querySelector('button[type=submit],button');button.disabled=true;try{await fn()}catch(err){$(status).textContent=err.message}finally{button.disabled=false}}
+window.addEventListener('DOMContentLoaded',async()=>{try{csrf=(await api('/api/auth/session')).csrf_token;const d=await api('/api/bootstrap');admin=d.provider_admin;names=Object.fromEntries(d.projects.map(p=>[p.id,p.name]));const options=d.projects.map(p=>new Option(p.name,p.id));if(admin)options.unshift(new Option('Toàn hệ thống (Admin)','__all__'));$('project').replaceChildren(...options);$('filters').hidden=false;
+ $('filters').addEventListener('submit',e=>{e.preventDefault();refresh()});$('project').addEventListener('change',refresh);$('days').addEventListener('change',refresh);
+ $('budget-form').addEventListener('submit',e=>submit(e,async()=>{if(!report?.can_manage_budget)return;const p=report.project_id,b=report.budget;const value=$('budget-limit').value.trim();if(!confirm('Lưu ngân sách cảnh báo cho dự án này?'))return;await api('/api/projects/'+encodeURIComponent(p)+'/budget',{revision:b.revision,monthly_limit_usd:value||null,confirmation:'APPLY AI BUDGET'});await refresh()},'status'));
+ $('rate-form').addEventListener('submit',e=>submit(e,async()=>{const endpoint=endpoints[Number($('endpoint').value)],model=$('model').value.trim(),active=$('active').checked;if(!endpoint)throw Error('Chọn endpoint');const old=rates.find(x=>x.provider===endpoint.provider&&x.url===endpoint.url&&x.model===model);if(!confirm('Lưu phiên bản giá cho các request mới?'))return;await api('/api/provider/rates',{...endpoint,model,active,input_usd_per_million:active?$('input-rate').value.trim():null,output_usd_per_million:active?$('output-rate').value.trim():null,expected_id:old?.id||0,confirmation:'APPLY AI RATE'});await loadRates();$('rate-status').textContent='Đã lưu phiên bản giá mới.';await refresh()},'rate-status'));
+ await refresh();if(admin)await loadRates();
+ }catch(e){$('status').textContent=e.message}});
+})();
