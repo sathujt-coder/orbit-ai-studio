@@ -63,7 +63,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install pinned Playwright package
-        run: npm install --no-save --ignore-scripts playwright@1.56.1
+        run: npm install --no-save --ignore-scripts playwright@1.56.1 react@19.2.0 react-dom@19.2.0 esbuild@0.25.12
       - name: Install Chromium browser
         run: npx playwright install --with-deps chromium
       - name: Start isolated ORBIT backend
@@ -79,7 +79,7 @@ jobs:
           cat "$RUNNER_TEMP/orbit-server.log"
           exit 1
       - name: Run real Chromium E2E
-        run: node --test tests/browser/web-first.test.cjs
+        run: node --test tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs
       - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4

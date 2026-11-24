@@ -15,6 +15,7 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     const response = await page.goto(ORIGIN + '/', {waitUntil: 'domcontentloaded'});
     assert.equal(response.status(), 200);
     await page.locator('#projectSide .project-item').first().waitFor({timeout: 15000});
+    await page.waitForFunction(() => document.querySelectorAll('#agentMembers .agent-card').length === 2, null, {timeout: 15000});
     assert.equal(await page.locator('#agentMembers .agent-card').count(), 2);
     assert.equal(await page.locator('#pipelineTrack').isVisible(), true);
     await page.locator('#newProjectBtn').click();
