@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create an online SQLite snapshot or restore to a NEW local file; never overwrite."""
 import argparse,os,sqlite3
+from contextlib import closing
 from pathlib import Path
 def copy_database(source,destination,restore=False):
     source=Path(source).resolve(strict=True)
@@ -9,7 +10,7 @@ def copy_database(source,destination,restore=False):
     fd=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     os.close(fd)
     try:
-        with sqlite3.connect(source.as_uri()+'?mode=ro',uri=True) as src, sqlite3.connect(destination) as dst:
+        with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as src, closing(sqlite3.connect(destination)) as dst:
             src.backup(dst)
             if dst.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Integrity check failed')
             if restore and dst.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='auth_sessions'").fetchone():

@@ -384,6 +384,11 @@ def agent_chat(pid,aid,message):
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(WEB),**kwargs)
     def log_message(self,format,*args): pass
+    def end_headers(self):
+        self.send_header('X-Frame-Options','DENY')
+        self.send_header('Referrer-Policy','no-referrer')
+        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        super().end_headers()
     def send_json(self,status,data,headers=None):
         if getattr(self,'command','')=='POST' and getattr(self,'auth_context',None):
             actor,pid,action=self.auth_context
@@ -437,6 +442,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(403, {'error':'Local host/origin required'}); return
         path=urlparse(self.path).path
         try:
+            if path=='/healthz':
+                try:
+                    with LOCK,db() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
+                    self.send_json(200,{'status':'ok'})
+                except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
+                return
             if path=='/api/auth/session':
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers)
                 self.send_json(status,data,headers);return

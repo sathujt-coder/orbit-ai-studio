@@ -22,3 +22,33 @@ test('HTTP denies anonymous access, cross-project reads, role escalation and mis
  assert.ok(audit.audit.some(x=>x.actor==='ci-viewer'&&x.outcome==='denied'));
  }finally{await browser.close()}
 });
+
+test('Owner can grant and revoke membership; Web evidence is scoped and cannot be accepted early',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+ const owner=await browser.newPage(),viewer=await browser.newPage();
+ const oc=await login(owner),vc=await login(viewer,'ci-viewer');
+ const created=await owner.request.post(ORIGIN+'/api/projects',{headers:headers(oc),data:{name:'Acceptance security test',idea:'Scoped evidence persistence and role revocation',platform:'Web app'}});
+ assert.equal(created.status(),201);const pid=(await created.json()).project_id;
+ const path=ORIGIN+'/api/projects/'+pid;
+ assert.equal((await viewer.request.get(path+'/acceptance')).status(),403);
+ assert.equal((await owner.request.post(path+'/members',{headers:headers(oc),data:{user:'ci-viewer',role:'viewer'}})).status(),200);
+ assert.equal((await viewer.request.get(path+'/acceptance')).status(),200);
+ const evidence={requirement:'scope_approved',reference:'issue-12345',passed:true};
+ assert.equal((await viewer.request.post(path+'/acceptance/evidence',{headers:headers(vc),data:evidence})).status(),403);
+ assert.equal((await owner.request.post(path+'/acceptance/evidence',{headers:headers(oc),data:evidence})).status(),200);
+ const register=await (await owner.request.get(path+'/acceptance')).json();
+ assert.equal(register.register.evidence.scope_approved.reviewer,'ci-browser-user');
+ assert.equal(register.state.accepted,false);
+ assert.equal((await owner.request.post(path+'/acceptance/signoff',{headers:headers(oc),data:{confirmation:'ACCEPT WEB '+pid}})).status(),403);
+ await owner.goto(ORIGIN+'/access.html');
+ await owner.locator('#project option[value="'+pid+'"]').waitFor({state:'attached'});
+ await owner.locator('#project').selectOption(pid);
+ await owner.waitForFunction(()=>document.querySelector('#acceptance').textContent.includes('"accepted": false'));
+ assert.equal((await owner.request.post(path+'/members',{headers:headers(oc),data:{user:'ci-viewer',role:'revoke'}})).status(),200);
+ assert.equal((await viewer.request.get(path+'/acceptance')).status(),403);
+ const audit=await (await owner.request.get(path+'/audit')).json();
+ assert.ok(audit.audit.some(x=>x.actor==='ci-browser-user'&&x.action==='http:manage'&&x.outcome==='success'));
+ assert.equal((await owner.request.get(ORIGIN+'/healthz')).status(),200);
+ }finally{await browser.close()}
+});
