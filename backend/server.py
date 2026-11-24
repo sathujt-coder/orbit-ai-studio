@@ -14,6 +14,7 @@ import auth_store
 import auth_http
 import auth_policy
 import acceptance_store
+import product_requirements
 import model_provider
 import provider_settings
 import usage_store
@@ -110,6 +111,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_task_project ON tasks(project_id,position);
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
+        product_requirements.ensure_schema(c)
         agent_queue.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
@@ -582,12 +584,19 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=product_requirements.view(c,pid)
+                    data['can_write']=auth_store.authorize(c,actor,pid,'write')
+                    data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
+                self.send_json(200,data);return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue(?:/[A-Za-z0-9_-]{1,100})?',path):
@@ -715,6 +724,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements(?:/approve)?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=(product_requirements.approve(c,pid,actor,body,now()) if path.endswith('/approve') else product_requirements.save(c,pid,actor,body,now()))
+                self.send_json(200,data);return
             if path=='/api/provider/protection/stop':
                 with LOCK,db() as c:data=inference_guard.set_stop(c,self.auth_context[0],body,os.environ)
                 QUEUE_WAKE.set();self.send_json(200,data);return
