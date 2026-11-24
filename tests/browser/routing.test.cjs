@@ -5,6 +5,7 @@ test('routing registry and metadata-only preview operator authorization',async()
  const owner=await browser.newPage(),viewer=await browser.newPage();const csrf=await login(owner);const vc=await login(viewer,'ci-viewer');
  const path=ORIGIN+'/api/provider/routing';
  assert.equal((await viewer.request.get(path)).status(),403);
+ assert.equal((await viewer.request.get(ORIGIN+'/routing.html')).status(),403);
  assert.equal((await viewer.request.post(path+'/preview',{headers:headers(vc),data:{department:'dev',kind:'coding',chars:100}})).status(),403);
  const before=await (await owner.request.get(path)).json();assert.equal(before.mode,'fixed');
  await owner.goto(ORIGIN+'/routing.html');await owner.locator('#report').waitFor({state:'visible'});await owner.locator('#department').selectOption('dev');await owner.locator('#kind').selectOption('coding');

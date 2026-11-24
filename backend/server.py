@@ -368,7 +368,7 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
         revision,lanes=provider_snapshot()
         task={}
         def insert(c,jid):
-            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,priority=priority,dependency_id=dependency_id,retry_of=retry_of)
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
         jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
@@ -562,9 +562,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
             if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html'):
-                with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
+                with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
+                if path=='/routing.html' and not provider_settings.is_admin(session['user']):
+                    self.send_json(403,{'error':'Operator required'});return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue(?:/[A-Za-z0-9_-]{1,100})?',path):
@@ -612,7 +614,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/bootstrap':
                 revision,lanes=provider_snapshot()
                 agents=[dict(a,model=lanes[a['lane']].public()['model']) for a in AGENTS]
-                self.send_json(200,dict(stages=STAGES,agents=agents,projects=self.visible_projects(),provider=dict(model_provider.public_config(lanes),revision=revision),provider_admin=provider_settings.is_admin(self.auth_context[0]),version='0.6.0-web-first')); return
+                self.send_json(200,dict(stages=STAGES,agents=agents,projects=self.visible_projects(),provider=dict(model_provider.public_config(lanes),revision=revision,routing_mode=ROUTING['mode']),provider_admin=provider_settings.is_admin(self.auth_context[0]),version='0.6.0-web-first')); return
             if path.startswith('/api/projects/') and path.endswith('/acceptance'):
                 with LOCK,db() as c: data=acceptance_store.view(c,self.auth_context[1])
                 self.send_json(200,data);return

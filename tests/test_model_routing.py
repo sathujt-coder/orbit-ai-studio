@@ -79,6 +79,9 @@ with server.db() as c:
     auth_store.create_user(c,'fixture','fixture-password-123')
     auth_store.grant(c,'fixture',pid,'owner')
 result=server.enqueue_coding(pid,'fixture','Implement a synthetic web coding feature')
+with server.db() as c:
+    row=server.agent_queue.get(c,pid,result['queue_id'])
+    assert row['provider_fingerprint']==server.agent_queue.fingerprint(server.provider_snapshot()[1],server.ROUTING['fingerprint'])
 seen=[]
 def failed(lane,*a,**k):
     seen.append(lane.model)
@@ -91,5 +94,35 @@ with server.db() as c:
     assert task['status']=='dead' and decision['selected']['A']['model']=='chosen-a'
     assert seen==['chosen-a'],seen
     assert c.execute('SELECT COUNT(*) FROM ai_usage').fetchone()[0]==1
+"""
+            subprocess.run([sys.executable,'-c',script],env=env,check=True,timeout=20)
+
+    def test_smart_queue_pipeline_and_coding_policy_binding(self):
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as d:
+            env=dict(os.environ,AI_COMPANY_DB=str(Path(d)/'routing.sqlite'),AI_PROVIDER='ollama',AI_PROVIDER_A='ollama',AI_PROVIDER_B='ollama',AI_MODEL_A='base-a',AI_MODEL_B='base-b',PYTHONPATH=str(root/'backend'),**config([candidate('a','chosen-a')],[self.b]))
+            script="""import server,auth_store,model_routing
+from unittest.mock import patch
+server.init_db()
+with server.db() as c:
+    pid=server.create_project('Routing test','Synthetic fixture for routing dispatch','Web app',c)
+    auth_store.create_user(c,'fixture','fixture-password-123')
+    auth_store.grant(c,'fixture',pid,'owner')
+pipeline=server.enqueue_pipeline(pid,'fixture','next',9)
+coding=server.enqueue_coding(pid,'fixture','Implement a synthetic web coding feature',5)
+fingerprint=server.agent_queue.fingerprint(server.provider_snapshot()[1],server.ROUTING['fingerprint'])
+with server.db() as c:
+    assert {r[0] for r in c.execute('SELECT provider_fingerprint FROM agent_queue')}=={fingerprint}
+server.ROUTING=dict(server.ROUTING,fingerprint='changed')
+with patch.object(server.model_provider,'chat') as send:
+    assert server.dispatch_one()
+    assert server.dispatch_one()
+    send.assert_not_called()
+with server.db() as c:
+    for identifier in (pipeline,coding['queue_id']):
+        row=server.agent_queue.get(c,pid,identifier)
+        assert row['status']=='dead' and row['reason']=='provider_configuration_changed'
+    assert not model_routing.history(c,pid)
+    assert c.execute('SELECT COUNT(*) FROM ai_usage').fetchone()[0]==0
 """
             subprocess.run([sys.executable,'-c',script],env=env,check=True,timeout=20)
