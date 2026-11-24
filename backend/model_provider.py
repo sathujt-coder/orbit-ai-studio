@@ -14,6 +14,10 @@ MAX_RESPONSE=4_000_000
 class ProviderError(RuntimeError):
     pass
 
+class BudgetError(ProviderError):
+    """Local budget or circuit refusal, before outbound inference."""
+    pass
+
 class RoutingError(ProviderError):
     """No eligible pre-dispatch pair; no provider request has been sent."""
     pass

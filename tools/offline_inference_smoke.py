@@ -86,10 +86,10 @@ def main():
                 resource_before=server.RESOURCE_MANAGER.snapshot()
                 def model(system,user,lane):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,max_tokens=2048)
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,budget_guard=server.BUDGET_GUARD,max_tokens=2048)
                 def structured(system,user,lane,schema):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,schema=schema,max_tokens=2048,
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,budget_guard=server.BUDGET_GUARD,schema=schema,max_tokens=2048,
                                                repair_temperature=0.25 if lane in repair_sampling and schema is generation.FILE_SCHEMA else None)
                 model.structured=structured
                 def diagnostic(lane,schema,attempt,code):
