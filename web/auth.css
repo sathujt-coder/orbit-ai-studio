@@ -1,0 +1,12 @@
+.auth-shell{min-height:100vh;display:grid;place-items:center;padding:24px}
+.auth-panel{width:min(100%,440px);background:#111b2e;border:1px solid #34445d;border-radius:16px;padding:28px;color:#e8eefb}
+.auth-panel h1{margin:12px 0;font-size:28px}
+.auth-note{color:#b2c2d9;line-height:1.6;margin:12px 0}
+.auth-panel form:not([hidden]){display:grid;gap:12px;margin:20px 0}
+.auth-panel input{width:100%;min-height:44px;padding:10px 12px;background:#090f1d;color:#fff;border:1px solid #546783;border-radius:8px}
+.auth-panel [hidden]{display:none!important}
+.auth-panel a{color:#86dbfa}
+.auth-panel #authError{color:#ffb4b4;min-height:1.5em}
+.auth-panel #authSession{margin:20px 0}
+.auth-panel #authSession p{margin-bottom:12px}
+.auth-panel :focus-visible{outline:2px solid #79ddff;outline-offset:3px}

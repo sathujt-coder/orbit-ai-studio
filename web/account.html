@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tài khoản · ORBIT AI</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/auth.css"></head>
+<body><main class="auth-shell"><section class="auth-panel" aria-labelledby="accountTitle">
+<div class="section-label">ORBIT AI · LOCAL WORKSPACE</div><h1 id="accountTitle">Tài khoản</h1>
+<p class="auth-note">Đăng nhập để quản lý phiên xác thực. Trong giai đoạn P3.5, API nghiệp vụ chưa bắt buộc đăng nhập.</p>
+<p id="authStatus" role="status" aria-live="polite">Đang kiểm tra phiên...</p>
+<form id="authLogin" hidden>
+<label for="authUser">Tên tài khoản</label><input id="authUser" name="username" autocomplete="username" maxlength="100" required>
+<label for="authPassword">Mật khẩu</label><input id="authPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+<button class="btn primary" type="submit">Đăng nhập</button>
+</form>
+<section id="authSession" hidden><p>Đã đăng nhập: <strong id="authIdentity"></strong></p><button type="button" id="authLogout" class="btn outline">Đăng xuất</button></section>
+<p id="authError" role="alert"></p><a href="/">Về dashboard</a>
+</section></main><script src="/auth-account.js"></script></body></html>
