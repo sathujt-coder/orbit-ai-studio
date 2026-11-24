@@ -14,6 +14,9 @@ import auth_store
 import auth_http
 import auth_policy
 import acceptance_store
+import product_requirements
+import requirements_discovery
+import requirements_jobs
 import model_provider
 import provider_settings
 import usage_store
@@ -110,7 +113,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_task_project ON tasks(project_id,position);
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
+        product_requirements.ensure_schema(c)
         agent_queue.ensure_schema(c)
+        requirements_jobs.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
@@ -385,6 +390,41 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
 
+def enqueue_requirements(pid,actor,priority=5,dependency_id=None,retry_of=None,scope_contract=None):
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=requirements_jobs.enqueue(c,pid,actor,revision,lanes,now(),priority=priority,
+            dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'],scope_contract=scope_contract)
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_requirements(pid,identifier,lanes):
+    with LOCK,db() as c:snapshot=requirements_jobs.input_for(c,pid,identifier)
+    idea=snapshot['idea']
+    contract=json.loads(snapshot['scope_contract']) if snapshot['scope_contract'] else None
+    lanes=model_provider.require_distinct_real(route_pair(lanes,pid,identifier,'po','requirements',len(idea)))
+    def call(lane,phase,system,user,schema):
+        with LOCK,db() as c:
+            row=agent_queue.get(c,pid,identifier)
+            if row['status']!='running' or not agent_queue.permitted(c,row['actor'],pid):
+                raise PermissionError('Discovery no longer authorized')
+        try:
+            return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,
+                agent_id=({'research':'research','ba':'ba'}.get(phase.split('_',1)[0],'po'))+'-'+lane,purpose=phase,run_id=identifier,runtime_settings=True,
+                max_tokens=min(768 if phase.startswith(('research_','ba_')) else 2048,lanes[lane].max_tokens),schema=schema,
+                resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+        except model_provider.ProviderError as error:
+            # OutputError is eligible for existing bounded document repair. Other failures are
+            # never replayed; expose only a fixed class and trusted phase, not provider payloads.
+            if isinstance(error,model_provider.OutputError):raise
+            raise RuntimeError('requirements_provider_failure:'+phase+':'+type(error).__name__) from error
+    evidence=requirements_discovery.collaborate(call,idea,scope_contract=contract)
+    # Evidence and terminal queue state commit atomically. Crash before this transaction is
+    # uncertain execution; startup recovery will never automatically replay it.
+    with LOCK,db() as c:
+        result=requirements_jobs.persist(c,pid,identifier,evidence,lanes,now())
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
 def dispatch_one():
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
@@ -423,6 +463,9 @@ def dispatch_one():
                 if target['status']!='queued':
                     agent_queue.fail(c,row,'stage_not_eligible',int(time.time()),now());return True
                 stage=target['stage_id']
+        if row['kind']=='requirements':
+            run_requirements(pid,identifier,lanes)
+            return True
         if row['kind']=='pipeline':
             result=run_stage(pid,stage,lanes)
         else:
@@ -439,14 +482,17 @@ def dispatch_one():
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
             agent_queue.boundary(c,current,result,int(time.time()),now(),stage)
-    except Exception:
+    except Exception as error:
         # Do not log raw prompts/errors or automatically replay uncertain execution.
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
             if current['status']=='running':
                 if row['kind']=='pipeline' and stage:
                     c.execute("UPDATE tasks SET status='needs_revision' WHERE project_id=? AND stage_id=? AND status IN ('drafting','reviewing','synthesizing')",(pid,stage))
-                agent_queue.fail(c,current,'execution_failed',int(time.time()),now())
+                reason=('requirements_invalid_output:'+error.phase if isinstance(error,requirements_discovery.InvalidDocument) else 'execution_failed')
+                if row['kind']=='requirements' and isinstance(error,RuntimeError) and str(error).startswith('requirements_provider_failure:'):
+                    reason=str(error)[:160]
+                agent_queue.fail(c,current,reason,int(time.time()),now())
     return True
 
 def queue_worker():
@@ -471,6 +517,7 @@ def retry_queue(pid,identifier,actor,confirmation):
             if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
             spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
         if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
+        if old['kind']=='requirements':return enqueue_requirements(pid,actor,old['priority'],dep,identifier)
         return {'queue_id':enqueue_pipeline(pid,actor,old['mode'],old['priority'],dep,identifier)}
 
 
@@ -582,12 +629,26 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=product_requirements.view(c,pid)
+                    data['discovery']=requirements_jobs.latest(c,pid)
+                    data['idea']=c.execute('SELECT idea FROM projects WHERE id=?',(pid,)).fetchone()[0]
+                    if data['current']:
+                        adopted=c.execute('SELECT queue_id FROM requirement_discovery_adoptions WHERE project_id=? AND version=?',(pid,data['current']['version'])).fetchone()
+                        if adopted:
+                            data['current']['source']='ai_adopted'
+                            data['current']['discovery_id']=adopted[0]
+                    data['can_write']=auth_store.authorize(c,actor,pid,'write')
+                    data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
+                self.send_json(200,data);return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue(?:/[A-Za-z0-9_-]{1,100})?',path):
@@ -698,7 +759,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/requirements.html','/requirements.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -715,6 +776,20 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/discover',path):
+                actor,pid,_=self.auth_context
+                if set(body)!={'confirmation','scope_contract'} or body['confirmation']!='RUN AI REQUIREMENTS':
+                    raise ValueError('Explicit RUN AI REQUIREMENTS and scope contract required')
+                self.send_json(202,enqueue_requirements(pid,actor,scope_contract=body['scope_contract']));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/adopt',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=requirements_jobs.adopt(c,pid,actor,body,now())
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements(?:/approve)?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=(product_requirements.approve(c,pid,actor,body,now()) if path.endswith('/approve') else product_requirements.save(c,pid,actor,body,now()))
+                self.send_json(200,data);return
             if path=='/api/provider/protection/stop':
                 with LOCK,db() as c:data=inference_guard.set_stop(c,self.auth_context[0],body,os.environ)
                 QUEUE_WAKE.set();self.send_json(200,data);return
