@@ -45,6 +45,7 @@ jobs:
           node --check web/app.js
           node --check web/world3d.js
           node --check web/auth-account.js
+          node --check web/access.js
 
   web-e2e:
     name: Browser E2E — Chromium
@@ -74,7 +75,7 @@ jobs:
           python backend/server.py > "$RUNNER_TEMP/orbit-server.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/orbit-server.pid"
           for i in $(seq 1 40); do
-            if curl -fsS http://127.0.0.1:8787/account.html > /dev/null; then exit 0; fi
+            if curl -fsS http://127.0.0.1:8787/healthz > /dev/null; then exit 0; fi
             sleep 1
           done
           cat "$RUNNER_TEMP/orbit-server.log"

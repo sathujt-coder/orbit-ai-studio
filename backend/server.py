@@ -13,6 +13,7 @@ import verification_factory
 import auth_store
 import auth_http
 import auth_policy
+import acceptance_store
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
@@ -71,6 +72,7 @@ def db(): return ManagedConnection()
 def init_db():
     with LOCK, db() as c:
         auth_store.ensure_schema(c)
+        acceptance_store.ensure_schema(c)
         c.executescript('''
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,idea TEXT NOT NULL,platform TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,stage_id TEXT NOT NULL,position INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'queued',started_at TEXT,finished_at TEXT,approved_at TEXT,FOREIGN KEY(project_id) REFERENCES projects(id));
@@ -382,6 +384,11 @@ def agent_chat(pid,aid,message):
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(WEB),**kwargs)
     def log_message(self,format,*args): pass
+    def end_headers(self):
+        self.send_header('X-Frame-Options','DENY')
+        self.send_header('Referrer-Policy','no-referrer')
+        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        super().end_headers()
     def send_json(self,status,data,headers=None):
         if getattr(self,'command','')=='POST' and getattr(self,'auth_context',None):
             actor,pid,action=self.auth_context
@@ -435,11 +442,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(403, {'error':'Local host/origin required'}); return
         path=urlparse(self.path).path
         try:
+            if path=='/healthz':
+                try:
+                    with LOCK,db() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
+                    self.send_json(200,{'status':'ok'})
+                except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
+                return
             if path=='/api/auth/session':
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html'):
+            if path in ('/','/index.html','/access.html'):
                 with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
@@ -447,6 +460,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
                 self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=self.visible_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.6.0-web-first')); return
+            if path.startswith('/api/projects/') and path.endswith('/acceptance'):
+                with LOCK,db() as c: data=acceptance_store.view(c,self.auth_context[1])
+                self.send_json(200,data);return
             if path.startswith('/api/projects/') and path.endswith('/members'):
                 with LOCK,db() as c: data=rows(c,'SELECT user_id,role FROM auth_memberships WHERE project_id=?', (self.auth_context[1],))
                 self.send_json(200,{'members':data});return
@@ -491,7 +507,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -537,6 +553,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(201,{'project_id':pid});return
             if path.startswith('/api/projects/'):
                 spl=path.strip('/').split('/')
+                if len(spl)==5 and spl[3]=='acceptance':
+                    actor,pid,_=self.auth_context
+                    with LOCK,db() as c:
+                        data=(acceptance_store.accept(c,pid,actor,body.get('confirmation')) if spl[4]=='signoff' else acceptance_store.record(c,pid,actor,body))
+                    self.send_json(200,data);return
                 if len(spl)==4 and spl[0]=='api' and spl[1]=='projects':
                     pid,action=spl[2:]
                     if action=='members':

@@ -1,0 +1,10 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quyền dự án · ORBIT</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/auth.css"></head><body>
+<main class="auth-shell"><section class="auth-panel" style="width:min(100%,780px)"><h1>Quyền dự án &amp; nghiệm thu Web</h1><p class="auth-note">Chỉ Owner quản lý thành viên; Reviewer hoặc Owner ghi bằng chứng. Bằng chứng do con người khai báo, không thay thế kiểm chứng thực tế.</p>
+<label for="project">Dự án</label><select id="project"></select><button id="refresh" class="btn outline">Tải lại</button>
+<p id="message" role="status"></p><h2>Thành viên</h2><pre id="members"></pre>
+<form id="membership"><label for="member">Tài khoản đã tồn tại</label><input id="member" required maxlength="100"><label for="role">Vai trò</label><select id="role"><option>developer</option><option>reviewer</option><option>viewer</option><option>revoke</option></select><button class="btn primary">Cập nhật quyền</button></form>
+<h2>Nhật ký</h2><pre id="audit" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto"></pre>
+<h2>Web Acceptance</h2><pre id="acceptance" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+<form id="evidence"><label for="requirement">Tiêu chí</label><select id="requirement"></select><label for="reference">Tham chiếu bằng chứng</label><input id="reference" required maxlength="1024"><label><input id="passed" type="checkbox" style="width:auto;min-height:0"> Đã kiểm chứng và đạt</label><button class="btn outline">Ghi bằng chứng</button></form>
+<form id="signoff"><label for="confirmation">Xác nhận thủ công: ACCEPT WEB + ID dự án</label><input id="confirmation" required maxlength="160"><button class="btn primary">Nghiệm thu Web</button></form>
+<a href="/">Về dashboard</a> · <a href="/account.html">Tài khoản</a></section></main><script src="/access.js"></script></body></html>

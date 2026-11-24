@@ -15,7 +15,7 @@ def scope(c,method,path,query='',body=None):
     if method=='GET':
         if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance)',path)
         if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
         m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
         if m:return (resource_project(c,'coding_jobs',m[1]),'read')
@@ -26,6 +26,8 @@ def scope(c,method,path,query='',body=None):
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):
             pid=body.get('project_id','')
             return (pid if isinstance(pid,str) else '', {'/api/github/preview':'read','/api/github/draft-pr':'publish'}.get(path,'write'))
+        m=re.fullmatch(r'/api/projects/('+ID+r')/acceptance/(evidence|signoff)',path)
+        if m:return (m[1],'manage' if m[2]=='signoff' else 'approve')
         m=re.fullmatch(r'/api/projects/('+ID+r')/(run|pause|members)',path)
         if m:return (m[1],'manage' if m[2]=='members' else 'write')
         m=re.fullmatch(r'/api/stages/('+ID+r')/('+ID+r')/(approve|retry)',path)
