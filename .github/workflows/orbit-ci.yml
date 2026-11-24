@@ -243,3 +243,25 @@ jobs:
       - name: Tear down isolated stack
         if: always()
         run: docker compose -f deployment/compose.proxy.yml down -v
+
+  stress-fixture:
+    name: P5.9 — queue, crash and HTTP stress fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run isolated stress fixture
+        run: python tools/stress_fixture.py --report "$RUNNER_TEMP/stress-fixture.json" --confirm 'RUN ISOLATED STRESS FIXTURE'
+      - name: Retain fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-fixture-report
+          path: ${{ runner.temp }}/stress-fixture.json
+          if-no-files-found: warn
+          retention-days: 7
