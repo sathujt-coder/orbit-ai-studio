@@ -105,3 +105,31 @@ jobs:
         run: docker build --pull --tag orbit-web-ts:ci --file tools/web-sandbox/Dockerfile .
       - name: Run real isolated Docker checks for both candidates
         run: PYTHONPATH=tests python tools/web-sandbox/real_docker_smoke.py
+
+  react-offline-smoke:
+    name: Real Docker React offline component smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve toolchain lock and audit dependencies
+        working-directory: tools/react-sandbox
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm audit --audit-level=high
+      - name: Retain resolved dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-toolchain-lock
+          path: tools/react-sandbox/package-lock.json
+      - name: Build React toolchain
+        run: docker build -t orbit-react:ci tools/react-sandbox
+      - name: Run two real offline React fixtures
+        run: python tools/react-sandbox/smoke.py
