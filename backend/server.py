@@ -22,6 +22,7 @@ import resource_manager
 import agent_queue
 import concurrency_control
 import model_routing
+import inference_guard
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,7 @@ MODEL_B = MODEL_LANES['B'].model
 LOCK = threading.RLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 CONCURRENCY = concurrency_control.Limiter()
+BUDGET_GUARD = inference_guard.Guard()
 ROUTING = model_routing.load(os.environ,MODEL_LANES)
 RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
@@ -212,7 +214,7 @@ def route_pair(base,pid,run_id,department,kind,chars,*,preview=False):
 def snapshot_call(lanes,*,project_id=None,department='system',purpose='unattributed',run_id=None):
     def tracked(system,user,lane,phase,**kwargs):
         return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=project_id,
-            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,**kwargs)
+            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD,**kwargs)
     def call(system,user,lane='A',*,phase=None):
         return tracked(system,user,lane,phase or purpose)
     def structured(system,user,lane,schema):
@@ -561,11 +563,11 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
-                if path=='/routing.html' and not provider_settings.is_admin(session['user']):
+                if path in ('/routing.html','/protection.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
@@ -599,6 +601,12 @@ class Handler(SimpleHTTPRequestHandler):
                 q=parse_qs(urlparse(self.path).query)
                 days=int(q.get('days',['7'])[0])
                 with LOCK,db() as c:data=usage_store.summary(c,self.auth_context[1],days,all_projects=path=='/api/provider/usage')
+                self.send_json(200,data);return
+            if path=='/api/provider/protection':
+                with LOCK,db() as c:data=BUDGET_GUARD.view(c,all_projects=True)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/protection',path):
+                with LOCK,db() as c:data=BUDGET_GUARD.view(c,self.auth_context[1])
                 self.send_json(200,data);return
             if path=='/api/provider/routing':
                 with LOCK,db() as c:
@@ -662,7 +670,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -679,6 +687,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if path=='/api/provider/protection/stop':
+                with LOCK,db() as c:data=inference_guard.set_stop(c,self.auth_context[0],body,os.environ)
+                QUEUE_WAKE.set();self.send_json(200,data);return
             if path=='/api/provider/routing/preview':
                 if set(body)!={'department','kind','chars'}:raise ValueError('Routing preview accepts task metadata only')
                 data=route_pair(provider_snapshot()[1],None,None,body['department'],body['kind'],body['chars'],preview=True)
@@ -712,9 +723,10 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c:data=provider_settings.save(c,self.auth_context[0],body,os.environ,MODEL_LANES)
                 self.send_json(200,data);return
             if path in ('/api/provider/probe','/api/provider/models'):
+                probe_run=uid()
                 def tracked_probe(lane,system,user,**kwargs):
                     return usage_store.tracked_chat(db,LOCK,lane,system,user,project_id=None,
-                        agent_id='system-'+lane.lane,purpose='provider_probe',resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,**kwargs)
+                        agent_id='system-'+lane.lane,purpose='provider_probe',run_id=probe_run,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD,**kwargs)
                 data=provider_settings.network_action(body,os.environ,MODEL_LANES,path.rsplit('/',1)[1],chat_fn=tracked_probe)
                 self.send_json(200,data);return
             if path=='/api/coding/start':
@@ -772,6 +784,8 @@ class Handler(SimpleHTTPRequestHandler):
                 reply=agent_chat(str(body.get('project_id','')),str(body.get('agent_id','')),str(body.get('message','')))
                 self.send_json(200,{'reply':reply});return
             self.send_json(404,{'error':'Endpoint không tồn tại'})
+        except model_provider.BudgetError as ex:
+            self.send_json(429,{'error':str(ex)})
         except model_provider.RoutingError as ex:
             self.send_json(503,{'error':str(ex)})
         except model_provider.ConcurrencyError as ex:
@@ -791,7 +805,9 @@ def main():
     os.umask(0o077)
     with agent_queue.dispatcher_lock(DB_PATH):
         init_db()
-        with LOCK,db() as c:agent_queue.recover(c,int(time.time()),now())
+        with LOCK,db() as c:
+            agent_queue.recover(c,int(time.time()),now())
+            BUDGET_GUARD.recover(c)
         srv=ThreadingHTTPServer((HOST,PORT),Handler)
         if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
         QUEUE_THREADS.extend(threading.Thread(target=queue_worker,name='orbit-worker-'+str(i+1),daemon=True) for i in range(CONCURRENCY.policy['workers']))

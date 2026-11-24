@@ -4,6 +4,7 @@ import uuid
 from contextlib import nullcontext
 import model_provider as mp
 import cost_store
+import inference_guard
 
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS ai_usage(
@@ -17,6 +18,7 @@ def ensure_schema(c):
     c.execute('CREATE INDEX IF NOT EXISTS ai_usage_project_time ON ai_usage(project_id,started_at)')
     c.execute('CREATE INDEX IF NOT EXISTS ai_usage_time ON ai_usage(started_at)')
     cost_store.ensure_schema(c)
+    inference_guard.ensure_schema(c)
 
 def start(c,lane,project_id,agent_id,purpose,run_id=None):
     if lane.provider=='demo':raise ValueError('Demo does not consume model tokens')
@@ -34,13 +36,25 @@ def finish(c,identifier,event):
                       event['coverage'],event['source'],identifier))
     if result.rowcount!=1:raise RuntimeError('Usage ledger completion conflict')
 
-def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,resource_guard=None,concurrency_guard=None,**kwargs):
+def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,resource_guard=None,concurrency_guard=None,budget_guard=None,**kwargs):
     # Never wait for a slot while holding the DB lock. Recheck RAM after waiting.
     with (concurrency_guard.acquire(lane,project_id) if concurrency_guard is not None else nullcontext()):
         if resource_guard is not None:resource_guard.admit(lane)
         # Commit before calling the provider. A crash leaves a visible pending attempt.
         # Database errors fail closed; do not retry a possibly billable request.
-        with lock,conn_factory() as c:identifier=start(c,lane,project_id,agent_id,purpose,run_id)
+        try:
+            with lock,conn_factory() as c:
+                plan=None
+                if budget_guard is not None:
+                    output=kwargs.get('max_tokens')
+                    if output is None:output=lane.max_tokens
+                    kwargs['max_tokens']=output
+                    plan=budget_guard.check(c,lane,project_id,agent_id,run_id,output)
+                identifier=start(c,lane,project_id,agent_id,purpose,run_id)
+                if plan is not None:budget_guard.reserve(c,identifier,lane,plan)
+        except mp.BudgetError as exc:
+            with lock,conn_factory() as c:inference_guard.deny(c,project_id,agent_id,run_id,str(exc))
+            raise
         started=time.monotonic()
         observed={}
         def observer(event):observed.update(event)
@@ -48,7 +62,9 @@ def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpos
             return mp.chat(lane,system,user,usage_observer=observer,**kwargs)
         finally:
             event=observed or dict(mp.token_usage(None,False),status='internal_error',elapsed_ms=round((time.monotonic()-started)*1000))
-            with lock,conn_factory() as c:finish(c,identifier,event)
+            with lock,conn_factory() as c:
+                finish(c,identifier,event)
+                if budget_guard is not None:budget_guard.finish(c,identifier,lane,event)
 
 AGG="""COUNT(*) AS requests, COALESCE(SUM(status='ok'),0) AS successful_calls,
  COALESCE(SUM(status IN ('output_error','provider_error','internal_error')),0) AS failed_calls,
