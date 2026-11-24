@@ -378,6 +378,11 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
 def dispatch_one():
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
+        # Stop before claiming so paused dispatch does not inflate attempts or history.
+        if inference_guard.control(c)['stopped']:
+            try:_,base=provider_settings.load(c,os.environ,MODEL_LANES)
+            except (ValueError,PermissionError):return False
+            if model_provider.mode(base)!='demo':return False
         row=agent_queue.claim(c,int(time.time()),now())
     if not row:return False
     pid,identifier=row['project_id'],row['id']
@@ -393,6 +398,10 @@ def dispatch_one():
             if row['control']:
                 agent_queue.defer(c,row,int(time.time()),now());return True
             mode=model_provider.mode(lanes)
+            if mode!='demo' and inference_guard.control(c)['stopped']:
+                # Stop raced with a claim, but no execution has begun.
+                agent_queue.change(c,row,'queued','emergency_stop',int(time.time()),attempts=max(0,row['attempts']-1),available_at=int(time.time()))
+                return True
             if mode!='demo' and RESOURCE_MANAGER.policy['mode']=='enforce' and resource_manager.pressure(RESOURCE_MANAGER.measure_fn(),RESOURCE_MANAGER.policy):
                 agent_queue.defer(c,row,int(time.time()),now());return True
             if row['kind']=='pipeline':

@@ -76,11 +76,12 @@ def totals(c,now,*,project=None,agent=None,scope='global'):
     if scope=='project':where+=' AND u.project_id=?';params.append(project)
     elif scope=='agent':where+=' AND u.agent_id=?';params.append(agent)
     result={'requests':0,'accounted_tokens':0,'accounted_picos':0,'unknown_tokens':0,'unknown_cost':0,
-            'held_tokens':0,'held_picos':0,'held_calls':0,'reservation_overruns':0}
-    for status,coverage,i,o,t,kind,ri,ro,rt,rp in c.execute("""SELECT u.status,u.coverage,u.input_tokens,u.output_tokens,u.total_tokens,b.kind,r.input_rate,r.output_rate,
-             s.reserved_tokens,s.reserved_picos FROM ai_usage u LEFT JOIN ai_cost_basis b ON b.usage_id=u.id
+            'held_tokens':0,'held_picos':0,'held_calls':0,'reservation_overruns':0,'observe_warning_calls':0}
+    for status,coverage,i,o,t,kind,ri,ro,rt,rp,warning in c.execute("""SELECT u.status,u.coverage,u.input_tokens,u.output_tokens,u.total_tokens,b.kind,r.input_rate,r.output_rate,
+             s.reserved_tokens,s.reserved_picos,s.warning FROM ai_usage u LEFT JOIN ai_cost_basis b ON b.usage_id=u.id
              LEFT JOIN ai_rates r ON r.id=b.rate_id LEFT JOIN inference_reservations s ON s.usage_id=u.id WHERE """+where,params):
         result['requests']+=1
+        if warning:result['observe_warning_calls']+=1
         complete=status!='pending' and coverage=='complete' and i is not None and o is not None and t==i+o
         actual_cost=0 if kind=='local_assumed_zero' else i*ri+o*ro if complete and kind=='rated' and ri is not None and ro is not None else None
         actual_tokens=t if complete else None

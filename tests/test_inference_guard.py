@@ -26,7 +26,7 @@ class ProtectionTests(unittest.TestCase):
         with self.assertRaisesRegex(mp.BudgetError,'unpriced_model'):self.start(guard,self.remote)
         self.rate(self.remote)
         with self.assertRaisesRegex(mp.BudgetError,'global_cost_limit'):self.start(guard,self.remote)
-        self.assertEqual(g.totals(self.c,self.now)['accounted_picos'],0)
+        self.assertEqual(g.totals(self.c,int(time.time()))['accounted_picos'],0)
     def test_project_budget_reservation_and_settlement(self):
         self.rate(self.remote)
         self.c.execute('INSERT INTO ai_budgets VALUES(?,?,?,?,?)',('p',1,5000,self.now,'owner'))
@@ -36,7 +36,7 @@ class ProtectionTests(unittest.TestCase):
         self.finish(guard,first,self.remote)
         second=self.start(guard,self.remote)
         self.finish(guard,second,self.remote,complete=False)
-        t=g.totals(self.c,self.now,project='p',scope='project')
+        t=g.totals(self.c,int(time.time()),project='p',scope='project')
         self.assertEqual(t['held_picos'],4352000000);self.assertEqual(t['accounted_picos'],4472000000)
     def test_agent_global_token_and_run_limit(self):
         guard=g.Guard({'ORBIT_BUDGET_MODE':'enforce','ORBIT_MONTHLY_AGENT_TOKENS':'4300','ORBIT_MAX_RUN_CALLS':'1'})
@@ -53,7 +53,7 @@ class ProtectionTests(unittest.TestCase):
         i=self.start(guard,self.remote)
         self.assertIn('unpriced_model',self.c.execute('SELECT warning FROM inference_reservations WHERE usage_id=?',(i,)).fetchone()[0])
         self.rate(self.remote);self.finish(guard,i,self.remote)
-        self.assertEqual(g.totals(self.c,self.now)['unknown_cost'],1)
+        self.assertEqual(g.totals(self.c,int(time.time()))['unknown_cost'],1)
     def test_circuit_open_cooldown_half_open_and_epoch(self):
         guard=g.Guard({'ORBIT_BREAKER_FAILURES':'2','ORBIT_BREAKER_COOLDOWN':'5'})
         old=self.start(guard)
@@ -71,7 +71,7 @@ class ProtectionTests(unittest.TestCase):
         i=self.start(guard);self.finish(guard,i,status='provider_error',complete=False,now=self.now)
         p=self.start(guard,now=self.now+5);guard.recover(self.c,self.now+6)
         with self.assertRaisesRegex(mp.BudgetError,'circuit_open'):self.start(guard,now=self.now+10)
-        self.assertEqual(g.totals(self.c,self.now)['held_calls'],2)
+        self.assertEqual(g.totals(self.c,int(time.time()))['held_calls'],2)
         self.assertEqual(self.c.execute("SELECT status FROM ai_usage WHERE id=?",(p,)).fetchone()[0],'pending')
     def test_emergency_persistent_revision_and_denial_no_ledger(self):
         env={'ORBIT_PROVIDER_ADMINS':'op'}
@@ -109,3 +109,67 @@ class ProtectionTests(unittest.TestCase):
             state['fail']=False;self.assertEqual(call(),'OK')
             self.assertEqual(state['calls'],3);self.assertEqual(self.c.execute('SELECT state FROM inference_breakers').fetchone()[0],'closed')
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_concurrent_reservation_prevents_double_spend(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/'usage.sqlite';lock=threading.RLock()
+            @contextmanager
+            def conn():
+                c=sqlite3.connect(db,timeout=5)
+                try:
+                    with c:yield c
+                finally:c.close()
+            with conn() as c:
+                u.ensure_schema(c)
+                c.execute('INSERT INTO ai_rates(provider,endpoint_id,model,input_rate,output_rate,active,created_at,actor) VALUES(?,?,?,?,?,1,?,?)',(*g.key(self.remote),1000000,2000000,self.now,'fixture'))
+                c.execute('INSERT INTO ai_budgets VALUES(?,?,?,?,?)',('p',1,5000,self.now,'owner'))
+            guard=g.Guard({'ORBIT_BUDGET_MODE':'enforce'})
+            entered=threading.Event();release=threading.Event();calls=[]
+            def fake(lane,*args,**kwargs):
+                calls.append(lane.model);entered.set()
+                if not release.wait(5):raise AssertionError('fixture timeout')
+                kwargs['usage_observer']({'status':'ok','coverage':'complete','input_tokens':100,'output_tokens':10,'total_tokens':110,'source':'fixture','elapsed_ms':1})
+                return 'OK'
+            def request(run):
+                return u.tracked_chat(conn,lock,self.remote,'s','u',project_id='p',agent_id='dev-B',purpose='test',run_id=run,budget_guard=guard)
+            with patch.object(mp,'chat',side_effect=fake),ThreadPoolExecutor(max_workers=2) as pool:
+                first=pool.submit(request,'first')
+                try:
+                    self.assertTrue(entered.wait(3))
+                    second=pool.submit(request,'second')
+                    with self.assertRaisesRegex(mp.BudgetError,'project_cost_limit'):second.result(3)
+                    with conn() as c:self.assertEqual(g.totals(c,int(time.time()))['held_calls'],1)
+                finally:release.set()
+                self.assertEqual(first.result(3),'OK')
+            with conn() as c:
+                self.assertEqual(g.totals(c,int(time.time()))['accounted_picos'],120000000)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM ai_usage').fetchone()[0],1)
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM inference_denials').fetchone()[0],1)
+            self.assertEqual(calls,['remote-b'])
+    def test_dispatcher_stop_preserves_queued_work(self):
+        import os,subprocess
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as d:
+            env=dict(os.environ,AI_COMPANY_DB=str(Path(d)/'queue.sqlite'),AI_PROVIDER='ollama',AI_PROVIDER_A='ollama',AI_PROVIDER_B='ollama',AI_MODEL_A='fixture-a',AI_MODEL_B='fixture-b',ORBIT_PROVIDER_ADMINS='fixture',PYTHONPATH=str(root/'backend'))
+            script="""import server,auth_store,inference_guard,os
+from unittest.mock import patch
+server.init_db()
+with server.db() as c:
+    pid=server.create_project('Stop test','Synthetic stop fixture','Web app',c)
+    auth_store.create_user(c,'fixture','fixture-password-123')
+    auth_store.grant(c,'fixture',pid,'owner')
+identifier=server.enqueue_pipeline(pid,'fixture','next')
+with server.db() as c:
+    inference_guard.set_stop(c,'fixture',{'revision':0,'stopped':True,'confirmation':'STOP NEW INFERENCE'},os.environ)
+with patch.object(server.model_provider,'chat') as send:
+    assert not server.dispatch_one()
+    assert not server.dispatch_one()
+    send.assert_not_called()
+with server.db() as c:
+    row=server.agent_queue.get(c,pid,identifier)
+    assert row['status']=='queued' and row['attempts']==0
+    assert len(server.agent_queue.history(c,pid,identifier))==1
+    assert c.execute('SELECT COUNT(*) FROM ai_usage').fetchone()[0]==0
+"""
+            subprocess.run([sys.executable,'-c',script],env=env,check=True,timeout=20)
