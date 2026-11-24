@@ -19,6 +19,7 @@ import provider_settings
 import usage_store
 import cost_store
 import resource_manager
+import agent_queue
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +36,9 @@ LOCK = threading.RLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
-RUNNING: dict[str, dict] = {}
+QUEUE_WAKE = threading.Event()
+QUEUE_STOP = threading.Event()
+QUEUE_THREAD = None
 
 STAGES = [
     dict(id='po', name='Product Owner', short='PO', team='Sản phẩm', deliverable='Product vision & roadmap', description='Định hình vấn đề, mục tiêu, KPI và phạm vi MVP', icon='◎', color='#54d6fa', approval=False),
@@ -98,6 +101,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_task_project ON tasks(project_id,position);
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
+        agent_queue.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -144,8 +148,9 @@ def project_state(pid):
             t['review_count']=sum(1 for r in reviews if r['stage_id']==t['stage_id'])
         done=sum(t['status'] in ('done','approved') for t in tasks)
         working=next((t for t in tasks if t['status'] in ('drafting','reviewing','synthesizing','awaiting_approval','needs_revision')),None)
+        q=agent_queue.active(c,pid,'pipeline')
         return dict(project=dict(p),tasks=tasks,artifacts=artifacts,reviews=reviews,events=events,
-                    stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=RUNNING.get(pid,{}).get('running',False),pause_requested=RUNNING.get(pid,{}).get('pause',False))
+                    stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 
 def list_projects():
@@ -176,7 +181,8 @@ def get_preceding(pid, stage_id):
     if ix == 0: return ''
     with LOCK,db() as c:
         result=rows(c,'SELECT stage_id,content FROM artifacts WHERE project_id=? AND kind=? ORDER BY rowid DESC',(pid,'final'))
-    indexed={r['stage_id']:r['content'] for r in result}
+    indexed={}
+    for r in result:indexed.setdefault(r['stage_id'],r['content'])
     return '\n\n'.join('['+s+'] '+indexed[s][:1200] for s in STAGE_IDS[:ix] if s in indexed)[-7500:]
 
 
@@ -318,45 +324,105 @@ def run_stage(pid, sid, lanes=None):
     return 'done'
 
 
-def pipeline_worker(pid, mode, lanes=None):
-    try:
-        lanes=provider_snapshot()[1] if lanes is None else lanes
-        while True:
-            with LOCK,db() as c:
-                tasks=rows(c,'SELECT stage_id,status FROM tasks WHERE project_id=? ORDER BY position',(pid,))
-            if not tasks: break
-            next_task=None
-            for t in tasks:
-                if t['status'] in ('done','approved'): continue
-                if t['status']!='queued':
-                    # Always require explicit action for blockers or gates.
-                    next_task=None
-                    break
-                next_task=t
-                break
-            if not next_task or RUNNING.get(pid,{}).get('pause'): break
-            result=run_stage(pid,next_task['stage_id'],lanes)
-            if result!='done' or mode=='next': break
-    except Exception as ex:
-        traceback.print_exc()
-        with LOCK,db() as c:
-            active=c.execute("SELECT stage_id FROM tasks WHERE project_id=? AND status IN ('drafting','reviewing','synthesizing') ORDER BY position LIMIT 1",(pid,)).fetchone()
-            if active:
-                c.execute("UPDATE tasks SET status='needs_revision' WHERE project_id=? AND stage_id=?",(pid,active['stage_id']))
-            log(c,pid,active['stage_id'] if active else None,None,'error','Lỗi agent: '+str(ex)[:500])
-    finally:
-        if pid in RUNNING: RUNNING[pid]['running']=False
+def enqueue_pipeline(pid,actor,mode,priority=5,dependency_id=None,retry_of=None):
+    if mode not in ('next','all'):raise ValueError('mode phải là next/all')
+    with LOCK,db() as c:
+        existing=agent_queue.active(c,pid,'pipeline')
+        if existing:
+            if existing['status']=='waiting_approval' and not dependency_id and retry_of is None:
+                if mode!=existing['mode']:raise ValueError('Resume original pipeline mode from Task Queue or cancel it')
+                agent_queue.control(c,pid,existing['id'],actor,'resume',int(time.time()),now())
+                identifier=existing['id']
+            else:raise ValueError('Project pipeline already queued; use Task Queue controls')
+        else:
+            stage=agent_queue.next_stage(c,pid)
+            if stage is None or stage['status']!='queued':raise ValueError('No eligible stage; resolve quality or approval gate first')
+            revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+            identifier=agent_queue.enqueue(c,pid,'pipeline',actor,revision,lanes,mode=mode,priority=priority,dependency_id=dependency_id,retry_of=retry_of)
+    QUEUE_WAKE.set()
+    return identifier
 
-
-def run_pipeline(pid, mode):
-    if mode not in ('next','all'): raise ValueError('mode phải là next/all')
+def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     with LOCK:
-        if RUNNING.get(pid,{}).get('running'): raise ValueError('Dự án này đang chạy')
+        revision,lanes=provider_snapshot()
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,priority=priority,dependency_id=dependency_id,retry_of=retry_of)
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
+
+def dispatch_one():
+    with LOCK,db() as c:row=agent_queue.claim(c,int(time.time()),now())
+    if not row:return False
+    pid,identifier=row['project_id'],row['id']
+    stage=None
+    try:
+        with LOCK,db() as c:
+            row=agent_queue.get(c,pid,identifier)
+            if not agent_queue.permitted(c,row['actor'],pid):
+                agent_queue.fail(c,row,'permission_revoked',int(time.time()),now());return True
+            revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+            if revision!=row['provider_revision'] or agent_queue.fingerprint(lanes)!=row['provider_fingerprint']:
+                agent_queue.fail(c,row,'provider_configuration_changed',int(time.time()),now());return True
+            if row['control']:
+                agent_queue.defer(c,row,int(time.time()),now());return True
+            mode=model_provider.mode(lanes)
+            if mode!='demo' and RESOURCE_MANAGER.policy['mode']=='enforce' and resource_manager.pressure(RESOURCE_MANAGER.measure_fn(),RESOURCE_MANAGER.policy):
+                agent_queue.defer(c,row,int(time.time()),now());return True
+            if row['kind']=='pipeline':
+                target=agent_queue.next_stage(c,pid)
+                if target is None:
+                    agent_queue.change(c,row,'succeeded','pipeline_complete',int(time.time()),control='');return True
+                if target['status']=='awaiting_approval':
+                    agent_queue.change(c,row,'waiting_approval','stage_approval_required',int(time.time()),control='');return True
+                if target['status']!='queued':
+                    agent_queue.fail(c,row,'stage_not_eligible',int(time.time()),now());return True
+                stage=target['stage_id']
+        if row['kind']=='pipeline':
+            result=run_stage(pid,stage,lanes)
+        else:
+            jid=row['coding_job_id']
+            llm=None if mode=='demo' else snapshot_call(lanes,project_id=pid,department='dev',purpose='coding',run_id=jid)
+            coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
+            with LOCK,db() as c:
+                result=c.execute('SELECT status FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
+            if result not in ('ready','needs_revision','failed'):result='failed'
+        with LOCK,db() as c:
+            current=agent_queue.get(c,pid,identifier)
+            agent_queue.boundary(c,current,result,int(time.time()),now(),stage)
+    except Exception:
+        # Do not log raw prompts/errors or automatically replay uncertain execution.
+        with LOCK,db() as c:
+            current=agent_queue.get(c,pid,identifier)
+            if current['status']=='running':
+                if row['kind']=='pipeline' and stage:
+                    c.execute("UPDATE tasks SET status='needs_revision' WHERE project_id=? AND stage_id=? AND status IN ('drafting','reviewing','synthesizing')",(pid,stage))
+                agent_queue.fail(c,current,'execution_failed',int(time.time()),now())
+    return True
+
+def queue_worker():
+    while not QUEUE_STOP.is_set():
+        try:
+            if dispatch_one():continue
+        except Exception:
+            # An uncertain DB commit is not safe to replay. Running rows remain for startup recovery.
+            print('Queue dispatcher stopped after storage failure',file=sys.stderr,flush=True)
+            return
+        QUEUE_WAKE.wait(0.5);QUEUE_WAKE.clear()
+
+def retry_queue(pid,identifier,actor,confirmation):
+    if confirmation!='RETRY QUEUE TASK':raise ValueError('Explicit RETRY QUEUE TASK required')
+    with LOCK:
         with db() as c:
-            if not c.execute('SELECT 1 FROM projects WHERE id=?',(pid,)).fetchone(): raise ValueError('Không tìm thấy dự án')
-        lanes=provider_snapshot()[1]
-        RUNNING[pid]={'running':True,'pause':False,'mode':mode}
-        threading.Thread(target=pipeline_worker,args=(pid,mode,lanes),daemon=True).start()
+            old=agent_queue.get(c,pid,identifier)
+            if old['status'] not in ('dead','interrupted','cancelled'):raise ValueError('Only terminal failed/cancelled tasks can be retried')
+            if not agent_queue.permitted(c,actor,pid):raise PermissionError('Project write permission required')
+            dep=old['dependency_id']
+            if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
+            spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
+        if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
+        return {'queue_id':enqueue_pipeline(pid,actor,old['mode'],old['priority'],dep,identifier)}
 
 
 def approve_stage(pid,sid):
@@ -457,19 +523,29 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/healthz':
                 try:
                     with LOCK,db() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
-                    self.send_json(200,{'status':'ok'})
+                    if QUEUE_THREAD is not None and not QUEUE_THREAD.is_alive():self.send_json(503,{'status':'unavailable','reason':'queue_dispatcher_stopped'})
+                    else:self.send_json(200,{'status':'ok'})
                 except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
                 return
             if path=='/api/auth/session':
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html'):
                 with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue(?:/[A-Za-z0-9_-]{1,100})?',path):
+                parts=path.strip('/').split('/');pid=self.auth_context[1]
+                with LOCK,db() as c:
+                    if len(parts)==5:data={'events':agent_queue.history(c,pid,parts[4])}
+                    else:
+                        data=agent_queue.view(c,pid)
+                        data['can_write']=agent_queue.permitted(c,self.auth_context[0],pid)
+                        data['dispatcher_running']=bool(QUEUE_THREAD and QUEUE_THREAD.is_alive())
+                self.send_json(200,data);return
             if path=='/api/provider/resources':
                 self.send_json(200,RESOURCE_MANAGER.snapshot(include_gpu=True));return
             if path=='/api/provider/rates':
@@ -541,7 +617,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -558,6 +634,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue/[A-Za-z0-9_-]{1,100}/(pause|resume|cancel|priority|retry)',path):
+                actor,pid,_=self.auth_context;parts=path.strip('/').split('/');identifier,action=parts[4:]
+                if action=='retry':data=retry_queue(pid,identifier,actor,body.get('confirmation'))
+                else:
+                    with LOCK,db() as c:row=agent_queue.control(c,pid,identifier,actor,action,int(time.time()),now(),body.get('priority'));data={'queue_id':row['id'],'status':row['status'],'control':row['control']}
+                    QUEUE_WAKE.set()
+                self.send_json(200,data);return
             if path=='/api/provider/resources/models':
                 global RESOURCE_MODEL_LAST
                 if body!={'confirmation':'READ LOCAL MODEL STATUS'}:raise ValueError('Explicit READ LOCAL MODEL STATUS required')
@@ -586,15 +669,8 @@ class Handler(SimpleHTTPRequestHandler):
                 data=provider_settings.network_action(body,os.environ,MODEL_LANES,path.rsplit('/',1)[1],chat_fn=tracked_probe)
                 self.send_json(200,data);return
             if path=='/api/coding/start':
-                pid = str(body.get('project_id',''))
-                spec = body.get('spec','')
-                revision,lanes=provider_snapshot()
-                mode=model_provider.mode(lanes)
-                def runner(jid, project_id):
-                    llm=None if mode=='demo' else snapshot_call(lanes,project_id=project_id,department='dev',purpose='coding',run_id=jid)
-                    coding_factory.work(db,LOCK,jid,project_id,llm,now,log,get_preceding)
-                jid = coding_factory.begin(db,LOCK,pid,spec,uid,now,log,runner)
-                self.send_json(202, {'job_id':jid,'mode':mode,'provider_revision':revision,'status':'queued'});return
+                data=enqueue_coding(self.auth_context[1],self.auth_context[0],body.get('spec',''),body.get('priority',5),body.get('dependency_id'))
+                self.send_json(202,data);return
             if path=='/api/github/preview':
                 with LOCK,db() as c:
                     plan=github_bridge.preview(c,str(body.get('project_id','')),str(body.get('artifact_id','')))
@@ -627,10 +703,14 @@ class Handler(SimpleHTTPRequestHandler):
                         with LOCK,db() as c:
                             auth_policy.set_member(c,self.auth_context[0],pid,str(body.get('user','')),str(body.get('role','')))
                         self.send_json(200,{'ok':True});return
-                    if action=='run': run_pipeline(pid,str(body.get('mode','next'))); self.send_json(200,{'ok':True});return
+                    if action=='run':
+                        identifier=enqueue_pipeline(pid,self.auth_context[0],body.get('mode','next'),body.get('priority',5),body.get('dependency_id'))
+                        self.send_json(200,{'ok':True,'queue_id':identifier});return
                     if action=='pause':
-                        if not RUNNING.get(pid,{}).get('running'): raise ValueError('Dự án không chạy')
-                        RUNNING[pid]['pause']=True
+                        with LOCK,db() as c:
+                            q=agent_queue.active(c,pid,'pipeline')
+                            if not q:raise ValueError('Dự án không chạy')
+                            agent_queue.control(c,pid,q['id'],self.auth_context[0],'pause',int(time.time()),now())
                         self.send_json(200,{'ok':True});return
             if path.startswith('/api/stages/'):
                 spl=path.strip('/').split('/')
@@ -652,16 +732,23 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    global QUEUE_THREAD
     if HOST not in ('127.0.0.1','localhost') and not (TRANSPORT.secure and os.getenv('ORBIT_ALLOW_TLS_BIND')=='1'):
         raise SystemExit('Non-loopback binding requires explicit TLS configuration and opt-in')
     tls=TRANSPORT.context() if TRANSPORT.secure else None
     os.umask(0o077)
-    init_db()
-    srv=ThreadingHTTPServer((HOST,PORT),Handler)
-    if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
-    print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
-    try: srv.serve_forever()
-    except KeyboardInterrupt: pass
-    finally:srv.server_close()
+    with agent_queue.dispatcher_lock(DB_PATH):
+        init_db()
+        with LOCK,db() as c:agent_queue.recover(c,int(time.time()),now())
+        srv=ThreadingHTTPServer((HOST,PORT),Handler)
+        if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
+        worker=threading.Thread(target=queue_worker,daemon=True);QUEUE_THREAD=worker;worker.start()
+        print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
+        try: srv.serve_forever()
+        except KeyboardInterrupt: pass
+        finally:
+            QUEUE_STOP.set();QUEUE_WAKE.set();srv.server_close()
+            # Keep the dispatcher lock until the active unit completes, or process exits.
+            worker.join()
 
 if __name__=='__main__':main()

@@ -18,7 +18,6 @@ class GithubBridgeTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         server.DB_PATH=Path(self.temp.name)/'orbits.sqlite'
         server.PROVIDER='demo'
-        server.RUNNING.clear()
         server.init_db()
         self.pid=server.list_projects()[0]['id']
 
