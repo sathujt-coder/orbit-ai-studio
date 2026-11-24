@@ -193,3 +193,45 @@ jobs:
       - name: Tear down isolated instance
         if: always()
         run: docker compose -f deployment/compose.yml down -v
+
+  proxy-container-smoke:
+    name: Reverse proxy — TLS upstream and rate limits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Create distinct ephemeral certificates and start restricted stack
+        run: |
+          mkdir -p deployment/proxy-tls/{edge,upstream,trust}
+          for role in edge upstream; do
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' -keyout deployment/proxy-tls/$role/key.pem -out deployment/proxy-tls/$role/cert.pem
+          done
+          cp deployment/proxy-tls/upstream/cert.pem deployment/proxy-tls/trust/upstream.pem
+          sudo chown 101:101 deployment/proxy-tls/edge/key.pem
+          sudo chown 10001:10001 deployment/proxy-tls/upstream/key.pem
+          sudo chmod 600 deployment/proxy-tls/{edge,upstream}/key.pem
+          docker compose -f deployment/compose.proxy.yml up -d --build
+          for i in $(seq 1 30); do
+            if curl -fsS --cacert deployment/proxy-tls/edge/cert.pem https://localhost:9443/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker compose -f deployment/compose.proxy.yml logs
+          exit 1
+      - name: Confirm upstream has no published port
+        run: |
+          id="$(docker compose -f deployment/compose.proxy.yml ps -q orbit)"
+          test "$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$id")" = '{}' || test "$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$id")" = 'null'
+      - name: Provision fixture and verify HTTPS through reverse proxy
+        run: |
+          docker compose -f deployment/compose.proxy.yml exec -T orbit python -c "import sys,sqlite3; sys.path.insert(0,'backend'); import auth_store; c=sqlite3.connect('/data/company.sqlite'); auth_store.create_user(c,'ci-tls-user','fixture-tls-password'); c.commit(); c.close()"
+          python deployment/tls_smoke.py deployment/proxy-tls/edge/cert.pem https://localhost:9443
+          python deployment/proxy_smoke.py deployment/proxy-tls/edge/cert.pem
+      - name: Validate certificate reload
+        run: sh deployment/reload_proxy.sh
+      - name: Tear down isolated stack
+        if: always()
+        run: docker compose -f deployment/compose.proxy.yml down -v

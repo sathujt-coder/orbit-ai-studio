@@ -13,3 +13,5 @@ deployment/tls/
 *.sqlite-shm
 *.pem
 *.key
+
+deployment/proxy-tls/
