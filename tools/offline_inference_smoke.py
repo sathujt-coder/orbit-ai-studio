@@ -8,11 +8,10 @@ sys.path.insert(0,str(ROOT/'backend'))
 import model_provider
 import sqlite3
 import offline_sandbox_gate as sandbox_gate
+import offline_generation as generation
 from contextlib import closing
-MODELS=('qwen2.5-coder:1.5b','qwen2.5:1.5b')
-SPEC=('Implement exactly main.py and test_main.py. main.py: a single function add(a,b) returning the sum of two integers; no imports, calls, decorators or complex syntax. '
-      'test_main.py: use exactly import unittest and from main import add; subclass unittest.TestCase, write test_ methods using self.assertEqual with correct expected sums, including zero and negatives. '
-      'No other imports, aliases, typing, loops, f-strings, extra files or unittest.main call; unittest discovery runs the tests. Return the JSON files object.')
+MODELS=('qwen2.5-coder:3b','qwen2.5:3b')
+SPEC=generation.BENCHMARK_SPEC
 def get_json(path):
     with urllib.request.build_opener(urllib.request.ProxyHandler({}),model_provider.NoRedirect()).open('http://127.0.0.1:11434'+path,timeout=15) as r:
         raw=r.read(2_000_001)
@@ -77,6 +76,8 @@ def main():
                                       'regenerated_lanes':[k for k,v in repair.items() if not v['reuse']]}
                 done=threading.Event()
                 calls=[]
+                diagnostics=[]
+                recoveries=[]
                 def model(system,user,lane):
                     calls.append(lane)
                     return model_provider.chat(lanes[lane],system,user,max_tokens=2048)
@@ -84,13 +85,25 @@ def main():
                     calls.append(lane)
                     return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048)
                 model.structured=structured
+                def diagnostic(lane,schema,attempt,code):
+                    kind='proposal' if schema is cf.PROPOSAL_SCHEMA else 'review' if schema is cf.REVIEW_SCHEMA else 'single_file'
+                    diagnostics.append({'lane':lane,'kind':kind,'attempt':attempt,'code':code})
+                def recovery(model_call,project,spec,context,lane):
+                    event={'lane':lane,'status':'started'};recoveries.append(event)
+                    try:
+                        result=generation.recover(model_call,project,spec,context,lane)
+                        event['status']='generated';return result
+                    except (ValueError,model_provider.ProviderError):
+                        event['status']='failed';raise
+                model.structured_diagnostic=diagnostic
+                model.proposal_recovery=recovery
                 def worker(jid,project):
                     try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding,repair=repair)
                     finally:done.set()
                 jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,worker)
                 if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
                 with server.db() as c:j=cf.detail(c,jid)
-                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),
+                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
                     'review_gate_passed':j['status']=='ready','private_db_retained':bool(a.db_output),'candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}

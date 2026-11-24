@@ -125,7 +125,13 @@ def structured_reply(model_call,system,message,lane,schema,validate):
         try:
             raw=model_call.structured(system,prompt,lane,schema)
             return validate(raw)
-        except (ValueError,model_provider.OutputError):
+        except (ValueError,model_provider.OutputError) as exc:
+            observer=getattr(model_call,'structured_diagnostic',None)
+            if callable(observer):
+                code=(exc.code if isinstance(exc,model_provider.OutputError) else
+                      'invalid_json' if isinstance(exc.__cause__,json.JSONDecodeError) else
+                      'local_schema_or_content_validation')
+                observer(lane,schema,attempt+1,code)
             if attempt:raise StructuredReplyError('Structured output invalid after two attempts') from None
 
 def generate_proposal(model_call, project, spec, context, lane):
@@ -150,7 +156,12 @@ def generate_proposal(model_call, project, spec, context, lane):
                  'Implement the requested feature and real tests. Python: root test_*.py with unittest; JS: *.test.js with node:test. '
                  'Use only safe relative paths; no secrets, shell scripts, CI files or claims that tests ran. '
                  'Keep code and JSON concise; obey the file limits (8 files, 18 KB each, 85 KB total).')
-        return structured_reply(model_call,concise,message,lane,PROPOSAL_SCHEMA,validate_proposal)
+        try:
+            return structured_reply(model_call,concise,message,lane,PROPOSAL_SCHEMA,validate_proposal)
+        except StructuredReplyError:
+            recovery=getattr(model_call,'proposal_recovery',None)
+            if not callable(recovery):raise
+            return validate_proposal(recovery(model_call,project,spec,context,lane))
     return validate_proposal(model_call(system, message, lane))
 
 

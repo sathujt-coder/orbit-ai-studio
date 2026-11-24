@@ -16,6 +16,9 @@ class ProviderError(RuntimeError):
 
 class OutputError(ProviderError):
     """A response was incomplete or unusable; a bounded format retry is allowed."""
+    def __init__(self,message,code="invalid_output"):
+        super().__init__(message)
+        self.code=code
 
 @dataclass(frozen=True)
 class Lane:
@@ -116,15 +119,15 @@ def chat(lane,system,user,*,max_tokens=None,schema=None):
         data=json.loads(raw)
         if native:
             if data.get('done') is not True or data.get('done_reason')=='length':
-                raise OutputError('Incomplete structured output')
+                raise OutputError('Incomplete structured output','truncated_or_incomplete')
             content=data['message']['content']
         else:
             choice=data['choices'][0]
-            if schema is not None and choice.get('finish_reason')=='length':raise OutputError('Incomplete structured output')
+            if schema is not None and choice.get('finish_reason')=='length':raise OutputError('Incomplete structured output','truncated_or_incomplete')
             content=choice['message']['content']
-        if not isinstance(content,str):raise OutputError('Invalid model content')
+        if not isinstance(content,str):raise OutputError('Invalid model content','non_string_content')
         content=re.sub(r'<think>[\s\S]*?</think>','',content,flags=re.I).strip()
-        if not content or len(content)>100_000:raise OutputError('Empty or oversized model content')
+        if not content or len(content)>100_000:raise OutputError('Empty or oversized model content','empty_or_oversized_content')
         return content
     except urllib.error.HTTPError as exc:
         code=exc.code
