@@ -66,3 +66,25 @@ test('API rejects cross-origin and unsafe project creation', async () => {
     await browser.close();
   }
 });
+
+test('Quality dashboard shows unverified state for a real demo coding job', async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const page=await browser.newPage();
+  await page.goto(ORIGIN+'/');
+  await page.locator('#projectSide .project-item').first().waitFor();
+  const b=await (await page.request.get(ORIGIN+'/api/bootstrap')).json();
+  const pid=b.projects[0].id;
+  const res=await page.request.post(ORIGIN+'/api/coding/start',{headers:{'X-ORBIT-UI':'1','Content-Type':'application/json'},data:{project_id:pid,spec:'Quality dashboard browser test for a demo web feature'}});
+  assert.equal(res.status(),202);
+  const {job_id}=await res.json();
+  await page.evaluate(id=>localStorage.setItem('orbit-project',id),pid);
+  await page.reload();
+  await page.locator('[data-job="'+job_id+'"]').click({timeout:20000});
+  await page.waitForFunction(()=>document.querySelector('#codingQuality').textContent.includes('NOT VERIFIED'),null,{timeout:20000});
+  const q=await (await page.request.get(ORIGIN+'/api/coding/'+job_id+'/quality')).json();
+  assert.equal(q.selection_ready,false);
+  assert.equal(q.production_approved,false);
+  assert.match(await page.locator('#codingQuality').textContent(),/CHƯA NGHIỆM THU/);
+ }finally{await browser.close()}
+});
