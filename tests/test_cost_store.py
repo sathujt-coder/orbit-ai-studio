@@ -72,3 +72,48 @@ class CostTests(unittest.TestCase):
             self.assertEqual(auth_policy.check(self.c,'GET','/api/provider/cost','',{},h,8787)[0],403)
             h.update(Origin='http://127.0.0.1:8787',**{'X-ORBIT-CSRF':auth_http.csrf_for(token)})
             self.assertEqual(auth_policy.check(self.c,'POST','/api/projects/p/budget','',{},h,8787)[0],403)
+
+    def test_rate_snapshot_before_network_and_retry_accounting(self):
+        import threading
+        first=self.rate()['id']
+        def reply(lane,system,user,usage_observer,**kwargs):
+            # A rate change while inference is in flight cannot reprice this attempt.
+            self.rate('4','12',first)
+            usage_observer(dict(mp.token_usage({'usage':{'prompt_tokens':1000,'completion_tokens':2000,'total_tokens':3000}},False),status='ok',elapsed_ms=5))
+            return 'ok'
+        with patch.object(mp,'chat',side_effect=reply):
+            self.assertEqual(u.tracked_chat(lambda:self.c,threading.RLock(),self.lane,'s','u',project_id='p',agent_id='dev-A',purpose='code_generate'),'ok')
+        self.call()
+        self.assertEqual(cst.summary(self.c,'p')['totals']['total_usd'],'0.050500001000')
+        self.assertEqual(self.c.execute("SELECT COUNT(*) FROM ai_cost_basis WHERE rate_id=?",(first,)).fetchone()[0],1)
+    def test_actual_http_usage_to_cost(self):
+        import json,threading
+        from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                raw=json.dumps({'choices':[{'message':{'content':'fixture'}}],
+                    'usage':{'prompt_tokens':1000,'completion_tokens':2000,'total_tokens':3000}}).encode()
+                self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            url='http://127.0.0.1:'+str(server.server_port)+'/v1'
+            self.lane=mp.Lane('A','openai-compatible',url,'fixture-model','')
+            self.env['ORBIT_PROVIDER_ENDPOINTS']=json.dumps([{'provider':'openai-compatible','url':url}])
+            self.rate()
+            self.assertEqual(u.tracked_chat(lambda:self.c,threading.RLock(),self.lane,'s','u',project_id='p',agent_id='dev-A',purpose='code_generate'),'fixture')
+            t=cst.summary(self.c,'p')['totals']
+            self.assertEqual((t['known_calls'],t['total_usd']),(1,'0.022500001000'))
+        finally:
+            server.shutdown();server.server_close();worker.join()
+    def test_budget_near_limit_and_unknown_not_safe(self):
+        self.rate('0','10')
+        cst.save_budget(self.c,'p','owner',{'revision':0,'monthly_limit_usd':'0.025','confirmation':'APPLY AI BUDGET'})
+        self.call()
+        self.assertEqual(cst.summary(self.c,'p')['budget']['status'],'near_limit')
+        self.call(i=None,coverage='partial')
+        b=cst.summary(self.c,'p')['budget']
+        self.assertEqual(b['status'],'incomplete_data')
+        self.assertEqual(b['unknown_calls'],1)
