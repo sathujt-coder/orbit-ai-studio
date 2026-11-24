@@ -18,4 +18,6 @@ for i in $(seq 1 60); do
   sleep 1
 done
 # No pull, no downloads, no cloud API in the verification phase.
-python tools/offline_inference_smoke.py --workflow --report "${1:-offline-inference-report.json}" --confirm 'RUN LOCAL INFERENCE'
+args=(--workflow --report "${1:-offline-inference-report.json}" --confirm "RUN LOCAL INFERENCE")
+if [ "$#" -ge 2 ]; then args+=(--db-output "$2"); fi
+python tools/offline_inference_smoke.py "${args[@]}"

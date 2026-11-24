@@ -2,6 +2,7 @@
 """Actual local Ollama inference; no generated code execution or GitHub writes."""
 import argparse,json,os,sys,tempfile,threading,time,urllib.request,re
 from pathlib import Path
+from contextlib import nullcontext
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 import model_provider
@@ -19,11 +20,13 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--model-a',default=MODELS[0]);p.add_argument('--model-b',default=MODELS[1])
     p.add_argument('--report',type=Path,required=True)
+    p.add_argument('--db-output',type=Path,help='Optional new private SQLite file to retain candidates for human review')
     p.add_argument('--workflow',action='store_true',help='Run independent generation and cross review, not code execution')
     p.add_argument('--confirm',required=True)
     a=p.parse_args()
     if a.confirm!='RUN LOCAL INFERENCE':p.error('Explicit confirmation RUN LOCAL INFERENCE required')
     if a.report.exists():p.error('Report path already exists')
+    if a.db_output and (not a.workflow or a.db_output.exists() or a.db_output.resolve()==a.report.resolve()):p.error('DB output must be a distinct new file, with --workflow')
     report={'schema':'orbit.offline-inference.v1','mode':'local_ollama','network_isolation':'not asserted by this script','sandbox_verified':False,'production_approved':False,'git_writes':False}
     code=1
     try:
@@ -41,8 +44,11 @@ def main():
         code=0
         if a.workflow:
             # Isolated synthetic project, never sends real repository or customer data.
-            with tempfile.TemporaryDirectory(prefix='orbit-local-inference-') as tmp:
-                os.environ.update(AI_COMPANY_DB=str(Path(tmp)/'smoke.sqlite'),AI_PROVIDER='demo')
+            with (nullcontext(None) if a.db_output else tempfile.TemporaryDirectory(prefix='orbit-local-inference-')) as tmp:
+                db_path=a.db_output.resolve() if a.db_output else Path(tmp)/'smoke.sqlite'
+                if a.db_output:
+                    fd=os.open(db_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
+                os.environ.update(AI_COMPANY_DB=str(db_path),AI_PROVIDER='demo')
                 for k in ('AI_PROVIDER_A','AI_PROVIDER_B'):os.environ.pop(k,None)
                 import server,coding_factory as cf
                 server.init_db()
@@ -62,7 +68,7 @@ def main():
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
-                    'review_gate_passed':j['status']=='ready','candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}
+                    'review_gate_passed':j['status']=='ready','private_db_retained':bool(a.db_output),'candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}
                 # A rejected review is a functioning gate, not successful acceptance.
                 code=0 if j['status'] in ('ready','needs_revision') else 2
         else:report['workflow']={'status':'not_requested'}
