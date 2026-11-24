@@ -59,10 +59,12 @@ def main():
                     fd=os.open(db_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
                 os.environ.update(AI_COMPANY_DB=str(db_path),AI_PROVIDER='demo')
                 for k in ('AI_PROVIDER_A','AI_PROVIDER_B'):os.environ.pop(k,None)
-                import server,coding_factory as cf,usage_store,cost_store,resource_manager
+                import server,coding_factory as cf,usage_store,cost_store,resource_manager,agent_queue,auth_store
                 server.init_db()
                 with server.db() as c:
                     pid=server.create_project('Local inference smoke','Small independent Web backend arithmetic module for a synthetic test only.','Web app',c)
+                    auth_store.create_user(c,'offline-ci','offline-fixture-not-a-secret')
+                    auth_store.grant(c,'offline-ci',pid,'owner')
                 repair=None
                 if a.repair_db:
                     previous=json.loads(a.repair_report.read_text())
@@ -111,8 +113,19 @@ def main():
                     job_ref['id']=jid
                     try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding,repair=repair)
                     finally:done.set()
-                jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,worker)
-                if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
+                queue_ref={}
+                def insert(c,jid):
+                    queue_ref['id']=agent_queue.enqueue(c,pid,'coding','offline-ci',0,lanes,coding_job_id=jid)
+                jid=cf.begin(server.db,server.LOCK,pid,SPEC,server.uid,server.now,server.log,None,enqueue=insert)
+                with server.LOCK,server.db() as c:
+                    claimed=agent_queue.claim(c,int(time.time()),server.now())
+                    if not claimed or claimed['id']!=queue_ref['id']:raise ValueError('Queue claim mismatch')
+                worker(jid,pid)
+                with server.LOCK,server.db() as c:
+                    result=cf.detail(c,jid)['status']
+                    agent_queue.boundary(c,agent_queue.get(c,pid,queue_ref['id']),result,int(time.time()),server.now())
+                    queue_row=agent_queue.get(c,pid,queue_ref['id'])
+                    report['queue']={'id':queue_row['id'],'status':queue_row['status'],'attempts':queue_row['attempts'],'events':agent_queue.history(c,pid,queue_row['id'])}
                 with server.db() as c:
                     j=cf.detail(c,jid)
                     usage=usage_store.summary(c,pid,1)
@@ -137,6 +150,9 @@ def main():
                 if code==0 and (resource_after['admission']['allowed']!=len(calls) or resource_after['admission']['blocked'] or loaded['status']!='available' or not loaded['models'] or (resource_after['policy']['mode']=='enforce' and resource_after['metrics']['effective_memory_available_bytes'] is None)):
                     report['resource_gate']='BLOCK';code=2
                 else:report['resource_gate']='PASS' if code==0 else 'not_accepted'
+                if code==0 and (report['queue']['status']!='succeeded' or report['queue']['attempts']!=1):
+                    report['queue_gate']='BLOCK';code=2
+                else:report['queue_gate']='PASS' if code==0 else 'not_accepted'
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__

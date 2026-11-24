@@ -203,7 +203,7 @@ def review_proposal(model_call, project, spec, target, reviewer, author):
     return validate(model_call(system,message,reviewer))
 
 
-def begin(conn_factory, lock, pid, spec, new_id, now, log_fn, runner):
+def begin(conn_factory, lock, pid, spec, new_id, now, log_fn, runner, *, enqueue=None):
     if not isinstance(spec, str) or not 15 <= len(spec.strip()) <= MAX_SPEC:
         raise ValueError('Feature cần mô tả từ 15–4000 ký tự')
     with lock, conn_factory() as c:
@@ -217,8 +217,10 @@ def begin(conn_factory, lock, pid, spec, new_id, now, log_fn, runner):
         c.execute('INSERT INTO coding_jobs(id,project_id,spec,status,created_at,updated_at) VALUES(?,?,?,?,?,?)',
                   (jid, pid, spec.strip(), 'queued', now(), now()))
         log_fn(c, pid, 'dev', None, 'info', 'Coding Factory đã nhận yêu cầu · ' + jid)
-    worker = threading.Thread(target=runner, args=(jid, pid), daemon=True)
-    worker.start()
+        if enqueue is not None:enqueue(c,jid)
+    if enqueue is None:
+        worker = threading.Thread(target=runner, args=(jid, pid), daemon=True)
+        worker.start()
     return jid
 
 

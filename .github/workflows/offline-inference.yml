@@ -7,6 +7,7 @@ on:
       - backend/usage_store.py
       - backend/cost_store.py
       - backend/resource_manager.py
+      - backend/agent_queue.py
       - tools/resource_container_evidence.py
       - backend/coding_factory.py
       - backend/server.py
