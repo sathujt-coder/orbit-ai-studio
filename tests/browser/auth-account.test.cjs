@@ -21,9 +21,9 @@ test('Account UI rejects wrong credentials, restores session and logs out',async
   await page.locator('#authSession').waitFor({state:'visible'});
   assert.equal(await page.locator('#authIdentity').textContent(),'ci-browser-user');
   const cookies=await context.cookies();
-  const session=cookies.find(c=>c.name==='orbit_session');
+  const session=cookies.find(c=>c.name==='orbit_session_v2');
   assert.ok(session&&session.httpOnly&&session.sameSite==='Strict');
-  assert.equal(await page.evaluate(()=>document.cookie.includes('orbit_session')),false);
+  assert.equal(await page.evaluate(()=>document.cookie.includes('orbit_session_v2')),false);
   await page.reload();
   await page.locator('#authSession').waitFor({state:'visible'});
   await page.locator('#authLogout').click();
