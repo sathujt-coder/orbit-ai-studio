@@ -2,6 +2,7 @@
 """Dry-run or opt-in publish a verified candidate as GitHub *draft* PR."""
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,10 @@ def main(argv=None, client_type=VerifiedCodePRClient):
             if args.decision.stat().st_size > 50_000:
                 raise ValueError('Tech Lead decision JSON is too large')
             decision = json.loads(args.decision.read_text(encoding='utf-8'))
+            if results[0]['report'].get('profile') == 'react-welcome-v1' or 'verification_id' in decision:
+                digest = hashlib.sha256(json.dumps(results[0]['report'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                if decision.get('verification_id') != results[0]['id'] or decision.get('verification_digest') != digest:
+                    raise ValueError('Decision does not bind latest persisted verification')
             bundle = verified_bundle(job, results[0]['report'], decision=decision)
             if not args.apply:
                 print(json.dumps({'mode': 'dry-run', 'repo': args.repo,
