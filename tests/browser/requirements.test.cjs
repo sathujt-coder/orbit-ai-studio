@@ -10,6 +10,11 @@ test('P6.1 real Chromium and HTTP with synthetic inference: queue, adoption, app
   const post=(page,token,path,data)=>page.request.post(ORIGIN+path,{headers:headers(token),data});
   const get=async(page,path)=>{const r=await page.request.get(ORIGIN+path);assert.equal(r.status(),200);return r.json()};
   const make=async(name,idea='Save and list links in isolated projects')=>{const r=await post(owner,csrf,'/api/projects',{name,idea,platform:'Web app'});assert.equal(r.status(),201);return (await r.json()).project_id};
+  const scopeContract={rules:[
+   {id:'SC-1',kind:'functional',required:true,evidence:'Save and list links',matches:[['save'],['link','links']]},
+   {id:'SC-2',kind:'nonfunctional',required:true,evidence:'isolated projects',matches:[['project'],['isolation','cannot']]}],
+   forbidden:['registration'],nonblocking_questions:[]};
+  const request={confirmation:'RUN AI REQUIREMENTS',scope_contract:scopeContract};
   const pid=await make('Requirements browser fixture'),other=await make('Other private project');
   const path='/api/projects/'+pid+'/requirements';
   for(const [user,role] of [['ci-viewer','viewer'],['ci-reviewer','reviewer'],['ci-developer','developer']])
@@ -23,10 +28,13 @@ test('P6.1 real Chromium and HTTP with synthetic inference: queue, adoption, app
   await owner.locator('#project').selectOption(pid);await owner.locator('#panel').waitFor({state:'visible'});
   await owner.waitForFunction(()=>!document.querySelector('#discover').disabled);
   owner.on('dialog',d=>d.accept());
+  await owner.locator('#scope-contract').fill(JSON.stringify(scopeContract));
+  assert.equal((await post(owner,csrf,path+'/discover',{confirmation:'RUN AI REQUIREMENTS'})).status(),400);
   await owner.locator('#discover').click();
   await owner.waitForFunction(()=>document.querySelector('#discovery-status').textContent.includes('succeeded'),null,{timeout:30000});
   let data=await get(owner,path);assert.equal(data.planning_ready,false);assert.equal(data.current,null);assert.equal(data.discovery.can_adopt,true);
   assert.equal(data.discovery.evidence.collaboration.research_mode,'input_analysis_only');
+  assert.equal(data.discovery.evidence.scope_findings.passed,true);assert.deepEqual(data.discovery.scope_contract,scopeContract);
   assert.ok((await get(owner,'/api/projects/'+pid+'/queue')).tasks.some(t=>t.id===data.discovery.queue_id&&t.kind==='requirements'&&t.status==='succeeded'));
   const adopt={queue_id:data.discovery.queue_id,digest:data.discovery.digest,expected_version:0,confirmation:'ADOPT AI REQUIREMENTS'};
   assert.equal((await post(viewer,vc,path+'/adopt',adopt)).status(),403);
@@ -53,7 +61,7 @@ test('P6.1 real Chromium and HTTP with synthetic inference: queue, adoption, app
   data=await get(owner,path);assert.equal(data.planning_ready,false);
   assert.equal((await post(reviewer,rc,path+'/approve',approval)).status(),400);
   // Stale discovery: another revision is saved after discovery begins.
-  const start=await post(owner,csrf,path+'/discover',{confirmation:'RUN AI REQUIREMENTS'});assert.equal(start.status(),202);
+  const start=await post(owner,csrf,path+'/discover',request);assert.equal(start.status(),202);
   await owner.waitForFunction(()=>document.querySelector('#discovery-status').textContent.includes('succeeded'),null,{timeout:30000});
   const id=(await start.json()).queue_id;
   let latest;
@@ -61,8 +69,8 @@ test('P6.1 real Chromium and HTTP with synthetic inference: queue, adoption, app
   assert.equal(latest.discovery.queue_id,id);assert.equal(latest.discovery.status,'succeeded');
   assert.equal((await post(owner,csrf,path,{expected_version:2,document:latest.current.document})).status(),200);
   assert.equal((await post(owner,csrf,path+'/adopt',{queue_id:id,digest:latest.discovery.digest,expected_version:2,confirmation:'ADOPT AI REQUIREMENTS'})).status(),400);
-  const blocked=await make('Blocked fixture','BLOCK_FIXTURE: Save and list links');
-  const bp='/api/projects/'+blocked+'/requirements';assert.equal((await post(owner,csrf,bp+'/discover',{confirmation:'RUN AI REQUIREMENTS'})).status(),202);
+  const blocked=await make('Blocked fixture','BLOCK_FIXTURE: Save and list links in isolated projects');
+  const bp='/api/projects/'+blocked+'/requirements';assert.equal((await post(owner,csrf,bp+'/discover',request)).status(),202);
   let b;
   for(let i=0;i<100;i++){b=await get(owner,bp);if(b.discovery?.status==='dead')break;await new Promise(r=>setTimeout(r,100))}
   assert.equal(b.discovery.status,'dead');assert.equal(b.discovery.can_adopt,false);assert.equal(b.current,null);

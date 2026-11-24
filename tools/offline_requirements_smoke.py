@@ -10,6 +10,24 @@ IDEA=("A small web app for readers to save URLs and list their saved links. "
       "Authenticated project membership is provided by the existing platform. "
       "A saved URL must appear in the list; an unauthorized cross-project read must be denied.")
 
+# Explicit human-fixture decisions, not inferred by backend or copied from model output.
+# The original IDEA is unchanged; exact evidence anchors and literal alternatives are
+# the test author's scope contract. The independent original semantic checks remain.
+SCOPE_CONTRACT=dict(rules=[
+    dict(id='SC-1',kind='functional',required=True,evidence='save URLs',
+        matches=[['save','saving','saved','store','storing'],['url','urls','link','links']]),
+    dict(id='SC-2',kind='functional',required=True,evidence='list their saved links',
+        matches=[['list','listing','display','view','retrieve'],['url','urls','link','links']]),
+    dict(id='SC-3',kind='nonfunctional',required=True,evidence='an unauthorized cross-project read must be denied',
+        matches=[['project','projects'],['deny','denied','unauthorized','prevent','restrict','isolation','cannot','only']]),
+    dict(id='SC-4',kind='functional',required=False,evidence='an unauthorized cross-project read must be denied',
+        matches=[['project','projects'],['deny','denied','unauthorized','prevent','restrict','isolation','cannot']])],
+    forbidden=['register','registration','sign up','project management','manage projects','manage their projects',
+        'manage own projects','create projects','create a project','delete projects','delete a project',
+        'mobile app','sharing','external integrations'],
+    nonblocking_questions=['How many users will use the app?','What is the average number of saved links per user?',
+        'How will users access the app?'])
+
 def require(ok,message):
     if not ok:raise RuntimeError(message)
 
@@ -36,7 +54,7 @@ def main():
                 auth_store.grant(c,'fixture-author',pid,'owner')
             lanes=mp.require_distinct_real(server.provider_snapshot()[1])
             require(all(l.provider=='ollama' and l.base_url=='http://127.0.0.1:11434/v1' for l in lanes.values()),'Nonlocal provider forbidden')
-            run=server.enqueue_requirements(pid,'fixture-author')['queue_id']
+            run=server.enqueue_requirements(pid,'fixture-author',scope_contract=SCOPE_CONTRACT)['queue_id']
             require(server.dispatch_one(),'Queue did not dispatch')
             with server.db() as c:queued=jobs.latest(c,pid)
             report['queue_status']=queued['status'];report['queue_reason']=queued['reason']
@@ -62,10 +80,16 @@ def main():
                 for r in document['requirements'] if r['kind']=='functional')
             report['fixture_checks']=checks
             report['final_review']=evidence['final_review']
+            report['scope_findings']=evidence.get('scope_findings')
+            report['scope_repair']=evidence.get('scope_repair')
+            report['false_approval_detected']=evidence.get('false_approval_detected')
+            report['no_op_repair']=evidence.get('no_op_repair')
             report['open_questions']=document['open_questions']
             require(all(checks.values()),'Essential fixture scope missing or unrequested scope added')
             require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review: '+queued['reason'])
             require(evidence['ready_for_human_review'],'Final review or open questions block adoption')
+            import requirements_scope as sc
+            require(sc.assess(document,sc.validate(IDEA,SCOPE_CONTRACT))['passed'],'Independent scope contract enforcement failed')
             with server.db() as c:
                 adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
                     expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
@@ -107,6 +131,9 @@ def main():
             revised_quality=evidence.get('quality_revision') is not None
             if revised_quality:
                 expected += [('po-A','requirements_quality_revision'),('po-B','requirements_quality_recheck')]
+            scope_recheck=bool(evidence.get('scope_recheck'))
+            if scope_recheck:
+                expected += [('po-B','requirements_scope_recheck')]
             # Optional, bounded repair immediately after each document phase. No extra calls
             # or arbitrary retries can satisfy this sequence gate.
             index=0;sequence_ok=True;repairs=0
@@ -118,7 +145,9 @@ def main():
                     repairs+=1;index+=1
             report['repair_calls']=repairs
             report['quality_revision_calls']=2 if revised_quality else 0
-            gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs+(2 if revised_quality else 0) and repairs<=(4 if revised_quality else 3) and len(calls)<=20 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+            report['scope_recheck_calls']=int(scope_recheck)
+            gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs+(2 if revised_quality else 0)+int(scope_recheck) and not (scope_recheck and revised_quality) and repairs<=(4 if revised_quality else 3) and len(calls)<=20 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+                scope_contract_enforced=evidence['scope_findings']['passed'] and not evidence['no_op_repair'] and evidence['scope_contract']==sc.validate(IDEA,SCOPE_CONTRACT),
                 department_evidence=collaboration['research_mode']=='input_analysis_only' and all(
                     set(collaboration[d]['proposals'])==set(collaboration[d]['reviews'])=={'A','B'} for d in ('research','ba')),
                 token_ledger=usage['requests']==usage['complete_calls']==len(calls),

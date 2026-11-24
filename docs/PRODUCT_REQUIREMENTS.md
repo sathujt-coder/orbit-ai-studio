@@ -85,3 +85,29 @@ No auto-approval or backend removal of questions. 14 normal calls, at most 2 sem
 and up to 4 bounded document-format repairs (20 total maximum). The offline test checks exact phase
 order, all token/cost and adoption gates, plus an independent fixture scope-creep check.
 CI timeout is extended only to accommodate the bounded extra model calls.
+
+## P6.1f — Human scope contract and deterministic quality enforcement (pending CI)
+The c8f67b9 real-model run completed 16 calls but returned identical before/after
+documents containing unrequested registration and project management, three open
+questions, and a falsely positive reviewer verdict. New discovery submissions
+require an explicit human-authored scope_contract in POST /requirements/discover.
+The Requirements page exposes the source idea and a JSON contract editor. Each rule
+has id, kind, required, an exact evidence substring from the source idea, and
+matches (AND of OR literal phrase groups). forbidden lists unauthorized capability
+phrases; nonblocking_questions lists exact user-deferred questions. At least one
+required rule per kind. The immutable queue input snapshots the contract; retries
+reuse it and revalidate against the source. Legacy evidence without a contract
+cannot be newly adopted. Human-authored manual requirements remain available.
+Backend checks coverage, unsupported/forbidden requirements, forbidden metadata and
+open questions. Targeted projection may remove unauthorized items and their story
+links only if structurally valid and required coverage remains; it defers only
+explicitly designated questions and preserves original content in evidence. A fresh
+independent B review is required after deterministic repair. Remaining defects use
+one bounded model revision/recheck; a no-op revision blocks adoption. Persistence
+and adoption independently recompute the contract gate, regardless of model verdict.
+Literal matching and exact quotes are deterministic but do not prove semantic
+entailment or completeness; human approval remains mandatory. The original offline
+fixture idea and independent semantic checks remain; the fixture now supplies an
+explicit test-author contract, so a future PASS is for contracted discovery, not
+unconstrained free-text inference. 14 baseline calls, either a fresh scope recheck
+or 2 model revision calls plus existing format repairs, at most 20 calls.

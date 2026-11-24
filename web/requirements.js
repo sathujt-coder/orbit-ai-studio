@@ -5,7 +5,7 @@ let csrf='',current=null,sequence=0,busy=false;
 const example={problem:'',goals:[],users:[],scope:[],out_of_scope:[],assumptions:[],open_questions:[],requirements:[{id:'REQ-1',kind:'functional',description:'',priority:'must',acceptance:['']},{id:'REQ-2',kind:'nonfunctional',description:'',priority:'must',acceptance:['']}],stories:[{id:'US-1',actor:'',goal:'',benefit:'',requirements:['REQ-1','REQ-2']}]};
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});if(r.status===401){location.replace('/account.html');throw Error('Phiên hết hạn')}const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/requirements';
-function render(d){current=d;$('panel').hidden=false;$('document').value=JSON.stringify(d.current?.document||example,null,2);$('version').textContent='Version '+(d.current?.version||0)+' · '+(d.planning_ready?'Đã duyệt':'Chưa duyệt')+' · '+(d.current?.source==='ai_adopted'?'AI draft adopted':'Human input');$('history').textContent=d.history.map(v=>'v'+v.version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');$('save').disabled=!d.can_write;$('approve').disabled=!d.can_approve||!d.current||d.planning_ready;$('document').readOnly=!d.can_write;$('status').textContent='Đã tải yêu cầu';renderDiscovery(d);}
+function render(d){current=d;$('panel').hidden=false;$('document').value=JSON.stringify(d.current?.document||example,null,2);$('version').textContent='Version '+(d.current?.version||0)+' · '+(d.planning_ready?'Đã duyệt':'Chưa duyệt')+' · '+(d.current?.source==='ai_adopted'?'AI draft adopted':'Human input');$('history').textContent=d.history.map(v=>'v'+v.version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');$('save').disabled=!d.can_write;$('approve').disabled=!d.can_approve||!d.current||d.planning_ready;$('document').readOnly=!d.can_write;$('scope-idea').textContent=d.idea||'';$('scope-contract').readOnly=!d.can_write;$('scope-contract').value=d.discovery?.scope_contract?JSON.stringify(d.discovery.scope_contract,null,2):'';$('status').textContent='Đã tải yêu cầu';renderDiscovery(d);}
 function renderDiscovery(d){
  const x=d.discovery;const active=x&&['queued','running','paused','waiting_approval'].includes(x.status);
  $('discover').disabled=busy||!d.can_write||!!active;
@@ -18,10 +18,12 @@ async function discoveryAction(adopt){
  const d=current,pid=d.project_id;
  if(adopt&&!d.discovery?.can_adopt)return;
  if(adopt&&$('document').value!==JSON.stringify(d.current?.document||example,null,2)){ $('status').textContent='Có chỉnh sửa chưa lưu; hãy lưu hoặc tải lại trước khi tiếp nhận.';return; }
+ let scopeContract=null;
+ if(!adopt){try{scopeContract=JSON.parse($('scope-contract').value)}catch(e){$('status').textContent='Hãy nhập Scope Contract JSON hợp lệ trước khi chạy AI.';return;}}
  if(!confirm(adopt?'Tiếp nhận bản AI thành phiên bản mới chưa phê duyệt?':'Chạy hai model AI; có thể phát sinh chi phí theo provider?'))return;
  busy=true;$('project').disabled=true;$('reload').disabled=true;$('save').disabled=true;$('approve').disabled=true;renderDiscovery(d);
  try{
-  await api(base(pid)+(adopt?'/adopt':'/discover'),adopt?{queue_id:d.discovery.queue_id,digest:d.discovery.digest,expected_version:d.discovery.base_version,confirmation:'ADOPT AI REQUIREMENTS'}:{confirmation:'RUN AI REQUIREMENTS'});
+  await api(base(pid)+(adopt?'/adopt':'/discover'),adopt?{queue_id:d.discovery.queue_id,digest:d.discovery.digest,expected_version:d.discovery.base_version,confirmation:'ADOPT AI REQUIREMENTS'}:{confirmation:'RUN AI REQUIREMENTS',scope_contract:scopeContract});
   if(adopt)await reload();else await refreshDiscoveryAfterSubmit(d);
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;if(current){renderDiscovery(current);$('save').disabled=!current.can_write;$('approve').disabled=!current.can_approve||!current.current||current.planning_ready;}}

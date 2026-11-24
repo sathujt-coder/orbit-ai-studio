@@ -4,11 +4,14 @@ import hashlib
 import product_requirements as pr
 import agent_queue
 import model_provider as mp
+import requirements_scope as sc
 
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS requirement_discovery_inputs(
         queue_id TEXT PRIMARY KEY REFERENCES agent_queue(id), project_id TEXT NOT NULL REFERENCES projects(id),
         idea TEXT NOT NULL, base_version INTEGER NOT NULL, created_at TEXT NOT NULL)""")
+    if 'scope_contract' not in {r[1] for r in c.execute('PRAGMA table_info(requirement_discovery_inputs)')}:
+        c.execute('ALTER TABLE requirement_discovery_inputs ADD COLUMN scope_contract TEXT')
     c.execute("""CREATE TABLE IF NOT EXISTS requirement_discovery_runs(
         queue_id TEXT PRIMARY KEY REFERENCES requirement_discovery_inputs(queue_id),
         project_id TEXT NOT NULL REFERENCES projects(id), evidence TEXT NOT NULL,
@@ -19,15 +22,20 @@ def ensure_schema(c):
         project_id TEXT NOT NULL, version INTEGER NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL,
         FOREIGN KEY(project_id,version) REFERENCES product_requirements(project_id,version))""")
 
-def enqueue(c,pid,actor,revision,lanes,stamp,*,priority=5,dependency_id=None,retry_of=None,routing=None):
+def enqueue(c,pid,actor,revision,lanes,stamp,*,priority=5,dependency_id=None,retry_of=None,routing=None,scope_contract=None):
     mp.require_distinct_real(lanes)
     project=c.execute('SELECT idea FROM projects WHERE id=?',(pid,)).fetchone()
     if not project:raise ValueError('Project not found')
+    if retry_of and scope_contract is None:
+        prior=input_for(c,pid,retry_of)['scope_contract']
+        scope_contract=json.loads(prior) if prior else None
+    idea=pr.string(project[0],10000)
+    contract=sc.validate(idea,scope_contract)
     current=pr.latest(c,pid)
     identifier=agent_queue.enqueue(c,pid,'requirements',actor,revision,lanes,priority=priority,
         dependency_id=dependency_id,retry_of=retry_of,routing=routing)
-    c.execute('INSERT INTO requirement_discovery_inputs VALUES(?,?,?,?,?)',
-        (identifier,pid,pr.string(project[0],10000),current['version'] if current else 0,stamp))
+    c.execute('INSERT INTO requirement_discovery_inputs(queue_id,project_id,idea,base_version,created_at,scope_contract) VALUES(?,?,?,?,?,?)',
+        (identifier,pid,idea,current['version'] if current else 0,stamp,pr.canonical(contract)))
     return identifier
 
 def input_for(c,pid,identifier):
@@ -39,10 +47,14 @@ def persist(c,pid,identifier,evidence,lanes,stamp):
     row=agent_queue.get(c,pid,identifier)
     if row['kind']!='requirements' or row['status']!='running':raise ValueError('Discovery task not running')
     if not agent_queue.permitted(c,row['actor'],pid):raise PermissionError('Project write permission revoked')
-    input_for(c,pid,identifier)
+    snapshot=input_for(c,pid,identifier)
     mp.require_distinct_real(lanes)
     document=pr.validate(evidence['document'])
-    ready=bool(evidence['ready_for_human_review'] and not evidence['final_review']['blocking'] and not document['open_questions'])
+    contract=sc.validate(snapshot['idea'],json.loads(snapshot['scope_contract'])) if snapshot['scope_contract'] else None
+    findings=sc.assess(document,contract) if contract is not None else None
+    evidence=dict(evidence,scope_contract=contract,scope_findings=findings)
+    ready=bool(findings and findings['passed'] and evidence['ready_for_human_review']
+        and not evidence.get('no_op_repair') and not evidence['final_review']['blocking'] and not document['open_questions'])
     payload=pr.canonical(evidence)
     if len(payload.encode())>250000:raise ValueError('Discovery evidence too large')
     digest=hashlib.sha256(pr.canonical(document).encode()).hexdigest()
@@ -53,19 +65,19 @@ def persist(c,pid,identifier,evidence,lanes,stamp):
 
 def latest(c,pid):
     row=c.execute("""SELECT q.id AS queue_id,q.status,q.reason,i.base_version,i.created_at,
-        r.evidence,r.models,r.digest,r.ready,a.version AS adopted_version
+        r.evidence,r.models,r.digest,r.ready,i.scope_contract,a.version AS adopted_version
         FROM requirement_discovery_inputs i JOIN agent_queue q ON q.id=i.queue_id
         LEFT JOIN requirement_discovery_runs r ON r.queue_id=q.id
         LEFT JOIN requirement_discovery_adoptions a ON a.queue_id=q.id
         WHERE i.project_id=? ORDER BY q.rowid DESC LIMIT 1""",(pid,)).fetchone()
     if not row:return None
     data=dict(row)
-    for key in ('evidence','models'):
+    for key in ('evidence','models','scope_contract'):
         data[key]=json.loads(data[key]) if data[key] else None
     data['ready']=bool(data['ready'])
     current=pr.latest(c,pid)
     data['can_adopt']=bool(data['status']=='succeeded' and data['ready'] and data['adopted_version'] is None
-        and data['base_version']==(current['version'] if current else 0))
+        and data['scope_contract'] is not None and data['base_version']==(current['version'] if current else 0))
     return data
 
 def adopt(c,pid,actor,body,stamp):
@@ -76,6 +88,10 @@ def adopt(c,pid,actor,body,stamp):
     row=latest(c,pid)
     if not row or body['queue_id']!=row['queue_id'] or not row['can_adopt'] or row['digest']!=body['digest'] or row['base_version']!=body['expected_version']:
         raise ValueError('Current reviewed discovery and matching base version/digest required')
+    snapshot=input_for(c,pid,row['queue_id'])
+    contract=sc.validate(snapshot['idea'],row['scope_contract'])
+    if not sc.assess(row['evidence']['document'],contract)['passed'] or row['evidence'].get('no_op_repair'):
+        raise ValueError('Scope contract gate failed')
     data=pr.save(c,pid,actor,dict(expected_version=body['expected_version'],document=row['evidence']['document']),stamp)
     if data['current']['digest']!=row['digest']:raise RuntimeError('Discovery digest mismatch')
     c.execute('INSERT INTO requirement_discovery_adoptions VALUES(?,?,?,?,?)',

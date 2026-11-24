@@ -6,8 +6,10 @@ on:
       - backend/product_requirements.py
       - backend/requirements_jobs.py
       - backend/requirements_discovery.py
+      - backend/requirements_scope.py
       - tools/offline_requirements_smoke.py
       - tests/test_requirements_discovery.py
+      - tests/test_requirements_scope.py
       - backend/provider_settings.py
       - backend/usage_store.py
       - backend/cost_store.py

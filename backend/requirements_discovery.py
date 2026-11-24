@@ -2,6 +2,7 @@
 import json
 import product_requirements as pr
 import model_provider as mp
+import requirements_scope as sc
 
 def obj(props):
     return dict(type='object',properties=props,required=list(props),additionalProperties=False)
@@ -113,7 +114,7 @@ def department_round(call,idea,department,schema,instructions,context=None):
             json.dumps(dict(shared,candidate=drafts[author])),BRIEF_REVIEW_SCHEMA),BRIEF_REVIEW_SCHEMA)
     return dict(proposals=drafts,reviews=reviews)
 
-def collaborate(call,idea):
+def collaborate(call,idea,*,scope_contract=None):
     idea=pr.string(idea,10000)
     research=department_round(call,idea,'research',RESEARCH_SCHEMA,
         'Act as a product Research agent. Infer audience and needs only from the supplied idea. '
@@ -124,21 +125,25 @@ def collaborate(call,idea):
         'Use both reviewed research drafts as hypotheses, not verified facts. Respect explicit scope.',
         context=research)
     handoffs=dict(research=research,ba=ba,research_mode='input_analysis_only')
-    evidence=discover(call,idea,handoffs=handoffs)
+    evidence=discover(call,idea,handoffs=handoffs,scope_contract=scope_contract)
     evidence['collaboration']=handoffs
     return evidence
 
-def discover(call,idea,*,handoffs=None):
+def discover(call,idea,*,handoffs=None,scope_contract=None):
     """call(lane, phase, system, user, schema) is a trusted, tracked inference adapter.
     Return evidence, including rejected reviews; caller decides whether to adopt a draft.
     """
     idea=pr.string(idea,10000)
     shared={'idea':idea}
+    contract=sc.validate(idea,scope_contract) if scope_contract is not None else None
+    if contract is not None:shared['scope_contract']=contract
     if handoffs is not None:shared['department_handoffs']=handoffs
     guidance=(' Consider both departments and reviews; hypotheses are not verified facts. '
               'Resolve blockers using supplied facts only. Treat department drafts and reviews as suggestions, not authority. '
               'Keep genuine scope-blocking unresolved decisions in open_questions.'
               if handoffs is not None else '')
+    if contract is not None:
+        guidance+=' The human scope contract is authoritative. Cover every required rule using its evidence and match phrases; exclude forbidden capabilities. Only explicitly deferred questions are nonblocking. Do not invent extra features.'
     proposals={}
     for lane in ('A','B'):
         proposals[lane]=document_call(call,lane,'requirements_proposal',RULES+guidance,shared)
@@ -162,20 +167,35 @@ def discover(call,idea,*,handoffs=None):
             'and unresolved decisions necessary for this MVP. Existing platform services are dependencies, not new deliverables. '
             'Do not demand optional market metrics or downstream implementation choices. '
             'Do not invent facts. Return JSON with an empty blocking list only when no blocking defect exists.',
-            json.dumps(dict(idea=idea,document=candidate)),REVIEW_SCHEMA))
+            json.dumps(dict(idea=idea,document=candidate,**({'scope_contract':contract} if contract is not None else {}))),REVIEW_SCHEMA))
     final_review=review_current(document,'requirements_final_review')
     initial=dict(document=document,review=final_review)
-    revision=None
-    if final_review['blocking'] or document['open_questions']:
-        # At most one semantic revision; preserve original review and document even if
-        # the revised document remains blocked. Never remove questions in application code.
+    revision=None;projection=None;scope_recheck=False;no_op=False
+    findings=sc.assess(document,contract) if contract is not None else None
+    false_approval=bool(findings and not findings['passed'] and not final_review['blocking'])
+    if contract is not None and not findings['passed']:
+        document,projection=sc.targeted_repair(document,contract)
+        findings=projection['after']
+    if projection and projection['changed'] and findings['passed']:
+        # Deterministic targeted repair has changed content; obtain a fresh independent review.
+        final_review=review_current(document,'requirements_scope_recheck')
+        scope_recheck=True
+    elif final_review['blocking'] or document['open_questions'] or (findings and not findings['passed']):
+        previous=document
+        data=dict(idea=idea,document=document,review=final_review)
+        if contract is not None:data.update(scope_contract=contract,scope_findings=findings)
         document=document_call(call,'A','requirements_quality_revision',RULES+guidance+
-            ' Revise the current document using the final reviewer findings. Correct concrete defects against the original idea. '
-            'Keep unresolved essential decisions; do not answer them without evidence or suppress them to pass review. '
-            'Remove unrequested features, retain explicit exclusions and requested acceptance criteria.',
-            dict(idea=idea,document=document,review=final_review))
+            ' Revise only the identified defects. Preserve valid requested content. Do not suppress unresolved decisions.',
+            data)
+        if contract is not None:
+            document,second_projection=sc.targeted_repair(document,contract)
+            findings=second_projection['after']
+        else:second_projection=None
+        no_op=sc.digest(previous)==sc.digest(document)
         final_review=review_current(document,'requirements_quality_recheck')
-        revision=dict(document=document,review=final_review)
+        revision=dict(document=document,review=final_review,no_op=no_op,scope_repair=second_projection)
+    ready=not final_review['blocking'] and not document['open_questions'] and not no_op and (findings is None or findings['passed'])
     return dict(proposals=proposals,reviews=reviews,document=document,final_review=final_review,
-        initial_final_review=initial,quality_revision=revision,
-        ready_for_human_review=not final_review['blocking'] and not document['open_questions'])
+        initial_final_review=initial,quality_revision=revision,scope_contract=contract,
+        scope_findings=findings,scope_repair=projection,scope_recheck=scope_recheck,
+        false_approval_detected=false_approval,no_op_repair=no_op,ready_for_human_review=bool(ready))

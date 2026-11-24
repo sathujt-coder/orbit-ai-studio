@@ -14,11 +14,27 @@ class RequirementsQueueTests(unittest.TestCase):
         fixture=test_agent_queue.QueueTests();fixture.setUp()
         self.addCleanup(fixture.tearDown)
         self.c=fixture.c
-        self.c.execute("ALTER TABLE projects ADD COLUMN idea TEXT NOT NULL DEFAULT 'Save links'")
+        self.c.execute("ALTER TABLE projects ADD COLUMN idea TEXT NOT NULL DEFAULT 'Save links in isolated projects'")
         pr.ensure_schema(self.c);jobs.ensure_schema(self.c)
         self.lanes=mp.load_config(dict(AI_PROVIDER='ollama',AI_MODEL_A='model-a',AI_MODEL_B='model-b'))
+    def contract(self):
+        return dict(rules=[
+            dict(id='SC-1',kind='functional',evidence='Save links',required=True,matches=[['save'],['link','links']]),
+            dict(id='SC-2',kind='nonfunctional',evidence='isolated projects',required=True,matches=[['project'],['isolation','cannot']])],
+            forbidden=['registration'],nonblocking_questions=[])
     def add(self):
-        return jobs.enqueue(self.c,'p','owner',0,self.lanes,'t')
+        return jobs.enqueue(self.c,'p','owner',0,self.lanes,'t',scope_contract=self.contract())
+    def test_missing_contract_and_false_approval_blocked_at_storage(self):
+        with self.assertRaises(ValueError):jobs.enqueue(self.c,'p','owner',0,self.lanes,'t')
+        i=self.add();row=q.claim(self.c,9999999999,'t')
+        evidence=self.evidence()
+        evidence['document']['requirements'][0]['description']='Registration and save link'
+        result=jobs.persist(self.c,'p',i,evidence,self.lanes,'t')
+        self.assertEqual(result,'needs_revision')
+        q.boundary(self.c,row,result,9999999999,'t')
+        latest=jobs.latest(self.c,'p')
+        self.assertFalse(latest['can_adopt'])
+        self.assertFalse(latest['evidence']['scope_findings']['passed'])
     def evidence(self,ready=True):
         return dict(document=document(),proposals={},reviews={},final_review=dict(blocking=[] if ready else ['Missing scope']),ready_for_human_review=ready)
     def finish(self,identifier,ready=True):

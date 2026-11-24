@@ -390,16 +390,18 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
 
-def enqueue_requirements(pid,actor,priority=5,dependency_id=None,retry_of=None):
+def enqueue_requirements(pid,actor,priority=5,dependency_id=None,retry_of=None,scope_contract=None):
     with LOCK,db() as c:
         revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
         identifier=requirements_jobs.enqueue(c,pid,actor,revision,lanes,now(),priority=priority,
-            dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+            dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'],scope_contract=scope_contract)
     QUEUE_WAKE.set()
     return {'queue_id':identifier,'status':'queued'}
 
 def run_requirements(pid,identifier,lanes):
-    with LOCK,db() as c:idea=requirements_jobs.input_for(c,pid,identifier)['idea']
+    with LOCK,db() as c:snapshot=requirements_jobs.input_for(c,pid,identifier)
+    idea=snapshot['idea']
+    contract=json.loads(snapshot['scope_contract']) if snapshot['scope_contract'] else None
     lanes=model_provider.require_distinct_real(route_pair(lanes,pid,identifier,'po','requirements',len(idea)))
     def call(lane,phase,system,user,schema):
         with LOCK,db() as c:
@@ -416,7 +418,7 @@ def run_requirements(pid,identifier,lanes):
             # never replayed; expose only a fixed class and trusted phase, not provider payloads.
             if isinstance(error,model_provider.OutputError):raise
             raise RuntimeError('requirements_provider_failure:'+phase+':'+type(error).__name__) from error
-    evidence=requirements_discovery.collaborate(call,idea)
+    evidence=requirements_discovery.collaborate(call,idea,scope_contract=contract)
     # Evidence and terminal queue state commit atomically. Crash before this transaction is
     # uncertain execution; startup recovery will never automatically replay it.
     with LOCK,db() as c:
@@ -638,6 +640,7 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c:
                     data=product_requirements.view(c,pid)
                     data['discovery']=requirements_jobs.latest(c,pid)
+                    data['idea']=c.execute('SELECT idea FROM projects WHERE id=?',(pid,)).fetchone()[0]
                     if data['current']:
                         adopted=c.execute('SELECT queue_id FROM requirement_discovery_adoptions WHERE project_id=? AND version=?',(pid,data['current']['version'])).fetchone()
                         if adopted:
@@ -775,9 +778,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.guard('POST',path,body):return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/discover',path):
                 actor,pid,_=self.auth_context
-                if set(body)!={'confirmation'} or body['confirmation']!='RUN AI REQUIREMENTS':
-                    raise ValueError('Explicit RUN AI REQUIREMENTS required')
-                self.send_json(202,enqueue_requirements(pid,actor));return
+                if set(body)!={'confirmation','scope_contract'} or body['confirmation']!='RUN AI REQUIREMENTS':
+                    raise ValueError('Explicit RUN AI REQUIREMENTS and scope contract required')
+                self.send_json(202,enqueue_requirements(pid,actor,scope_contract=body['scope_contract']));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/adopt',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=requirements_jobs.adopt(c,pid,actor,body,now())

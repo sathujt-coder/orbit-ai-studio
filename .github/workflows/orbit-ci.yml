@@ -126,7 +126,7 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Start isolated HTTP and durable queue fixture
         run: |
-          export ORBIT_REQUIREMENTS_BROWSER_FIXTURE=1 AI_PROVIDER=ollama AI_MODEL_A=fixture-a AI_MODEL_B=fixture-b AI_HOST=127.0.0.1 AI_PORT=8787 ORBIT_MAX_RUN_CALLS=17
+          export ORBIT_REQUIREMENTS_BROWSER_FIXTURE=1 AI_PROVIDER=ollama AI_MODEL_A=fixture-a AI_MODEL_B=fixture-b AI_HOST=127.0.0.1 AI_PORT=8787 ORBIT_MAX_RUN_CALLS=20
           export AI_COMPANY_DB="$RUNNER_TEMP/requirements-browser.sqlite"
           python tests/browser/requirements_fixture.py > "$RUNNER_TEMP/requirements-browser.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/requirements-browser.pid"
