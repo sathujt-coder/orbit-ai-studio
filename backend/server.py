@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
 import coding_factory
 import verification_factory
+import auth_store
+import auth_http
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
@@ -67,6 +69,7 @@ def db(): return ManagedConnection()
 
 def init_db():
     with LOCK, db() as c:
+        auth_store.ensure_schema(c)
         c.executescript('''
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,idea TEXT NOT NULL,platform TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,stage_id TEXT NOT NULL,position INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'queued',started_at TEXT,finished_at TEXT,approved_at TEXT,FOREIGN KEY(project_id) REFERENCES projects(id));
@@ -378,13 +381,14 @@ def agent_chat(pid,aid,message):
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(WEB),**kwargs)
     def log_message(self,format,*args): pass
-    def send_json(self,status,data):
+    def send_json(self,status,data,headers=None):
         raw=json.dumps(data,ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(raw)))
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
+        for key,value in (headers or {}).items(): self.send_header(key,value)
         self.end_headers(); self.wfile.write(raw)
     def json_body(self):
         length=int(self.headers.get('Content-Length','0'))
@@ -413,6 +417,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(403, {'error':'Local host/origin required'}); return
         path=urlparse(self.path).path
         try:
+            if path=='/api/auth/session':
+                with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers)
+                self.send_json(status,data,headers);return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
@@ -464,6 +471,10 @@ class Handler(SimpleHTTPRequestHandler):
         path=urlparse(self.path).path
         try:
             body=self.json_body()
+            if path in ('/api/auth/login','/api/auth/logout'):
+                with LOCK,db() as c:
+                    status,data,headers=auth_http.handle(c,path,self.headers,body,PORT)
+                self.send_json(status,data,headers);return
             if path=='/api/coding/start':
                 pid = str(body.get('project_id',''))
                 spec = body.get('spec','')
