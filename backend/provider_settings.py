@@ -103,7 +103,7 @@ def save(c,actor,body,env,initial):
     if cursor.rowcount!=1:raise ValueError('Settings changed; reload before applying')
     return view(c,env,initial)
 
-def network_action(body,env,initial,action):
+def network_action(body,env,initial,action,*,chat_fn=None):
     global _LAST_NETWORK
     if action not in ('probe','models'):raise ValueError('Unknown network action')
     if set(body)!={'lanes','confirmation'} or body['confirmation']!='TEST AI CONNECTION':
@@ -116,7 +116,7 @@ def network_action(body,env,initial,action):
         if time.monotonic()-_LAST_NETWORK<3:raise ValueError('Provider checks are rate limited')
         _LAST_NETWORK=time.monotonic()
         lanes={k:replace(v,timeout=min(v.timeout,15)) for k,v in lanes.items()}
-        if action=='probe':return mp.probe(lanes)
+        if action=='probe':return mp.probe(lanes,chat_fn=chat_fn)
         result={}
         for k,v in lanes.items():
             try:result[k]={'status':'responded','models':mp.list_models(v)}
