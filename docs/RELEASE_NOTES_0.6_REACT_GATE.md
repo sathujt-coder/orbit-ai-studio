@@ -1,0 +1,4 @@
+# React candidate gate (v0.6)
+The new backend adapter consumes Coding Factory job records, checks both cross-reviews and runs the existing React image separately for each candidate. It supports only the fixed welcome-component profile, one Component.tsx per lane, and explicit local operator approval. Reports contain source digests and per-lane execution evidence.
+
+This is a narrow adapter, not a generic React verifier. Unit tests mock Docker; the previous real Docker smoke remains in CI. The image must be trusted by the operator; immutable ID alone does not authenticate it. Candidate output is not tamper-proof. No browser interaction, full type checking, signed evidence, exporter integration or actual model job is delivered. Existing exporter continues to reject React evidence. No mobile work.
