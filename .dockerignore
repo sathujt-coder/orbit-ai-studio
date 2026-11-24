@@ -1,0 +1,14 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+**/*.sqlite*
+**/*.log
+**/.env*
+**/*.pem
+**/*.key
+**/*.crt
+**/node_modules
+tests
+agent-proposals
+deployment/tls

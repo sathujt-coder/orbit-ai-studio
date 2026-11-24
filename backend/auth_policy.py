@@ -33,15 +33,17 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/stages/('+ID+r')/('+ID+r')/(approve|retry)',path)
         if m:return (m[1],'approve' if m[3]=='approve' else 'write')
     return None
-def check(c,method,path,query,body,headers,port):
-    token=auth_http.token_from(headers)
+def check(c,method,path,query,body,headers,port,transport=None):
+    secure=bool(transport and transport.secure)
+    origins=transport.origins(port) if transport else {f'http://127.0.0.1:{port}',f'http://localhost:{port}'}
+    token=auth_http.token_from(headers,secure)
     user=auth_store.principal(c,token)
     if not user:
         auth_http.audit(c,'anonymous','http:'+method,'denied')
         return 401,None
     if method=='POST':
         csrf=headers.get('X-ORBIT-CSRF','')
-        if headers.get('Origin') not in {f'http://127.0.0.1:{port}',f'http://localhost:{port}'} or not re.fullmatch('[0-9a-f]{64}',csrf) or not hmac.compare_digest(csrf,auth_http.csrf_for(token)):
+        if headers.get('Origin') not in origins or not re.fullmatch('[0-9a-f]{64}',csrf) or not hmac.compare_digest(csrf,auth_http.csrf_for(token)):
             auth_http.audit(c,user,'csrf','denied')
             return 403,None
     target=scope(c,method,path,query,body)

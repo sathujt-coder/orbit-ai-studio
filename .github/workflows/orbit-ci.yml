@@ -161,3 +161,35 @@ jobs:
           echo "ORBIT_P4_FIXTURE_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Exercise complete fixture workflow in isolated SQLite and Docker
         run: python -m unittest discover -s tests -p test_p4_e2e.py -v
+
+  tls-container-smoke:
+    name: TLS container — local staging smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image and create ephemeral TLS certificate
+        run: |
+          docker build -f deployment/Dockerfile -t orbit-tls:ci .
+          mkdir -p deployment/tls
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' -keyout deployment/tls/key.pem -out deployment/tls/cert.pem
+          sudo chown -R 10001:10001 deployment/tls
+          sudo chmod 600 deployment/tls/key.pem
+          docker compose -f deployment/compose.yml up -d --build
+          for i in $(seq 1 30); do
+            if curl -fsS --cacert deployment/tls/cert.pem https://localhost:8443/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker compose -f deployment/compose.yml logs
+          exit 1
+      - name: Provision isolated TLS fixture user
+        run: docker compose -f deployment/compose.yml exec -T orbit python -c "import sys,sqlite3; sys.path.insert(0,'backend'); import auth_store; c=sqlite3.connect('/data/company.sqlite'); auth_store.create_user(c,'ci-tls-user','fixture-tls-password'); c.commit(); c.close()"
+      - name: Verify TLS, session and CSRF
+        run: python deployment/tls_smoke.py deployment/tls/cert.pem
+      - name: Tear down isolated instance
+        if: always()
+        run: docker compose -f deployment/compose.yml down -v
