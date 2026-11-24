@@ -14,6 +14,7 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        if path in ('/api/provider/monitoring','/api/provider/monitoring/history'):return ('','provider_monitoring_read')
         if path=='/api/provider/protection':return ('','provider_protection_read')
         if path=='/api/provider/routing':return ('','provider_routing_read')
         if path=='/api/provider/settings':return ('','provider_settings_read')

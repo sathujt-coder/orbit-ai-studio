@@ -23,6 +23,7 @@ import agent_queue
 import concurrency_control
 import model_routing
 import inference_guard
+import monitoring
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,7 @@ LOCK = threading.RLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 CONCURRENCY = concurrency_control.Limiter()
 BUDGET_GUARD = inference_guard.Guard()
+MONITOR = monitoring.Monitor()
 ROUTING = model_routing.load(os.environ,MODEL_LANES)
 RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
@@ -110,6 +112,7 @@ def init_db():
         ''')
         agent_queue.ensure_schema(c)
         model_routing.ensure_schema(c)
+        monitoring.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -193,6 +196,13 @@ def get_preceding(pid, stage_id):
     for r in result:indexed.setdefault(r['stage_id'],r['content'])
     return '\n\n'.join('['+s+'] '+indexed[s][:1200] for s in STAGE_IDS[:ix] if s in indexed)[-7500:]
 
+
+def monitor_workers():
+    return {'configured':CONCURRENCY.policy['workers'],'alive':sum(w.is_alive() for w in QUEUE_THREADS),'failed':QUEUE_FAILED.is_set()}
+
+def monitor_args():
+    return (db,LOCK,RESOURCE_MANAGER,CONCURRENCY,monitor_workers,BUDGET_GUARD,AGENTS,
+            lambda c:provider_settings.load(c,os.environ,MODEL_LANES)[1],ROUTING['mode'])
 
 def provider_snapshot():
     with LOCK,db() as c:return provider_settings.load(c,os.environ,MODEL_LANES)
@@ -572,11 +582,11 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
-                if path in ('/routing.html','/protection.html') and not provider_settings.is_admin(session['user']):
+                if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
@@ -590,6 +600,15 @@ class Handler(SimpleHTTPRequestHandler):
                         data['dispatcher_running']=bool(QUEUE_THREADS and not QUEUE_FAILED.is_set() and all(w.is_alive() for w in QUEUE_THREADS))
                         data['worker_count']=sum(w.is_alive() for w in QUEUE_THREADS)
                         data['worker_limit']=CONCURRENCY.policy['workers']
+                self.send_json(200,data);return
+            if path=='/api/provider/monitoring':
+                data=MONITOR.view()
+                with LOCK,db() as c:data['control']=inference_guard.control(c)
+                self.send_json(200,data);return
+            if path=='/api/provider/monitoring/history':
+                q=parse_qs(urlparse(self.path).query)
+                hours=int(q.get('hours',['24'])[0]);limit=int(q.get('limit',['240'])[0])
+                with LOCK,db() as c:data=monitoring.history(c,int(time.time()),hours,limit)
                 self.send_json(200,data);return
             if path=='/api/provider/resources':
                 data=RESOURCE_MANAGER.snapshot(include_gpu=True)
@@ -679,7 +698,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -821,11 +840,13 @@ def main():
         if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
         QUEUE_THREADS.extend(threading.Thread(target=queue_worker,name='orbit-worker-'+str(i+1),daemon=True) for i in range(CONCURRENCY.policy['workers']))
         for worker in QUEUE_THREADS:worker.start()
+        MONITOR.start(*monitor_args())
         print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
         try: srv.serve_forever()
         except KeyboardInterrupt: pass
         finally:
             QUEUE_STOP.set();QUEUE_WAKE.set();CONCURRENCY.close();srv.server_close()
+            MONITOR.close()
             # Preserve exclusive dispatcher ownership until all active units exit.
             for worker in QUEUE_THREADS:worker.join()
 
