@@ -81,3 +81,10 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(body['format'],schema)
         self.assertEqual(body['options'],{'temperature':0,'num_predict':128})
         self.assertEqual(key,'Bearer fixture-a')
+
+    def test_repair_sampling_native_only(self):
+        lane=mp.load_config(dict(self.env,AI_PROVIDER_A='ollama'))['A']
+        schema={'type':'object'}
+        mp.chat(lane,'s','u',schema=schema,repair_temperature=0.25,max_tokens=128)
+        self.assertEqual(self.servers[0].received[0][2]['options']['temperature'],0.25)
+        with self.assertRaises(ValueError):mp.chat(lane,'s','u',schema=schema,repair_temperature=0.9)

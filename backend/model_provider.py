@@ -16,6 +16,9 @@ class ProviderError(RuntimeError):
 
 class OutputError(ProviderError):
     """A response was incomplete or unusable; a bounded format retry is allowed."""
+    def __init__(self,message,code="invalid_output"):
+        super().__init__(message)
+        self.code=code
 
 @dataclass(frozen=True)
 class Lane:
@@ -91,17 +94,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
 
-def chat(lane,system,user,*,max_tokens=None,schema=None):
+def chat(lane,system,user,*,max_tokens=None,schema=None,repair_temperature=None):
     if lane.provider=='demo':raise ProviderError('Demo lane cannot call a real provider')
     payload={'model':lane.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
              'temperature':0.45,'stream':False}
     native=schema is not None and lane.provider=='ollama'
     endpoint=lane.base_url+'/chat/completions'
+    if repair_temperature is not None and (not native or type(repair_temperature) not in (int,float) or not 0<=repair_temperature<=0.5):
+        raise ValueError('Repair temperature must be 0–0.5 for native structured Ollama')
     if native:
         endpoint=lane.base_url[:-3]+'/api/chat'
         payload.pop('temperature')
         payload['format']=schema
-        payload['options']={'temperature':0,'num_predict':max_tokens or 4096}
+        payload['options']={'temperature':0 if repair_temperature is None else repair_temperature,'num_predict':max_tokens or 4096}
     elif max_tokens is not None:payload['max_tokens']=max_tokens
     headers={'Content-Type':'application/json','Accept':'application/json'}
     if lane.api_key:headers['Authorization']='Bearer '+lane.api_key
@@ -116,15 +121,15 @@ def chat(lane,system,user,*,max_tokens=None,schema=None):
         data=json.loads(raw)
         if native:
             if data.get('done') is not True or data.get('done_reason')=='length':
-                raise OutputError('Incomplete structured output')
+                raise OutputError('Incomplete structured output','truncated_or_incomplete')
             content=data['message']['content']
         else:
             choice=data['choices'][0]
-            if schema is not None and choice.get('finish_reason')=='length':raise OutputError('Incomplete structured output')
+            if schema is not None and choice.get('finish_reason')=='length':raise OutputError('Incomplete structured output','truncated_or_incomplete')
             content=choice['message']['content']
-        if not isinstance(content,str):raise OutputError('Invalid model content')
+        if not isinstance(content,str):raise OutputError('Invalid model content','non_string_content')
         content=re.sub(r'<think>[\s\S]*?</think>','',content,flags=re.I).strip()
-        if not content or len(content)>100_000:raise OutputError('Empty or oversized model content')
+        if not content or len(content)>100_000:raise OutputError('Empty or oversized model content','empty_or_oversized_content')
         return content
     except urllib.error.HTTPError as exc:
         code=exc.code

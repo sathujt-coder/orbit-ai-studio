@@ -66,9 +66,9 @@ class IntegrationTests(unittest.TestCase):
         server.DB_PATH = self.orig
         self.tmp.cleanup()
 
-    def run_job(self, model=None):
+    def run_job(self, model=None, repair=None):
         def runner(jid, pid):
-            cf.work(server.db, server.LOCK, jid, pid, model, server.now, server.log, server.get_preceding)
+            cf.work(server.db, server.LOCK, jid, pid, model, server.now, server.log, server.get_preceding, repair=repair)
         # Make thread deterministic for tests.
         with patch.object(cf.threading, 'Thread') as thread:
             t = thread.return_value
@@ -118,6 +118,26 @@ class IntegrationTests(unittest.TestCase):
         self.assertNotIn('print(123)',calls[1][1]) # B does not see proposal A
         with server.db() as c,self.assertRaises(ValueError):
             cf.export_zip(c,job['id'])
+
+    def test_repair_reuses_passing_lane_and_rechecks_both(self):
+        calls=[]
+        a=cf.validate_proposal({'files':[{'path':'main.py','content':'# A prior private code'}]})
+        b=cf.validate_proposal({'files':[{'path':'main.py','content':'# B prior private code'}]})
+        repair={'A':{'proposal':a,'reuse':True,'feedback':''},
+                'B':{'proposal':b,'reuse':False,'feedback':'NameError'}}
+        def model(system,prompt,lane):
+            calls.append((system,prompt,lane))
+            if 'code reviewer' in system:
+                return '{"verdict":"APPROVE","score":90,"feedback":"Reviewed"}'
+            return json.dumps({'files':[{'path':'main.py','content':'# B repaired'}]})
+        j=self.run_job(model,repair=repair)
+        self.assertEqual(j['status'],'ready')
+        self.assertEqual([x[2] for x in calls],['B','A','B'])
+        self.assertIn('NameError',calls[0][1])
+        self.assertIn('B prior private code',calls[0][1])
+        self.assertNotIn('A prior private code',calls[0][1])
+        self.assertEqual(j['proposal_a'],a)
+        self.assertEqual(j['manifest']['repair_reused_lanes'],['A'])
 
     def test_corrupt_manifest(self):
         job = self.run_job()
