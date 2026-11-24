@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """24-agent real local client workload, short smoke or 24-hour dedicated soak."""
-import argparse,os,sys,tempfile,time,threading
+import argparse,os,re,sys,tempfile,time,threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
@@ -109,7 +109,11 @@ def main():
     expected='RUN LOCAL 24H SOAK' if a.profile=='soak24h' else 'RUN LOCAL STRESS SMOKE'
     if a.confirm!=expected:p.error('Explicit '+expected+' required')
     evidence=Evidence(a.report,'orbit.offline-stress.v1',a.profile);ok=False
+    source=os.getenv('STRESS_SOURCE_COMMIT','')
+    evidence.data['source_commit']=source if re.fullmatch('[0-9a-f]{40}',source) else None
+    evidence.save()
     try:
+        if a.profile=='soak24h':require(evidence.data['source_commit'] is not None,'source_commit_required')
         with tempfile.TemporaryDirectory() as d:
             private_environment({'AI_COMPANY_DB':str(Path(d)/'offline-stress.sqlite'),'AI_PROVIDER':'ollama','AI_BASE_URL':'http://127.0.0.1:11434/v1',
                 'AI_MODEL_A':'qwen2.5-coder:3b','AI_MODEL_B':'qwen2.5:3b','AI_TIMEOUT':'120',
