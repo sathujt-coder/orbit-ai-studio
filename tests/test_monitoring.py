@@ -84,3 +84,20 @@ with server.db() as c:
     assert 'fixture-password' not in c.execute('SELECT snapshot FROM monitoring_samples').fetchone()[0]
 """
             subprocess.run([sys.executable,'-c',script],env=env,check=True,timeout=20)
+
+    def test_alert_thresholds_and_zero_budget(self):
+        p=dict(self.p,queue_warn_age_seconds=10,pending_warn_age_seconds=10)
+        data={'resources':{'pressure_reason':'memory_headroom_low','gpu':{'status':'unavailable'}},
+              'queue':{'eligible_oldest_age_seconds':10},'concurrency':{'waiting':1,'active':1,'policy':{'global_limit':1}},
+              'workers':{'failed':False,'alive':0,'configured':1},
+              'protection':{'stopped':True,'totals':{'unknown_cost':1,'unknown_tokens':0,'reservation_overruns':1,'accounted_usd':'8.000000000000','accounted_tokens':100},'policy':{'global_cost_usd':'10.000000000000','global_tokens':100}},
+              'pending_oldest_age_seconds':10,'breaker_counts':{'open':1,'half_open':0},'recent_denials':2}
+        codes={a['code']:a['severity'] for a in m.alerts(data,p)}
+        self.assertEqual(codes,{'worker_unavailable':'critical','emergency_stop':'warning','resource_pressure':'warning','gpu_unknown':'info','queue_wait':'warning','inference_saturated':'warning','pending_usage_old':'warning','circuit_not_closed':'warning','unknown_usage':'warning','reservation_overrun':'warning','budget_near':'warning','token_limit_reached':'warning','recent_denials':'warning'})
+        data['protection']['totals']['accounted_usd']='10.000000000000'
+        self.assertIn('budget_reached',[a['code'] for a in m.alerts(data,p)])
+        data['protection']['policy']['global_cost_usd']='0.000000000000'
+        data['protection']['totals']['accounted_usd']='0.000000000000'
+        self.assertNotIn('budget_reached',[a['code'] for a in m.alerts(data,p)])
+        data['protection']['totals']['accounted_usd']='0.000000000001'
+        self.assertIn('budget_reached',[a['code'] for a in m.alerts(data,p)])

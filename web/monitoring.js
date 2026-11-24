@@ -1,5 +1,5 @@
 (function(){
-'use strict';const $=id=>document.getElementById(id);let busy=false,timer=null,delay=10000,ended=false;
+'use strict';const $=id=>document.getElementById(id);let busy=false,timer=null,delay=10000,ended=false,refreshPending=false;
 const number=x=>x==null?'—':Number(x).toLocaleString('vi-VN',{maximumFractionDigits:2});
 const mib=x=>x==null?'—':number(x/1048576)+' MiB';
 const money=x=>x==null?'—':'$'+x;
@@ -47,6 +47,6 @@ function render(d,h){
  $('breaker-counts').textContent=pairs(s.breaker_counts);$('breakers').replaceChildren(...b.breakers.map(x=>row([x.provider+' / '+x.model,x.state,x.failures])));
 }
 function schedule(){clearTimeout(timer);if(!ended&&$('auto').checked&&!document.hidden)timer=setTimeout(refresh,delay)}
-async function refresh(){if(busy||ended)return;busy=true;clearTimeout(timer);$('refresh').disabled=true;try{const [d,h]=await Promise.all([api('/api/provider/monitoring'),api('/api/provider/monitoring/history?hours='+$('hours').value+'&limit=240')]);render(d,h)}catch(e){$('status').textContent='STALE / '+e.message;$('control').textContent='Emergency control: unknown';if(ended)$('report').hidden=true}finally{busy=false;$('refresh').disabled=false;schedule()}}
+async function refresh(){if(ended)return;if(busy){refreshPending=true;return}busy=true;clearTimeout(timer);$('refresh').disabled=true;try{const [d,h]=await Promise.all([api('/api/provider/monitoring'),api('/api/provider/monitoring/history?hours='+$('hours').value+'&limit=240')]);render(d,h)}catch(e){$('status').textContent='STALE / '+e.message;$('control').textContent='Emergency control: unknown';if(ended)$('report').hidden=true}finally{busy=false;$('refresh').disabled=false;if(refreshPending&&!ended){refreshPending=false;refresh()}else schedule()}}
 window.addEventListener('DOMContentLoaded',()=>{$('refresh').addEventListener('click',refresh);$('hours').addEventListener('change',refresh);$('auto').addEventListener('change',schedule);document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(timer);else if($('auto').checked)refresh()});refresh()});
 })();
