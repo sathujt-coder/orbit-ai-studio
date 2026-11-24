@@ -7,7 +7,7 @@ import inference_guard as g,usage_store as u,model_provider as mp,cost_store as 
 
 class ProtectionTests(unittest.TestCase):
     def setUp(self):
-        self.c=sqlite3.connect(':memory:');u.ensure_schema(self.c)
+        self.c=sqlite3.connect(':memory:');u.ensure_schema(self.c);self.c.commit()
         self.local=mp.Lane('A','ollama',mp.DEFAULT_URL,'local-a','',context_window=4096,max_tokens=128)
         self.remote=mp.Lane('B','openai-compatible','https://fixture.invalid/v1','remote-b','',context_window=4096,max_tokens=128)
         self.now=int(time.time())
@@ -77,7 +77,7 @@ class ProtectionTests(unittest.TestCase):
         env={'ORBIT_PROVIDER_ADMINS':'op'}
         body={'revision':0,'stopped':True,'confirmation':'STOP NEW INFERENCE'}
         with self.assertRaises(PermissionError):g.set_stop(self.c,'viewer',body,env)
-        g.set_stop(self.c,'op',body,env)
+        with self.c:g.set_stop(self.c,'op',body,env)
         with self.assertRaises(ValueError):g.set_stop(self.c,'op',body,env)
         with patch.object(mp,'chat') as chat:
             with self.assertRaisesRegex(mp.BudgetError,'emergency_stop'):
@@ -85,6 +85,8 @@ class ProtectionTests(unittest.TestCase):
             chat.assert_not_called()
         self.assertEqual(self.c.execute('SELECT count(*) FROM ai_usage').fetchone()[0],0)
         self.assertEqual(self.c.execute('SELECT reason FROM inference_denials').fetchone()[0],'emergency_stop')
+        self.assertTrue(g.control(self.c)['stopped'])
+        self.assertEqual(g.control(self.c)['revision'],1)
         self.assertFalse(g.set_stop(self.c,'op',{'revision':1,'stopped':False,'confirmation':'RESUME INFERENCE'},env)['stopped'])
     def test_real_http_failure_circuit_and_recovery(self):
         from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
