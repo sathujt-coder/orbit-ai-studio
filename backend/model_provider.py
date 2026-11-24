@@ -14,6 +14,10 @@ MAX_RESPONSE=4_000_000
 class ProviderError(RuntimeError):
     pass
 
+class ResourceError(ProviderError):
+    """Local admission refused before a provider request."""
+    pass
+
 class OutputError(ProviderError):
     """A response was incomplete or unusable; a bounded format retry is allowed."""
     def __init__(self,message,code="invalid_output"):

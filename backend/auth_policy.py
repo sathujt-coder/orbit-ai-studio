@@ -16,6 +16,7 @@ def scope(c,method,path,query='',body=None):
     if method=='GET':
         if path=='/api/provider/settings':return ('','provider_settings_read')
         if path=='/api/provider/usage':return ('','provider_usage_read')
+        if path=='/api/provider/resources':return ('','provider_resources_read')
         if path in ('/api/provider/cost','/api/provider/rates'):return ('','provider_cost_read')
         if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
@@ -26,7 +27,7 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
-        if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
+        if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates','/api/provider/resources/models'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):

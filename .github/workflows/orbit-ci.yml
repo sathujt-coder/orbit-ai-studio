@@ -51,6 +51,7 @@ jobs:
           node --check web/providers.js
           node --check web/usage.js
           node --check web/cost.js
+          node --check web/resources.js
 
   web-e2e:
     name: Browser E2E — Chromium
@@ -89,7 +90,7 @@ jobs:
         run: |
           PYTHONPATH=backend python -c "import os, sqlite3, auth_store; c=sqlite3.connect(os.environ['RUNNER_TEMP']+'/orbit-web-e2e.sqlite'); auth_store.create_user(c,'ci-browser-user','local-ci-fixture-password'); auth_store.create_user(c,'ci-viewer','local-ci-fixture-password'); pid=c.execute('SELECT id FROM projects LIMIT 1').fetchone()[0]; auth_store.grant(c,'ci-browser-user',pid,'owner'); auth_store.grant(c,'ci-viewer',pid,'viewer'); c.commit(); c.close()"
       - name: Run real Chromium E2E
-        run: node --test tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs
+        run: node --test tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs tests/browser/resources.test.cjs
       - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4

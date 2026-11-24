@@ -18,6 +18,7 @@ import model_provider
 import provider_settings
 import usage_store
 import cost_store
+import resource_manager
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,9 @@ PROVIDER = model_provider.mode(MODEL_LANES)
 MODEL_A = MODEL_LANES['A'].model
 MODEL_B = MODEL_LANES['B'].model
 LOCK = threading.RLock()
+RESOURCE_MANAGER = resource_manager.Manager()
+RESOURCE_MODEL_LOCK = threading.Lock()
+RESOURCE_MODEL_LAST = 0.0
 RUNNING: dict[str, dict] = {}
 
 STAGES = [
@@ -182,7 +186,7 @@ def provider_snapshot():
 def snapshot_call(lanes,*,project_id=None,department='system',purpose='unattributed',run_id=None):
     def tracked(system,user,lane,phase,**kwargs):
         return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=project_id,
-            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,**kwargs)
+            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,resource_guard=RESOURCE_MANAGER,**kwargs)
     def call(system,user,lane='A',*,phase=None):
         return tracked(system,user,lane,phase or purpose)
     def structured(system,user,lane,schema):
@@ -460,12 +464,14 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html'):
                 with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
+            if path=='/api/provider/resources':
+                self.send_json(200,RESOURCE_MANAGER.snapshot(include_gpu=True));return
             if path=='/api/provider/rates':
                 with LOCK,db() as c:data=cost_store.rates_view(c,os.environ,MODEL_LANES)
                 self.send_json(200,data);return
@@ -535,7 +541,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -552,6 +558,17 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if path=='/api/provider/resources/models':
+                global RESOURCE_MODEL_LAST
+                if body!={'confirmation':'READ LOCAL MODEL STATUS'}:raise ValueError('Explicit READ LOCAL MODEL STATUS required')
+                if not RESOURCE_MODEL_LOCK.acquire(blocking=False):raise ValueError('Local model check already running')
+                try:
+                    if time.monotonic()-RESOURCE_MODEL_LAST<3:raise ValueError('Local model check rate limited')
+                    RESOURCE_MODEL_LAST=time.monotonic()
+                    _,lanes=provider_snapshot()
+                    data={'lanes':{k:resource_manager.loaded_models(v) for k,v in lanes.items()}}
+                finally:RESOURCE_MODEL_LOCK.release()
+                self.send_json(200,data);return
             if path=='/api/provider/rates':
                 with LOCK,db() as c:data=cost_store.save_rate(c,self.auth_context[0],body,os.environ,MODEL_LANES)
                 self.send_json(200,data);return
@@ -565,7 +582,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path in ('/api/provider/probe','/api/provider/models'):
                 def tracked_probe(lane,system,user,**kwargs):
                     return usage_store.tracked_chat(db,LOCK,lane,system,user,project_id=None,
-                        agent_id='system-'+lane.lane,purpose='provider_probe',**kwargs)
+                        agent_id='system-'+lane.lane,purpose='provider_probe',resource_guard=RESOURCE_MANAGER,**kwargs)
                 data=provider_settings.network_action(body,os.environ,MODEL_LANES,path.rsplit('/',1)[1],chat_fn=tracked_probe)
                 self.send_json(200,data);return
             if path=='/api/coding/start':
@@ -626,6 +643,8 @@ class Handler(SimpleHTTPRequestHandler):
                 reply=agent_chat(str(body.get('project_id','')),str(body.get('agent_id','')),str(body.get('message','')))
                 self.send_json(200,{'reply':reply});return
             self.send_json(404,{'error':'Endpoint không tồn tại'})
+        except model_provider.ResourceError as ex:
+            self.send_json(503,{'error':str(ex)})
         except PermissionError:
             self.send_json(403,{'error':'Access denied'})
         except Exception as ex:
