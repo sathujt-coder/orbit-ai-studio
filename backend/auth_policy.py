@@ -25,7 +25,7 @@ def scope(c,method,path,query='',body=None):
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/queue(?:/'+ID+r')?',path)
         if m:return (m[1],'read')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance|usage|cost|routing|protection|requirements)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance|usage|cost|routing|protection|requirements|planning)',path)
         if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
         m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
         if m:return (resource_project(c,'coding_jobs',m[1]),'read')
@@ -38,6 +38,8 @@ def scope(c,method,path,query='',body=None):
         if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
+        m=re.fullmatch(r'/api/projects/('+ID+r')/planning(?:/(seed|approve))?',path)
+        if m:return (m[1],'approve' if m[2]=='approve' else 'write')
         m=re.fullmatch(r'/api/projects/('+ID+r')/requirements(?:/(approve|discover|adopt))?',path)
         if m:return (m[1],'approve' if m[2]=='approve' else 'write')
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):

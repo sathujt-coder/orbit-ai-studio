@@ -57,6 +57,7 @@ jobs:
           node --check web/protection.js
           node --check web/monitoring.js
           node --check web/requirements.js
+          node --check web/planning.js
 
   web-e2e:
     name: Browser E2E — Chromium
@@ -137,7 +138,7 @@ jobs:
           cat "$RUNNER_TEMP/requirements-browser.log"
           exit 1
       - name: Requirements Chromium acceptance
-        run: node --test tests/browser/requirements.test.cjs
+        run: node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs
       - name: Retain browser diagnostic log
         if: always()
         uses: actions/upload-artifact@v4

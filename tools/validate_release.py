@@ -5,6 +5,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = (
     'backend/server.py', 'backend/coding_factory.py',
+    'backend/project_planning.py', 'web/planning.html', 'web/planning.js', 'tests/test_project_planning.py',
     'backend/verification_factory.py', 'backend/verified_pr.py',
     'backend/github_bridge.py', 'web/app.js', 'web/world3d.js',
     'web/index.html', 'tests/test_coding_factory.py',

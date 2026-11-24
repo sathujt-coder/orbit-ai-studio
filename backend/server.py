@@ -15,6 +15,7 @@ import auth_http
 import auth_policy
 import acceptance_store
 import product_requirements
+import project_planning
 import requirements_discovery
 import requirements_jobs
 import model_provider
@@ -114,6 +115,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
         product_requirements.ensure_schema(c)
+        project_planning.ensure_schema(c)
         agent_queue.ensure_schema(c)
         requirements_jobs.ensure_schema(c)
         model_routing.ensure_schema(c)
@@ -629,12 +631,19 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html','/planning.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=project_planning.view(c,pid)
+                    data['can_write']=auth_store.authorize(c,actor,pid,'write')
+                    data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:
@@ -759,7 +768,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/requirements.html','/requirements.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/requirements.html','/requirements.js','/planning.html','/planning.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -776,6 +785,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning(?:/(?:seed|approve))?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=(project_planning.approve(c,pid,actor,body,now()) if path.endswith('/approve') else
+                        project_planning.save(c,pid,actor,body,now(),seed=path.endswith('/seed')))
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/discover',path):
                 actor,pid,_=self.auth_context
                 if set(body)!={'confirmation','scope_contract'} or body['confirmation']!='RUN AI REQUIREMENTS':
