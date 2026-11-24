@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 if os.environ.get('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')!='1':
     raise SystemExit('Explicit isolated browser fixture opt-in required')
-root=Path(__file__).resolve().parents[1]
+root=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(root/'backend'))
 sys.path.insert(0,str(root/'tests'))
 from test_product_requirements import document
