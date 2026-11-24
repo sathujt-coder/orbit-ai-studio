@@ -406,10 +406,16 @@ def run_requirements(pid,identifier,lanes):
             row=agent_queue.get(c,pid,identifier)
             if row['status']!='running' or not agent_queue.permitted(c,row['actor'],pid):
                 raise PermissionError('Discovery no longer authorized')
-        return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,
-            agent_id=({'research':'research','ba':'ba'}.get(phase.split('_',1)[0],'po'))+'-'+lane,purpose=phase,run_id=identifier,runtime_settings=True,
-            max_tokens=min(768 if phase.startswith(('research_','ba_')) else 2048,lanes[lane].max_tokens),schema=schema,
-            resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+        try:
+            return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,
+                agent_id=({'research':'research','ba':'ba'}.get(phase.split('_',1)[0],'po'))+'-'+lane,purpose=phase,run_id=identifier,runtime_settings=True,
+                max_tokens=min(768 if phase.startswith(('research_','ba_')) else 2048,lanes[lane].max_tokens),schema=schema,
+                resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+        except model_provider.ProviderError as error:
+            # OutputError is eligible for existing bounded document repair. Other failures are
+            # never replayed; expose only a fixed class and trusted phase, not provider payloads.
+            if isinstance(error,model_provider.OutputError):raise
+            raise RuntimeError('requirements_provider_failure:'+phase+':'+type(error).__name__) from error
     evidence=requirements_discovery.collaborate(call,idea)
     # Evidence and terminal queue state commit atomically. Crash before this transaction is
     # uncertain execution; startup recovery will never automatically replay it.
@@ -482,6 +488,8 @@ def dispatch_one():
                 if row['kind']=='pipeline' and stage:
                     c.execute("UPDATE tasks SET status='needs_revision' WHERE project_id=? AND stage_id=? AND status IN ('drafting','reviewing','synthesizing')",(pid,stage))
                 reason=('requirements_invalid_output:'+error.phase if isinstance(error,requirements_discovery.InvalidDocument) else 'execution_failed')
+                if row['kind']=='requirements' and isinstance(error,RuntimeError) and str(error).startswith('requirements_provider_failure:'):
+                    reason=str(error)[:160]
                 agent_queue.fail(c,current,reason,int(time.time()),now())
     return True
 

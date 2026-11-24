@@ -3,6 +3,17 @@ import unittest
 from test_product_requirements import document
 import requirements_discovery as discovery
 
+
+def model_document():
+    d=document();out={key:d[key] for key in discovery.META}
+    for kind in ('functional','nonfunctional'):
+        out[kind]=[]
+        for req in d['requirements']:
+            if req['kind']!=kind:continue
+            story=next(s for s in d['stories'] if req['id'] in s['requirements'])
+            out[kind].append(dict(description=req['description'],priority=req['priority'],acceptance=req['acceptance'],story={k:story[k] for k in ('actor','goal','benefit')}))
+    return out
+
 class DiscoveryTests(unittest.TestCase):
     def test_independent_and_cross_review(self):
         calls=[]
@@ -10,7 +21,7 @@ class DiscoveryTests(unittest.TestCase):
             data=json.loads(user);calls.append((lane,phase,data))
             if schema is discovery.REVIEW_SCHEMA:
                 return json.dumps(dict(blocking=[],feedback=['Review fixture']))
-            return json.dumps(document())
+            return json.dumps(model_document())
         result=discovery.discover(call,'Save links')
         self.assertEqual([(a,b) for a,b,_ in calls],[('A','requirements_proposal'),('B','requirements_proposal'),('A','requirements_cross_review'),('B','requirements_cross_review'),('A','requirements_synthesis'),('B','requirements_final_review')])
         self.assertEqual(calls[0][2],calls[1][2])
@@ -23,12 +34,12 @@ class DiscoveryTests(unittest.TestCase):
         def call(lane,phase,system,user,schema):
             if schema is discovery.REVIEW_SCHEMA:
                 return json.dumps(dict(blocking=['Missing isolation'] if phase=='requirements_final_review' else [],feedback=['Review fixture']))
-            return json.dumps(document())
+            return json.dumps(model_document())
         self.assertFalse(discovery.discover(call,'Save links')['ready_for_human_review'])
     def test_open_questions_block(self):
         def call(lane,phase,system,user,schema):
             if schema is discovery.REVIEW_SCHEMA:return json.dumps(dict(blocking=[],feedback=['Review fixture']))
-            d=document();d['open_questions']=['Unresolved']
+            d=model_document();d['open_questions']=['Unresolved']
             return json.dumps(d)
         self.assertFalse(discovery.discover(call,'Save links')['ready_for_human_review'])
 
@@ -44,7 +55,7 @@ class CollaborationTests(unittest.TestCase):
                 return json.dumps(dict(workflows=['Save and list'],business_rules=['Project access'],edge_cases=['Denied read'],unknowns=[]))
             if schema in (discovery.REVIEW_SCHEMA,discovery.BRIEF_REVIEW_SCHEMA):
                 return json.dumps(dict(blocking=['Unresolved access'] if blocking and phase=='requirements_final_review' else [],feedback=['Review fixture']))
-            return json.dumps(document())
+            return json.dumps(model_document())
         return call,calls
     def test_department_order_and_independence(self):
         call,calls=self.fixture()
@@ -76,15 +87,16 @@ class RepairTests(unittest.TestCase):
             calls.append((lane,phase,json.loads(user)))
             if schema is discovery.REVIEW_SCHEMA:
                 return json.dumps(dict(blocking=[],feedback=['Review fixture']))
-            d=document()
+            d=model_document()
             if lane=='A' and phase=='requirements_proposal':
-                d['requirements'][1]['kind']='functional'
+                d['nonfunctional']=[]
             return json.dumps(d)
         result=discovery.discover(call,'Save links')
         self.assertTrue(result['ready_for_human_review'])
         self.assertEqual(len(calls),7)
         self.assertEqual(calls[1][:2],('A','requirements_proposal_repair'))
-        self.assertIn('Both functional and nonfunctional',calls[1][2]['validation_error'])
+        self.assertIn('nonfunctional requirement group',calls[1][2]['validation_error'])
+        self.assertNotIn('invalid_candidate',calls[1][2])
     def test_invalid_repair_fails_closed_and_no_provider_retry(self):
         calls=[]
         def invalid(*args):
@@ -96,3 +108,13 @@ class RepairTests(unittest.TestCase):
             calls.append(args);raise discovery.mp.ProviderError('offline')
         with self.assertRaises(discovery.mp.ProviderError):discovery.discover(unavailable,'Save links')
         self.assertEqual(len(calls),1)
+
+    def test_grouped_schema_assigns_traceability_without_inventing_content(self):
+        raw=model_document()
+        result=discovery.parse_document(json.dumps(raw))
+        self.assertEqual({x['kind'] for x in result['requirements']},{'functional','nonfunctional'})
+        self.assertEqual([x['id'] for x in result['requirements']],['REQ-'+str(i+1) for i in range(len(result['requirements']))])
+        self.assertEqual([x['requirements'] for x in result['stories']],[[x['id']] for x in result['requirements']])
+        self.assertEqual(result['requirements'][0]['description'],raw['functional'][0]['description'])
+        raw['nonfunctional']=[]
+        with self.assertRaises(ValueError):discovery.parse_document(json.dumps(raw))

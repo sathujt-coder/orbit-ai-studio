@@ -10,7 +10,7 @@ if os.environ.get('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')!='1':
 root=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(root/'backend'))
 sys.path.insert(0,str(root/'tests'))
-from test_product_requirements import document
+from test_requirements_discovery import model_document
 import model_provider as mp
 import requirements_discovery as discovery
 
@@ -24,7 +24,7 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
     elif schema in (discovery.REVIEW_SCHEMA,discovery.BRIEF_REVIEW_SCHEMA):
         result=dict(blocking=['Missing scope'] if 'BLOCK_FIXTURE' in idea and 'synthesized document' in system else [],feedback=['Synthetic browser fixture review'])
     elif schema is discovery.DOCUMENT_SCHEMA:
-        result=document()
+        result=model_document()
     else:
         raise RuntimeError('Unexpected fixture inference; no real provider permitted')
     if usage_observer:usage_observer(dict(input_tokens=20,output_tokens=30,total_tokens=50,coverage='complete',source='fixture',status='ok',elapsed_ms=1))

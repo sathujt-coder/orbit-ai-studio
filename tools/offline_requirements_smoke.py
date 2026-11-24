@@ -25,7 +25,7 @@ def main():
                 AI_PROVIDER_A='ollama',AI_PROVIDER_B='ollama',AI_MODEL_A='qwen2.5-coder:3b',
                 AI_MODEL_B='qwen2.5:3b',AI_BASE_URL='http://127.0.0.1:11434/v1',
                 AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
-                AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',ORBIT_BUDGET_MODE='enforce',
+                AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',AI_TIMEOUT='300',ORBIT_BUDGET_MODE='enforce',
                 ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='17')
             import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
             import requirements_jobs as jobs, auth_store

@@ -61,3 +61,14 @@ The existing human-authored UI and legacy pipeline remain unchanged.
   cross-project access, rejected/stale adoption, and unsaved edit protection.
 - Final engineering acceptance requires both current-commit regression/browser and real offline
   acceptance PASS, plus review of requirements.json. Production sign-off and P5.9 soak remain separate.
+
+## P6.1e follow-up — grouped model output contract
+The real 3B models completed Research/BA but failed PO document creation/repair.
+Use two mandatory nonempty model-generated requirement groups with an embedded story per item;
+the backend assigns deterministic IDs and traceability links, then applies the unchanged
+product_requirements.validate gate. No requirement text, acceptance criteria or story is invented
+by the backend. The stored canonical document and human UI contract are unchanged.
+Repair regenerates from the original inputs plus validation error without appending malformed output.
+The real offline test uses a 300-second provider timeout (not a production default change);
+the 17-call cap, existing resource limits and strict final-review/approval gates remain in force.
+Provider failures surface a bounded phase/class diagnostic, with no automatic retry.
