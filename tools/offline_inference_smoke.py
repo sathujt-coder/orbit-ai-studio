@@ -86,10 +86,10 @@ def main():
                 resource_before=server.RESOURCE_MANAGER.snapshot()
                 def model(system,user,lane):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,max_tokens=2048)
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='offline_generation',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,max_tokens=2048)
                 def structured(system,user,lane,schema):
                     calls.append(lane)
-                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,schema=schema,max_tokens=2048,
+                    return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,project_id=pid,agent_id='dev-'+lane,purpose='code_review' if schema is cf.REVIEW_SCHEMA else 'file_repair' if schema is generation.FILE_SCHEMA else 'code_generate',run_id=job_ref['id'],resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,schema=schema,max_tokens=2048,
                                                repair_temperature=0.25 if lane in repair_sampling and schema is generation.FILE_SCHEMA else None)
                 model.structured=structured
                 def diagnostic(lane,schema,attempt,code):
@@ -135,6 +135,7 @@ def main():
                 resource_after=server.RESOURCE_MANAGER.snapshot()
                 loaded=resource_manager.loaded_models(lanes['A'])
                 report['resources']={'before':resource_before,'after':resource_after,'local_ollama':loaded}
+                report['concurrency']=server.CONCURRENCY.snapshot()
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,'intelligent_repairs':repair_events,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
@@ -153,6 +154,10 @@ def main():
                 if code==0 and (report['queue']['status']!='succeeded' or report['queue']['attempts']!=1):
                     report['queue_gate']='BLOCK';code=2
                 else:report['queue_gate']='PASS' if code==0 else 'not_accepted'
+                cc=report['concurrency']
+                if code==0 and (cc['active']!=0 or cc['waiting']!=0 or cc['counts']['acquired']!=len(calls) or cc['counts']['released']!=len(calls) or cc['peak_active']!=1):
+                    report['concurrency_gate']='BLOCK';code=2
+                else:report['concurrency_gate']='PASS' if code==0 else 'not_accepted'
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__

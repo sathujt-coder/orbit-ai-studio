@@ -8,6 +8,8 @@ on:
       - backend/cost_store.py
       - backend/resource_manager.py
       - backend/agent_queue.py
+      - backend/concurrency_control.py
+      - tools/offline_concurrency_smoke.py
       - tools/resource_container_evidence.py
       - backend/coding_factory.py
       - backend/server.py
@@ -74,6 +76,9 @@ jobs:
           done
           echo "P4.6 BLOCK: repair budget exhausted"
           exit 2
+      - name: Verify concurrent client inference against offline Ollama
+        run: |
+          timeout 8m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_concurrency_smoke.py --report /report/concurrency.json --confirm 'RUN LOCAL CONCURRENCY'
       - name: Verify actual Ollama container resource bounds
         if: always()
         run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources.json"

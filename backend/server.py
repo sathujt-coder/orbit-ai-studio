@@ -20,6 +20,7 @@ import usage_store
 import cost_store
 import resource_manager
 import agent_queue
+import concurrency_control
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,11 +35,13 @@ MODEL_A = MODEL_LANES['A'].model
 MODEL_B = MODEL_LANES['B'].model
 LOCK = threading.RLock()
 RESOURCE_MANAGER = resource_manager.Manager()
+CONCURRENCY = concurrency_control.Limiter()
 RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
 QUEUE_WAKE = threading.Event()
 QUEUE_STOP = threading.Event()
-QUEUE_THREAD = None
+QUEUE_THREADS = []
+QUEUE_FAILED = threading.Event()
 
 STAGES = [
     dict(id='po', name='Product Owner', short='PO', team='Sản phẩm', deliverable='Product vision & roadmap', description='Định hình vấn đề, mục tiêu, KPI và phạm vi MVP', icon='◎', color='#54d6fa', approval=False),
@@ -192,7 +195,7 @@ def provider_snapshot():
 def snapshot_call(lanes,*,project_id=None,department='system',purpose='unattributed',run_id=None):
     def tracked(system,user,lane,phase,**kwargs):
         return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=project_id,
-            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,resource_guard=RESOURCE_MANAGER,**kwargs)
+            agent_id=department+'-'+lane,purpose=phase,run_id=run_id,runtime_settings=True,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,**kwargs)
     def call(system,user,lane='A',*,phase=None):
         return tracked(system,user,lane,phase or purpose)
     def structured(system,user,lane,schema):
@@ -353,7 +356,9 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
 
 def dispatch_one():
-    with LOCK,db() as c:row=agent_queue.claim(c,int(time.time()),now())
+    with LOCK,db() as c:
+        if QUEUE_STOP.is_set():return False
+        row=agent_queue.claim(c,int(time.time()),now())
     if not row:return False
     pid,identifier=row['project_id'],row['id']
     stage=None
@@ -408,6 +413,7 @@ def queue_worker():
         except Exception:
             # An uncertain DB commit is not safe to replay. Running rows remain for startup recovery.
             print('Queue dispatcher stopped after storage failure',file=sys.stderr,flush=True)
+            QUEUE_FAILED.set();QUEUE_STOP.set();QUEUE_WAKE.set()
             return
         QUEUE_WAKE.wait(0.5);QUEUE_WAKE.clear()
 
@@ -523,7 +529,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/healthz':
                 try:
                     with LOCK,db() as c:c.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
-                    if QUEUE_THREAD is not None and not QUEUE_THREAD.is_alive():self.send_json(503,{'status':'unavailable','reason':'queue_dispatcher_stopped'})
+                    if QUEUE_THREADS and (QUEUE_FAILED.is_set() or not all(w.is_alive() for w in QUEUE_THREADS)):self.send_json(503,{'status':'unavailable','reason':'queue_dispatcher_stopped'})
                     else:self.send_json(200,{'status':'ok'})
                 except sqlite3.Error:self.send_json(503,{'status':'unavailable'})
                 return
@@ -544,10 +550,15 @@ class Handler(SimpleHTTPRequestHandler):
                     else:
                         data=agent_queue.view(c,pid)
                         data['can_write']=agent_queue.permitted(c,self.auth_context[0],pid)
-                        data['dispatcher_running']=bool(QUEUE_THREAD and QUEUE_THREAD.is_alive())
+                        data['dispatcher_running']=bool(QUEUE_THREADS and not QUEUE_FAILED.is_set() and all(w.is_alive() for w in QUEUE_THREADS))
+                        data['worker_count']=sum(w.is_alive() for w in QUEUE_THREADS)
+                        data['worker_limit']=CONCURRENCY.policy['workers']
                 self.send_json(200,data);return
             if path=='/api/provider/resources':
-                self.send_json(200,RESOURCE_MANAGER.snapshot(include_gpu=True));return
+                data=RESOURCE_MANAGER.snapshot(include_gpu=True)
+                data['concurrency']=CONCURRENCY.snapshot()
+                data['queue_workers']={'configured':CONCURRENCY.policy['workers'],'alive':sum(w.is_alive() for w in QUEUE_THREADS),'failed':QUEUE_FAILED.is_set()}
+                self.send_json(200,data);return
             if path=='/api/provider/rates':
                 with LOCK,db() as c:data=cost_store.rates_view(c,os.environ,MODEL_LANES)
                 self.send_json(200,data);return
@@ -665,7 +676,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path in ('/api/provider/probe','/api/provider/models'):
                 def tracked_probe(lane,system,user,**kwargs):
                     return usage_store.tracked_chat(db,LOCK,lane,system,user,project_id=None,
-                        agent_id='system-'+lane.lane,purpose='provider_probe',resource_guard=RESOURCE_MANAGER,**kwargs)
+                        agent_id='system-'+lane.lane,purpose='provider_probe',resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,**kwargs)
                 data=provider_settings.network_action(body,os.environ,MODEL_LANES,path.rsplit('/',1)[1],chat_fn=tracked_probe)
                 self.send_json(200,data);return
             if path=='/api/coding/start':
@@ -723,6 +734,8 @@ class Handler(SimpleHTTPRequestHandler):
                 reply=agent_chat(str(body.get('project_id','')),str(body.get('agent_id','')),str(body.get('message','')))
                 self.send_json(200,{'reply':reply});return
             self.send_json(404,{'error':'Endpoint không tồn tại'})
+        except model_provider.ConcurrencyError as ex:
+            self.send_json(429,{'error':str(ex)})
         except model_provider.ResourceError as ex:
             self.send_json(503,{'error':str(ex)})
         except PermissionError:
@@ -732,7 +745,6 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    global QUEUE_THREAD
     if HOST not in ('127.0.0.1','localhost') and not (TRANSPORT.secure and os.getenv('ORBIT_ALLOW_TLS_BIND')=='1'):
         raise SystemExit('Non-loopback binding requires explicit TLS configuration and opt-in')
     tls=TRANSPORT.context() if TRANSPORT.secure else None
@@ -742,13 +754,14 @@ def main():
         with LOCK,db() as c:agent_queue.recover(c,int(time.time()),now())
         srv=ThreadingHTTPServer((HOST,PORT),Handler)
         if tls:srv.socket=tls.wrap_socket(srv.socket,server_side=True)
-        worker=threading.Thread(target=queue_worker,daemon=True);QUEUE_THREAD=worker;worker.start()
+        QUEUE_THREADS.extend(threading.Thread(target=queue_worker,name='orbit-worker-'+str(i+1),daemon=True) for i in range(CONCURRENCY.policy['workers']))
+        for worker in QUEUE_THREADS:worker.start()
         print(f'AI Studio Company → {TRANSPORT.origin or ("http://"+HOST+":"+str(PORT))} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)
         try: srv.serve_forever()
         except KeyboardInterrupt: pass
         finally:
-            QUEUE_STOP.set();QUEUE_WAKE.set();srv.server_close()
-            # Keep the dispatcher lock until the active unit completes, or process exits.
-            worker.join()
+            QUEUE_STOP.set();QUEUE_WAKE.set();CONCURRENCY.close();srv.server_close()
+            # Preserve exclusive dispatcher ownership until all active units exit.
+            for worker in QUEUE_THREADS:worker.join()
 
 if __name__=='__main__':main()

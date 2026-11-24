@@ -1,6 +1,7 @@
 """Durable per-attempt token ledger. Provider-reported counts only; no prompts or keys."""
 import time
 import uuid
+from contextlib import nullcontext
 import model_provider as mp
 import cost_store
 
@@ -33,19 +34,21 @@ def finish(c,identifier,event):
                       event['coverage'],event['source'],identifier))
     if result.rowcount!=1:raise RuntimeError('Usage ledger completion conflict')
 
-def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,resource_guard=None,**kwargs):
-    if resource_guard is not None:resource_guard.admit(lane)
-    # Commit before calling the provider. A crash leaves a visible pending attempt.
-    # Database errors fail closed; do not retry a possibly billable request.
-    with lock,conn_factory() as c:identifier=start(c,lane,project_id,agent_id,purpose,run_id)
-    started=time.monotonic()
-    observed={}
-    def observer(event):observed.update(event)
-    try:
-        return mp.chat(lane,system,user,usage_observer=observer,**kwargs)
-    finally:
-        event=observed or dict(mp.token_usage(None,False),status='internal_error',elapsed_ms=round((time.monotonic()-started)*1000))
-        with lock,conn_factory() as c:finish(c,identifier,event)
+def tracked_chat(conn_factory,lock,lane,system,user,*,project_id,agent_id,purpose,run_id=None,resource_guard=None,concurrency_guard=None,**kwargs):
+    # Never wait for a slot while holding the DB lock. Recheck RAM after waiting.
+    with (concurrency_guard.acquire(lane,project_id) if concurrency_guard is not None else nullcontext()):
+        if resource_guard is not None:resource_guard.admit(lane)
+        # Commit before calling the provider. A crash leaves a visible pending attempt.
+        # Database errors fail closed; do not retry a possibly billable request.
+        with lock,conn_factory() as c:identifier=start(c,lane,project_id,agent_id,purpose,run_id)
+        started=time.monotonic()
+        observed={}
+        def observer(event):observed.update(event)
+        try:
+            return mp.chat(lane,system,user,usage_observer=observer,**kwargs)
+        finally:
+            event=observed or dict(mp.token_usage(None,False),status='internal_error',elapsed_ms=round((time.monotonic()-started)*1000))
+            with lock,conn_factory() as c:finish(c,identifier,event)
 
 AGG="""COUNT(*) AS requests, COALESCE(SUM(status='ok'),0) AS successful_calls,
  COALESCE(SUM(status IN ('output_error','provider_error','internal_error')),0) AS failed_calls,

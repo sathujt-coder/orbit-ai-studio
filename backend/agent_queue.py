@@ -27,6 +27,7 @@ def ensure_schema(c):
         attempts INTEGER NOT NULL DEFAULT 0, deferrals INTEGER NOT NULL DEFAULT 0,
         available_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)""")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS aq_active_kind ON agent_queue(project_id,kind) WHERE status IN ('queued','running','paused','waiting_approval')")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS aq_one_running_project ON agent_queue(project_id) WHERE status='running'")
     c.execute("CREATE INDEX IF NOT EXISTS aq_dispatch ON agent_queue(status,available_at,priority,created_at)")
     c.execute("""CREATE TABLE IF NOT EXISTS agent_queue_events(
         seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES agent_queue(id),
@@ -103,6 +104,7 @@ def claim(c,now,stamp):
         fail(c,row,'dependency_failed',now,stamp)
     row=c.execute("""SELECT q.* FROM agent_queue q LEFT JOIN agent_queue d ON d.id=q.dependency_id
                    WHERE q.status='queued' AND q.available_at<=? AND (q.dependency_id IS NULL OR d.status='succeeded')
+                   AND NOT EXISTS (SELECT 1 FROM agent_queue r WHERE r.project_id=q.project_id AND r.status='running')
                    ORDER BY q.priority DESC,q.created_at,q.rowid LIMIT 1""",(now,)).fetchone()
     if not row:return None
     if not permitted(c,row['actor'],row['project_id']):
