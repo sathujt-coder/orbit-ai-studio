@@ -27,7 +27,8 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
-        if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates','/api/provider/resources/models'):
+        if path=='/api/provider/resources/models':return ('','provider_resource_models')
+        if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):

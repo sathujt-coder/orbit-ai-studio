@@ -69,3 +69,36 @@ class ResourceTests(unittest.TestCase):
                     self.assertEqual(auth_policy.check(c,'GET','/api/provider/resources','',{},headers,8787)[0],expected)
                     self.assertEqual(auth_policy.check(c,'POST','/api/provider/resources/models','',{},headers,8787)[0],expected)
                 self.assertEqual(auth_policy.check(c,'GET','/api/provider/resources','',{}, {},8787)[0],401)
+
+    def test_private_cgroup_namespace_and_missing_controller(self):
+        m=self.metrics({'/proc/self/cgroup':'0::/','/proc/self/mountinfo':'1 2 0:3 /docker/fixture /sys/fs/cgroup rw - cgroup2 cgroup rw',
+                        '/sys/fs/cgroup/memory.max':str(512*rm.MIB),'/sys/fs/cgroup/memory.current':str(256*rm.MIB)})
+        self.assertEqual(m['effective_memory_available_bytes'],256*rm.MIB)
+        m=self.metrics({'/proc/self/cgroup':'0::/','/sys/fs/cgroup/memory.max':'','/sys/fs/cgroup/memory.current':''})
+        self.assertIsNone(m['effective_memory_available_bytes'])
+    def test_gpu_parsing_and_bounded_command(self):
+        from subprocess import CompletedProcess
+        with patch.object(rm.shutil,'which',return_value='/fixture/nvidia-smi'),patch.object(rm.subprocess,'run',return_value=CompletedProcess([],0,'0, 8192, 4096, 25\n1, 1024, 2048, 50\nbad\n','')) as run:
+            g=rm.gpu_snapshot()
+            self.assertEqual(g['status'],'available')
+            self.assertEqual(g['devices'],[{'index':0,'vram_total_bytes':8192*rm.MIB,'vram_used_bytes':4096*rm.MIB,'utilization_percent':25}])
+            self.assertEqual(run.call_args.kwargs['timeout'],3)
+            self.assertNotIn('shell',run.call_args.kwargs)
+    def test_actual_http_model_metadata(self):
+        import json
+        from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+        seen=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                seen.append((self.path,self.headers.get('Authorization')))
+                raw=json.dumps({'models':[{'name':'fixture:3b','size':1000,'size_vram':0,'context_length':8192,'digest':'do-not-return'}]}).encode()
+                self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            lane=mp.Lane('A','ollama','http://127.0.0.1:'+str(server.server_port)+'/v1','fixture:3b','fixture-secret')
+            self.assertEqual(rm.loaded_models(lane),{'status':'available','models':[{'model':'fixture:3b','size_bytes':1000,'size_vram_bytes':0,'context_length':8192}]})
+            self.assertEqual(seen,[('/api/ps','Bearer fixture-secret')])
+        finally:
+            server.shutdown();server.server_close();worker.join()

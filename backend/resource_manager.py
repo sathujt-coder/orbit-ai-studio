@@ -68,7 +68,7 @@ def cgroup_limits(reader=read):
             limit=nonnegative(cap);used=nonnegative(reader(p/'memory.current').strip())
             if limit is None or used is None:valid=False
             else:limits.append(limit);heads.append(max(0,limit-used))
-        elif cap!='max' and p==directory and p!=root:valid=False
+        elif cap!='max' and (p==directory or p!=root):valid=False
         cpu=reader(p/'cpu.max').split()
         if len(cpu)==2 and cpu[0]!='max':
             q=nonnegative(cpu[0]);period=nonnegative(cpu[1])
