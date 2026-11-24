@@ -18,7 +18,7 @@ def main():
     p.add_argument('--report',type=Path,required=True);p.add_argument('--confirm',required=True)
     a=p.parse_args()
     if a.confirm!='RUN LOCAL REQUIREMENTS' or a.report.exists():p.error('Explicit confirmation and new report required')
-    report={'schema':'orbit.offline-requirements.v1','gate':'BLOCK','scope':'synthetic AI discovery plus storage contract; no HTTP/queue or actual human approval','source_commit':os.getenv('STRESS_SOURCE_COMMIT','unknown')}
+    report={'schema':'orbit.offline-requirements.v1','gate':'BLOCK','scope':'synthetic durable queue AI discovery and explicit adoption; no HTTP or actual human approval','source_commit':os.getenv('STRESS_SOURCE_COMMIT','unknown')}
     try:
         with tempfile.TemporaryDirectory() as d:
             os.environ.update(AI_COMPANY_DB=str(Path(d)/'requirements.sqlite'),AI_PROVIDER='ollama',
@@ -28,19 +28,25 @@ def main():
                 AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',ORBIT_BUDGET_MODE='enforce',
                 ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='6')
             import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
-            import requirements_discovery as discovery
+            import requirements_jobs as jobs, auth_store
             server.init_db()
-            with server.db() as c:pid=server.create_project('Requirements fixture',IDEA,'Web app',c)
-            lanes=mp.require_distinct_real(server.provider_snapshot()[1]);run=server.uid()
+            with server.db() as c:
+                pid=server.create_project('Requirements fixture',IDEA,'Web app',c)
+                auth_store.create_user(c,'fixture-author','local-fixture-password')
+                auth_store.grant(c,'fixture-author',pid,'owner')
+            lanes=mp.require_distinct_real(server.provider_snapshot()[1])
             require(all(l.provider=='ollama' and l.base_url=='http://127.0.0.1:11434/v1' for l in lanes.values()),'Nonlocal provider forbidden')
-            def call(lane,phase,system,user,schema):
-                return usage_store.tracked_chat(server.db,server.LOCK,lanes[lane],system,user,
-                    project_id=pid,agent_id='po-'+lane,purpose=phase,run_id=run,runtime_settings=True,
-                    max_tokens=min(2048,lanes[lane].max_tokens),schema=schema,
-                    resource_guard=server.RESOURCE_MANAGER,concurrency_guard=server.CONCURRENCY,
-                    budget_guard=server.BUDGET_GUARD)
-            evidence=discovery.discover(call,IDEA)
+            run=server.enqueue_requirements(pid,'fixture-author')['queue_id']
+            require(server.dispatch_one(),'Queue did not dispatch')
+            with server.db() as c:queued=jobs.latest(c,pid)
+            report['queue_status']=queued['status'];report['queue_reason']=queued['reason']
+            evidence=queued['evidence']
             report['discovery']=evidence
+            require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review')
+            with server.db() as c:
+                adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
+                    expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
+                require(not adopted['planning_ready'] and jobs.latest(c,pid)['adopted_version']==1,'Adoption gate failed')
             document=evidence['document']
             # Independent lightweight fixture checks; not a general semantic quality oracle.
             functional=' '.join(r['description']+' '+' '.join(r['acceptance']) for r in document['requirements'] if r['kind']=='functional').lower()
@@ -60,9 +66,9 @@ def main():
             # Simulated authorized human adopts AI draft; this is not real human sign-off.
             with server.db() as c:
                 blocked_doc=copy.deepcopy(document);blocked_doc['open_questions']=['Fixture unresolved decision']
-                first=pr.save(c,pid,'fixture-author',dict(expected_version=0,document=blocked_doc),server.now())
+                first=pr.save(c,pid,'fixture-author',dict(expected_version=1,document=blocked_doc),server.now())
                 unresolved=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(first['current']),server.now()))
-                current=pr.save(c,pid,'fixture-author',dict(expected_version=1,document=document),server.now())
+                current=pr.save(c,pid,'fixture-author',dict(expected_version=2,document=document),server.now())
                 row=current['current']
                 stale=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(first['current']),server.now()))
                 wrong_digest=denied(lambda:pr.approve(c,pid,'fixture-reviewer',approval(row,digest='wrong'),server.now()))
@@ -70,7 +76,7 @@ def main():
                 approved=pr.approve(c,pid,'fixture-reviewer',approval(row),server.now())
             with server.db() as c:
                 persisted=pr.view(c,pid)
-                revised=pr.save(c,pid,'fixture-author',dict(expected_version=2,document=document),server.now())
+                revised=pr.save(c,pid,'fixture-author',dict(expected_version=3,document=document),server.now())
                 usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
                 calls=[dict(r) for r in c.execute('SELECT lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
                 guard=server.BUDGET_GUARD.view(c,all_projects=True)

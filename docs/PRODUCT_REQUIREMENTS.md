@@ -28,3 +28,14 @@ The approval actor is a test fixture, not an actual human sign-off. This is not 
 acceptance: durable queue, Research/BA collaboration, HTTP/API integration, real human
 adoption, provenance in production storage and browser coverage remain to be delivered.
 The existing human-authored UI and legacy pipeline remain unchanged.
+
+## P6.1c — Durable discovery integration (pending CI)
+- New queue kind requirements, with startup migration preserving legacy queue rows and events.
+- POST /api/projects/{pid}/requirements/discover with confirmation RUN AI REQUIREMENTS.
+- GET /api/projects/{pid}/requirements includes latest task, evidence, models and adoption readiness.
+- POST /api/projects/{pid}/requirements/adopt with queue_id, digest, expected_version and confirmation ADOPT AI REQUIREMENTS.
+- Worker uses existing tracked provider, routing, resource, budget and concurrency guards; demo rejected.
+- Evidence plus terminal state commit together. Interrupted jobs are not automatically replayed; explicit retry captures a fresh idea/current version.
+- Reviewed draft adoption is explicit, project-scoped and stale-version protected. It creates an unapproved revision with a provenance link; separate human approval remains mandatory.
+- Running discovery cannot be cancelled or paused mid-inference; queued tasks can be controlled in Task Queue.
+- UI polls discovery state without overwriting a user's document edits. Research/BA collaboration and P6.2 enforcement remain separate increments.

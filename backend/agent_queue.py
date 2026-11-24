@@ -13,10 +13,40 @@ ACTIVE=('queued','running','paused','waiting_approval')
 TERMINAL=('succeeded','dead','interrupted','cancelled')
 MAX_QUEUED=200
 
+def migrate_requirements_kind(c):
+    old=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_queue'").fetchone()
+    if not old or "'requirements'" in old[0]:return
+    # SQLite cannot alter CHECK constraints. Startup-only atomic rebuild with original IDs,
+    # row order and dependent event/queue links preserved. Never disable FK inside a transaction.
+    if c.in_transaction:raise RuntimeError('Queue migration requires an idle connection')
+    enabled=c.execute('PRAGMA foreign_keys').fetchone()[0]
+    sql=old[0].replace("CHECK(kind IN ('pipeline','coding'))","CHECK(kind IN ('pipeline','coding','requirements'))")
+    if sql==old[0]:raise RuntimeError('Unknown queue schema; migration blocked')
+    sql=sql.replace('CREATE TABLE agent_queue(','CREATE TABLE agent_queue_new(',1)
+    if 'CREATE TABLE agent_queue_new(' not in sql:
+        raise RuntimeError('Unknown queue table declaration')
+    c.execute('PRAGMA foreign_keys=OFF')
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute(sql)
+        c.execute('INSERT INTO agent_queue_new(rowid,id,project_id,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,provider_revision,provider_fingerprint,status,control,reason,checkpoint_stage,attempts,deferrals,available_at,created_at,updated_at) SELECT rowid,id,project_id,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,provider_revision,provider_fingerprint,status,control,reason,checkpoint_stage,attempts,deferrals,available_at,created_at,updated_at FROM agent_queue')
+        c.execute('DROP TABLE agent_queue')
+        c.execute('ALTER TABLE agent_queue_new RENAME TO agent_queue')
+        c.execute("CREATE UNIQUE INDEX aq_active_kind ON agent_queue(project_id,kind) WHERE status IN ('queued','running','paused','waiting_approval')")
+        c.execute("CREATE UNIQUE INDEX aq_one_running_project ON agent_queue(project_id) WHERE status='running'")
+        c.execute("CREATE INDEX aq_dispatch ON agent_queue(status,available_at,priority,created_at)")
+        if c.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Queue migration foreign key violation')
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:c.execute('PRAGMA foreign_keys='+('ON' if enabled else 'OFF'))
+
 def ensure_schema(c):
+    migrate_requirements_kind(c)
     c.execute("""CREATE TABLE IF NOT EXISTS agent_queue(
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-        kind TEXT NOT NULL CHECK(kind IN ('pipeline','coding')), mode TEXT,
+        kind TEXT NOT NULL CHECK(kind IN ('pipeline','coding','requirements')), mode TEXT,
         coding_job_id TEXT UNIQUE, actor TEXT NOT NULL,
         priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 9),
         dependency_id TEXT REFERENCES agent_queue(id), retry_of TEXT REFERENCES agent_queue(id),
@@ -60,9 +90,10 @@ def get(c,pid,identifier):
 def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,priority=5,dependency_id=None,retry_of=None,now=None,routing=None):
     now=int(time.time()) if now is None else now
     if not permitted(c,actor,pid):raise PermissionError('Project write permission required')
-    if kind not in ('pipeline','coding') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
+    if kind not in ('pipeline','coding','requirements') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
     if kind=='pipeline' and (mode not in ('next','all') or coding_job_id is not None):raise ValueError('Invalid pipeline task')
     if kind=='coding' and (not coding_job_id or mode is not None):raise ValueError('Invalid coding task')
+    if kind=='requirements' and (mode is not None or coding_job_id is not None):raise ValueError('Invalid requirements task')
     if active(c,pid,kind):raise ValueError('Project already has an active task of this kind')
     if c.execute("SELECT COUNT(*) FROM agent_queue WHERE status IN ('queued','running','paused','waiting_approval')").fetchone()[0]>=MAX_QUEUED:
         raise ValueError('Queue capacity reached')
@@ -131,6 +162,11 @@ def boundary(c,row,result,now,stamp,stage=None):
         fail(c,row,'execution_failed',now,stamp);return
     if result=='needs_revision':
         fail(c,row,'quality_gate',now,stamp);return
+    if row['kind']=='requirements':
+        persisted=c.execute('SELECT ready FROM requirement_discovery_runs WHERE queue_id=? AND project_id=?',(row['id'],row['project_id'])).fetchone()
+        if result!='ready' or not persisted or not persisted[0]:
+            fail(c,row,'requirements_completion_mismatch',now,stamp);return
+        change(c,row,'succeeded','ready_for_human_review',now,control='');return
     if row['kind']=='coding':
         # The persisted job is authoritative. Recheck inside the queue completion
         # transaction, not just the dispatcher's earlier result.

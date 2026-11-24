@@ -8,7 +8,7 @@ import cost_store
 DEPARTMENTS=('po','research','ba','pm','design','techlead','dev','qa','qc','security','devops','marketing')
 SPECIALTY={'po':'reasoning','research':'research','ba':'reasoning','pm':'reasoning','design':'design','techlead':'coding','dev':'coding','qa':'coding','qc':'coding','security':'security','devops':'coding','marketing':'marketing'}
 CAPABILITIES={'general','coding','reasoning','research','design','security','marketing','structured'}
-KINDS=('stage','coding','chat')
+KINDS=('stage','coding','chat','requirements')
 MIB=1024**2
 
 def digest(value):
@@ -63,7 +63,7 @@ def classify(department,kind,chars):
     if department not in DEPARTMENTS or kind not in KINDS or not integer(chars,0,1000000):raise ValueError('Invalid routing task metadata')
     high=kind=='coding' or department in ('techlead','security','devops') or chars>=4000
     return {'department':department,'kind':kind,'complexity':'high' if high else 'standard',
-            'specialty':SPECIALTY[department],'structured':kind=='coding','min_context':8192 if high else 4096}
+            'specialty':SPECIALTY[department],'structured':kind in ('coding','requirements'),'min_context':8192 if high or kind=='requirements' else 4096}
 
 def evaluate(c,candidate,task,config,metrics,gpu):
     lane=candidate['lane'];is_local=local(lane);caps=candidate['capabilities']

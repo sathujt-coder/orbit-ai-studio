@@ -38,8 +38,8 @@ def scope(c,method,path,query='',body=None):
         if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/requirements(?:/(approve))?',path)
-        if m:return (m[1],'approve' if m[2] else 'write')
+        m=re.fullmatch(r'/api/projects/('+ID+r')/requirements(?:/(approve|discover|adopt))?',path)
+        if m:return (m[1],'approve' if m[2]=='approve' else 'write')
         if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):
             pid=body.get('project_id','')
             return (pid if isinstance(pid,str) else '', {'/api/github/preview':'read','/api/github/draft-pr':'publish'}.get(path,'write'))
