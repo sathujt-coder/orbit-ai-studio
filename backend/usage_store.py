@@ -2,6 +2,7 @@
 import time
 import uuid
 import model_provider as mp
+import cost_store
 
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS ai_usage(
@@ -14,6 +15,7 @@ def ensure_schema(c):
       source TEXT NOT NULL)""")
     c.execute('CREATE INDEX IF NOT EXISTS ai_usage_project_time ON ai_usage(project_id,started_at)')
     c.execute('CREATE INDEX IF NOT EXISTS ai_usage_time ON ai_usage(started_at)')
+    cost_store.ensure_schema(c)
 
 def start(c,lane,project_id,agent_id,purpose,run_id=None):
     if lane.provider=='demo':raise ValueError('Demo does not consume model tokens')
@@ -21,6 +23,7 @@ def start(c,lane,project_id,agent_id,purpose,run_id=None):
     c.execute("""INSERT INTO ai_usage(id,project_id,agent_id,lane,provider,model,purpose,run_id,started_at,status,coverage,source)
                  VALUES(?,?,?,?,?,?,?,?,?,'pending','unknown','none')""",
               (identifier,project_id,agent_id,lane.lane,lane.provider,lane.model,purpose,run_id,int(time.time())))
+    cost_store.snapshot(c,identifier,lane)
     return identifier
 
 def finish(c,identifier,event):

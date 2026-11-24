@@ -59,7 +59,7 @@ def main():
                     fd=os.open(db_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
                 os.environ.update(AI_COMPANY_DB=str(db_path),AI_PROVIDER='demo')
                 for k in ('AI_PROVIDER_A','AI_PROVIDER_B'):os.environ.pop(k,None)
-                import server,coding_factory as cf,usage_store
+                import server,coding_factory as cf,usage_store,cost_store
                 server.init_db()
                 with server.db() as c:
                     pid=server.create_project('Local inference smoke','Small independent Web backend arithmetic module for a synthetic test only.','Web app',c)
@@ -115,7 +115,9 @@ def main():
                 with server.db() as c:
                     j=cf.detail(c,jid)
                     usage=usage_store.summary(c,pid,1)
+                    costs=cost_store.summary(c,pid,1)
                 report['token_usage']=usage
+                report['ai_cost']=costs
                 report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),'structured_diagnostics':diagnostics,'file_recoveries':recoveries,'intelligent_repairs':repair_events,
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
@@ -125,6 +127,9 @@ def main():
                 if code==0 and (usage['totals']['requests']!=len(calls) or usage['totals']['complete_calls']!=len(calls) or usage['totals']['total_tokens'] is None or usage['totals']['total_tokens']<=0):
                     report['usage_gate']='BLOCK';code=2
                 else:report['usage_gate']='PASS' if code==0 else 'not_accepted'
+                if code==0 and (costs['totals']['requests']!=len(calls) or costs['totals']['local_assumed_zero_calls']!=len(calls) or costs['totals']['total_usd']!='0.000000000000'):
+                    report['cost_gate']='BLOCK';code=2
+                else:report['cost_gate']='PASS' if code==0 else 'not_accepted'
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__
