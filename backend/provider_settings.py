@@ -48,30 +48,32 @@ def lane_form(lane):
     return {'provider':lane.provider,'url':lane.base_url,'model':lane.model,'timeout':lane.timeout,
             'temperature':lane.temperature,'context_window':lane.context_window,'max_tokens':lane.max_tokens}
 
+def validate_lane(name,item,allow):
+    if not isinstance(item,dict) or set(item)!={'provider','url','model','timeout','temperature','context_window','max_tokens'}:
+        raise ValueError('Invalid lane settings')
+    kind=item['provider'];url=item['url'];model=item['model']
+    if kind not in mp.KINDS or not isinstance(url,str) or not isinstance(model,str):raise ValueError('Invalid provider settings')
+    if not model.strip() or len(model)>200 or any(ord(x)<32 or ord(x)==127 for x in model):
+        raise ValueError('Invalid model identifier')
+    if kind=='demo':
+        url='';key=''
+    else:
+        url=mp.checked_url(url)
+        if (kind,url) not in allow:raise PermissionError('Endpoint not approved by deployment operator')
+        key=allow[(kind,url)]
+        if kind=='ollama' and 'cloud' in model.lower():raise ValueError('Cloud-tagged Ollama models are not allowed')
+    timeout,temp,ctx,tokens=(item[k] for k in ('timeout','temperature','context_window','max_tokens'))
+    if type(timeout) is not int or not 1<=timeout<=600:raise ValueError('Timeout must be 1–600 seconds')
+    if type(temp) not in (float,int) or not 0<=temp<=1:raise ValueError('Temperature must be 0–1')
+    if type(ctx) is not int or not 1024<=ctx<=32768:raise ValueError('Context must be 1024–32768')
+    if type(tokens) is not int or not 64<=tokens<=8192 or tokens>=ctx:raise ValueError('Output tokens must be 64–8192 and below context')
+    if len(key)>4096 or any(ord(ch)<33 or ord(ch)>126 for ch in key):raise ValueError('Invalid deployment credential')
+    return mp.Lane(name,kind,url,model.strip(),key,timeout,temp,ctx,tokens)
+
 def validate(config,env,initial):
     if not isinstance(config,dict) or set(config)!={'A','B'}:raise ValueError('Both lanes are required')
-    allow=endpoints(env,initial);lanes={}
-    for name,item in config.items():
-        if not isinstance(item,dict) or set(item)!={'provider','url','model','timeout','temperature','context_window','max_tokens'}:
-            raise ValueError('Invalid lane settings')
-        kind=item['provider'];url=item['url'];model=item['model']
-        if kind not in mp.KINDS or not isinstance(url,str) or not isinstance(model,str):raise ValueError('Invalid provider settings')
-        if not model.strip() or len(model)>200 or any(ord(x)<32 or ord(x)==127 for x in model):
-            raise ValueError('Invalid model identifier')
-        if kind=='demo':
-            url='';key=''
-        else:
-            url=mp.checked_url(url)
-            if (kind,url) not in allow:raise PermissionError('Endpoint not approved by deployment operator')
-            key=allow[(kind,url)]
-            if kind=='ollama' and 'cloud' in model.lower():raise ValueError('Cloud-tagged Ollama models are not allowed')
-        timeout,temp,ctx,tokens=(item[k] for k in ('timeout','temperature','context_window','max_tokens'))
-        if type(timeout) is not int or not 1<=timeout<=600:raise ValueError('Timeout must be 1–600 seconds')
-        if type(temp) not in (float,int) or not 0<=temp<=1:raise ValueError('Temperature must be 0–1')
-        if type(ctx) is not int or not 1024<=ctx<=32768:raise ValueError('Context must be 1024–32768')
-        if type(tokens) is not int or not 64<=tokens<=8192 or tokens>=ctx:raise ValueError('Output tokens must be 64–8192 and below context')
-        if len(key)>4096 or any(ord(ch)<33 or ord(ch)>126 for ch in key):raise ValueError('Invalid deployment credential')
-        lanes[name]=mp.Lane(name,kind,url,model.strip(),key,timeout,temp,ctx,tokens)
+    allow=endpoints(env,initial)
+    lanes={name:validate_lane(name,item,allow) for name,item in config.items()}
     if any(x.provider=='demo' for x in lanes.values()):
         if not all(x.provider=='demo' for x in lanes.values()):raise ValueError('Demo cannot be mixed with real providers')
     else:mp.require_distinct_real(lanes)

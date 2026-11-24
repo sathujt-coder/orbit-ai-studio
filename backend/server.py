@@ -21,6 +21,7 @@ import cost_store
 import resource_manager
 import agent_queue
 import concurrency_control
+import model_routing
 import transport_security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,7 @@ MODEL_B = MODEL_LANES['B'].model
 LOCK = threading.RLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 CONCURRENCY = concurrency_control.Limiter()
+ROUTING = model_routing.load(os.environ,MODEL_LANES)
 RESOURCE_MODEL_LOCK = threading.Lock()
 RESOURCE_MODEL_LAST = 0.0
 QUEUE_WAKE = threading.Event()
@@ -105,6 +107,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
         agent_queue.ensure_schema(c)
+        model_routing.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -192,6 +195,20 @@ def get_preceding(pid, stage_id):
 def provider_snapshot():
     with LOCK,db() as c:return provider_settings.load(c,os.environ,MODEL_LANES)
 
+def route_pair(base,pid,run_id,department,kind,chars,*,preview=False):
+    task=model_routing.classify(department,kind,chars)
+    metrics={};gpu=None
+    if ROUTING['mode']=='smart' and model_provider.mode(base)!='demo':
+        metrics=RESOURCE_MANAGER.measure_fn()
+        if any(r['min_vram_mib'] for pool in ROUTING['registry'].values() for r in pool):
+            gpu=RESOURCE_MANAGER.snapshot(include_gpu=True)['gpu']
+    with LOCK,db() as c:
+        lanes,decision=model_routing.select(c,ROUTING,base,task,metrics,gpu)
+        if not preview:model_routing.record(c,pid,run_id,decision)
+    if preview:return decision
+    if lanes is None:raise model_provider.RoutingError('No eligible distinct routing pair; inspect routing history')
+    return lanes
+
 def snapshot_call(lanes,*,project_id=None,department='system',purpose='unattributed',run_id=None):
     def tracked(system,user,lane,phase,**kwargs):
         return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=project_id,
@@ -262,14 +279,15 @@ def parse_review(raw):
 
 def run_stage(pid, sid, lanes=None):
     lanes=provider_snapshot()[1] if lanes is None else lanes
-    mode=model_provider.mode(lanes)
     run_id=uid()
-    llm=snapshot_call(lanes,project_id=pid,department=sid,run_id=run_id,purpose='stage')
     with LOCK,db() as c:
         project=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
+    context=get_preceding(pid,sid)
+    lanes=route_pair(lanes,pid,run_id,sid,'stage',len(project['idea'])+len(context))
+    mode=model_provider.mode(lanes)
+    llm=snapshot_call(lanes,project_id=pid,department=sid,run_id=run_id,purpose='stage')
     s=STAGE_BY_ID[sid]
     set_status(pid,sid,'drafting',f'{s["name"]}: A và B bắt đầu nghiên cứu độc lập.')
-    context=get_preceding(pid,sid)
     drafts={}
     for lane in ('A','B'):
         aid=f'{sid}-{lane}'
@@ -341,7 +359,7 @@ def enqueue_pipeline(pid,actor,mode,priority=5,dependency_id=None,retry_of=None)
             stage=agent_queue.next_stage(c,pid)
             if stage is None or stage['status']!='queued':raise ValueError('No eligible stage; resolve quality or approval gate first')
             revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
-            identifier=agent_queue.enqueue(c,pid,'pipeline',actor,revision,lanes,mode=mode,priority=priority,dependency_id=dependency_id,retry_of=retry_of)
+            identifier=agent_queue.enqueue(c,pid,'pipeline',actor,revision,lanes,mode=mode,priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
     QUEUE_WAKE.set()
     return identifier
 
@@ -350,7 +368,7 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
         revision,lanes=provider_snapshot()
         task={}
         def insert(c,jid):
-            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,priority=priority,dependency_id=dependency_id,retry_of=retry_of)
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
         jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
@@ -368,7 +386,7 @@ def dispatch_one():
             if not agent_queue.permitted(c,row['actor'],pid):
                 agent_queue.fail(c,row,'permission_revoked',int(time.time()),now());return True
             revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
-            if revision!=row['provider_revision'] or agent_queue.fingerprint(lanes)!=row['provider_fingerprint']:
+            if revision!=row['provider_revision'] or agent_queue.fingerprint(lanes,ROUTING['fingerprint'])!=row['provider_fingerprint']:
                 agent_queue.fail(c,row,'provider_configuration_changed',int(time.time()),now());return True
             if row['control']:
                 agent_queue.defer(c,row,int(time.time()),now());return True
@@ -388,6 +406,10 @@ def dispatch_one():
             result=run_stage(pid,stage,lanes)
         else:
             jid=row['coding_job_id']
+            with LOCK,db() as c:
+                spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
+            lanes=route_pair(lanes,pid,jid,'dev','coding',len(spec)+len(get_preceding(pid,'dev')))
+            mode=model_provider.mode(lanes)
             llm=None if mode=='demo' else snapshot_call(lanes,project_id=pid,department='dev',purpose='coding',run_id=jid)
             coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
             with LOCK,db() as c:
@@ -452,11 +474,14 @@ def agent_chat(pid,aid,message):
     sid=aid.rsplit('-',1)[0]
     if sid not in STAGE_BY_ID or aid not in [f'{sid}-A',f'{sid}-B']: raise ValueError('Agent không hợp lệ')
     if not message.strip(): raise ValueError('Nội dung trống')
-    llm=snapshot_call(lanes,project_id=pid,department=sid,purpose='agent_chat',run_id=uid())
+    run_id=uid()
     with LOCK,db() as c:
         p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Không tìm thấy dự án')
-        c.execute('INSERT INTO chat VALUES(?,?,?,?,?,?)',(uid(),pid,aid,'user',message[:2500],now()))
+    context=get_preceding(pid,sid)
+    lanes=route_pair(lanes,pid,run_id,sid,'chat',len(message[:2500])+len(context))
+    llm=snapshot_call(lanes,project_id=pid,department=sid,purpose='agent_chat',run_id=run_id)
+    with LOCK,db() as c:c.execute('INSERT INTO chat VALUES(?,?,?,?,?,?)',(uid(),pid,aid,'user',message[:2500],now()))
     if model_provider.mode(lanes)=='demo':
         reply=(f'[DEMO] Tôi là {aid}, phụ trách {STAGE_BY_ID[sid]["name"]}. '
                f'Với yêu cầu “{message[:110]}”, tôi đề xuất: (1) xác định đầu ra và tiêu chí chấp nhận; '
@@ -464,7 +489,6 @@ def agent_chat(pid,aid,message):
                'Kết nối Ollama hoặc API để nhận tư vấn AI thực.')
     else:
         with LOCK,db() as c: p=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
-        context=get_preceding(pid,sid)
         reply=llm(f'Bạn là {aid}, {STAGE_BY_ID[sid]["name"]}, một agent của công ty AI. '
                          'Trả lời ngắn gọn, thực tế và bằng tiếng Việt. Nếu không chắc, nói rõ giả định.',
                          f'Dự án: {p["name"]}\nBối cảnh:\n{context[:4000]}\n\nYêu cầu từ người quản lý:\n{message[:2500]}',aid[-1])
@@ -537,10 +561,12 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html'):
-                with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html'):
+                with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
+                if path=='/routing.html' and not provider_settings.is_admin(session['user']):
+                    self.send_json(403,{'error':'Operator required'});return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue(?:/[A-Za-z0-9_-]{1,100})?',path):
@@ -574,13 +600,21 @@ class Handler(SimpleHTTPRequestHandler):
                 days=int(q.get('days',['7'])[0])
                 with LOCK,db() as c:data=usage_store.summary(c,self.auth_context[1],days,all_projects=path=='/api/provider/usage')
                 self.send_json(200,data);return
+            if path=='/api/provider/routing':
+                with LOCK,db() as c:
+                    data=model_routing.public(ROUTING)
+                    data['history']=model_routing.history(c,all_projects=True)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/routing',path):
+                with LOCK,db() as c:data={'history':model_routing.history(c,self.auth_context[1])}
+                self.send_json(200,data);return
             if path=='/api/provider/settings':
                 with LOCK,db() as c:data=provider_settings.view(c,os.environ,MODEL_LANES)
                 self.send_json(200,data);return
             if path=='/api/bootstrap':
                 revision,lanes=provider_snapshot()
                 agents=[dict(a,model=lanes[a['lane']].public()['model']) for a in AGENTS]
-                self.send_json(200,dict(stages=STAGES,agents=agents,projects=self.visible_projects(),provider=dict(model_provider.public_config(lanes),revision=revision),provider_admin=provider_settings.is_admin(self.auth_context[0]),version='0.6.0-web-first')); return
+                self.send_json(200,dict(stages=STAGES,agents=agents,projects=self.visible_projects(),provider=dict(model_provider.public_config(lanes),revision=revision,routing_mode=ROUTING['mode']),provider_admin=provider_settings.is_admin(self.auth_context[0]),version='0.6.0-web-first')); return
             if path.startswith('/api/projects/') and path.endswith('/acceptance'):
                 with LOCK,db() as c: data=acceptance_store.view(c,self.auth_context[1])
                 self.send_json(200,data);return
@@ -628,7 +662,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/styles.css','/world3d.js','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -645,6 +679,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if path=='/api/provider/routing/preview':
+                if set(body)!={'department','kind','chars'}:raise ValueError('Routing preview accepts task metadata only')
+                data=route_pair(provider_snapshot()[1],None,None,body['department'],body['kind'],body['chars'],preview=True)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/queue/[A-Za-z0-9_-]{1,100}/(pause|resume|cancel|priority|retry)',path):
                 actor,pid,_=self.auth_context;parts=path.strip('/').split('/');identifier,action=parts[4:]
                 if action=='retry':data=retry_queue(pid,identifier,actor,body.get('confirmation'))
@@ -734,6 +772,8 @@ class Handler(SimpleHTTPRequestHandler):
                 reply=agent_chat(str(body.get('project_id','')),str(body.get('agent_id','')),str(body.get('message','')))
                 self.send_json(200,{'reply':reply});return
             self.send_json(404,{'error':'Endpoint không tồn tại'})
+        except model_provider.RoutingError as ex:
+            self.send_json(503,{'error':str(ex)})
         except model_provider.ConcurrencyError as ex:
             self.send_json(429,{'error':str(ex)})
         except model_provider.ResourceError as ex:
