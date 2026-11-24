@@ -105,7 +105,11 @@ Các biến môi trường:
 | `AI_PORT` | `8787` | Port máy chủ |
 | `AI_COMPANY_DB` | `./company.sqlite` | Nơi lưu SQLite |
 
-**An toàn:** Chỉ chạy tại `127.0.0.1` trong MVP vì API chưa có đăng nhập, RBAC, rate limiting, TLS, cách ly workspace hay giám sát chi phí. Không bind public lên Internet khi chưa bổ sung các lớp bảo vệ.
+**An toàn:** Chỉ chạy tại `127.0.0.1` trong MVP; đã có xác thực và RBAC cơ bản nhưng chưa có TLS, bảo mật production, cách ly workspace hoàn chỉnh hay giám sát chi phí. Không bind public lên Internet khi chưa bổ sung các lớp bảo vệ.
+
+### P4.1 — Cấu hình provider riêng cho hai agent
+
+Xem [hướng dẫn cấu hình và probe](docs/RELEASE_NOTES_0.6_MODEL_PROVIDER.md). Các biến có hậu tố `_A` / `_B` cho phép chỉ định endpoint, provider, key và timeout riêng. `python tools/probe_models.py` kiểm tra cấu hình mà không gọi AI. Để thực sự kiểm tra hai model đã cấu hình, chạy `python tools/probe_models.py --execute --confirm 'PROBE REAL MODELS'`. Không đưa API key vào mã nguồn.
 
 ## 5. Kiến trúc & API
 

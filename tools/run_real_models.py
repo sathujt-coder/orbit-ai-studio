@@ -6,15 +6,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
+import model_provider
 def config(env):
-    provider=env.get('AI_PROVIDER','demo')
-    a=env.get('AI_MODEL_A','').strip();b=env.get('AI_MODEL_B','').strip()
-    url=urlsplit(env.get('AI_BASE_URL','http://127.0.0.1:11434/v1'))
-    if provider not in ('ollama','openai-compatible') or not a or not b or a==b:
-        raise ValueError('Explicit real provider and two distinct model IDs required')
-    if not url.hostname or url.username or url.password or url.query or url.fragment or (url.scheme!='https' and not (url.scheme=='http' and url.hostname in ('localhost','127.0.0.1'))):
-        raise ValueError('Use HTTPS provider URL or localhost HTTP')
-    return {'provider':provider,'model_a':a,'model_b':b,'host':url.hostname}
+    lanes=model_provider.require_distinct_real(model_provider.load_config(env))
+    return {'provider':model_provider.mode(lanes),'model_a':lanes['A'].model,'model_b':lanes['B'].model,
+            'lanes':{k:v.public() for k,v in lanes.items()}}
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--db',type=Path,required=True)

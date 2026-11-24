@@ -14,18 +14,17 @@ import auth_store
 import auth_http
 import auth_policy
 import acceptance_store
+import model_provider
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
 DB_PATH = Path(os.environ.get('AI_COMPANY_DB', str(ROOT / 'company.sqlite')))
 HOST = os.environ.get('AI_HOST', '127.0.0.1')
 PORT = int(os.environ.get('AI_PORT', '8787'))
-PROVIDER = os.environ.get('AI_PROVIDER', 'demo').strip().lower()
-BASE_URL = os.environ.get('AI_BASE_URL', 'http://127.0.0.1:11434/v1').rstrip('/')
-API_KEY = os.environ.get('AI_API_KEY', '')
-MODEL_A = os.environ.get('AI_MODEL_A', os.environ.get('AI_MODEL', 'qwen3:8b'))
-MODEL_B = os.environ.get('AI_MODEL_B', MODEL_A)
-REQUEST_TIMEOUT = int(os.environ.get('AI_TIMEOUT', '150'))
+MODEL_LANES = model_provider.load_config(os.environ)
+PROVIDER = model_provider.mode(MODEL_LANES)
+MODEL_A = MODEL_LANES['A'].model
+MODEL_B = MODEL_LANES['B'].model
 LOCK = threading.RLock()
 RUNNING: dict[str, dict] = {}
 
@@ -170,26 +169,9 @@ def get_preceding(pid, stage_id):
     return '\n\n'.join('['+s+'] '+indexed[s][:1200] for s in STAGE_IDS[:ix] if s in indexed)[-7500:]
 
 
-def clean_model_text(text):
-    if not isinstance(text,str): return str(text)
-    return re.sub(r'<think>[\s\S]*?</think>','',text,flags=re.I).strip()[:22000]
-
-
 def model_call(system,user,lane='A'):
-    if PROVIDER == 'demo':
-        raise RuntimeError('Internal: demo responses generated separately')
-    if PROVIDER not in ('ollama','openai-compatible'):
-        raise ValueError('AI_PROVIDER phải là demo, ollama hoặc openai-compatible')
-    model=MODEL_A if lane=='A' else MODEL_B
-    payload=json.dumps({'model':model,'messages':[{'role':'system','content':system},{'role':'user','content':user}], 'temperature':0.45, 'stream':False},ensure_ascii=False).encode()
-    headers={'Content-Type':'application/json'}
-    if API_KEY: headers['Authorization']='Bearer '+API_KEY
-    req=urllib.request.Request(BASE_URL+'/chat/completions',data=payload,headers=headers,method='POST')
-    try:
-        with urllib.request.urlopen(req,timeout=REQUEST_TIMEOUT) as r: data=json.loads(r.read(4_000_000).decode())
-        return clean_model_text(data['choices'][0]['message']['content'])
-    except (urllib.error.URLError,KeyError,ValueError) as ex:
-        raise RuntimeError(f'AI endpoint {BASE_URL}: {ex}') from ex
+    if lane not in MODEL_LANES:raise ValueError('Unknown model lane')
+    return model_provider.chat(MODEL_LANES[lane],system,user)
 
 
 DEMO_CONTENT = {
@@ -459,7 +441,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
-                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=self.visible_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.6.0-web-first')); return
+                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=self.visible_projects(),provider=model_provider.public_config(MODEL_LANES),version='0.6.0-web-first')); return
             if path.startswith('/api/projects/') and path.endswith('/acceptance'):
                 with LOCK,db() as c: data=acceptance_store.view(c,self.auth_context[1])
                 self.send_json(200,data);return
