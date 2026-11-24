@@ -5,6 +5,7 @@ const $=id=>document.getElementById(id), statusMap={queued:'Đang chờ',draftin
 const activeStatuses=['drafting','reviewing','synthesizing'],completedStatuses=['done','approved'];
 const esc=str=>String(str??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ago=date=>{let n=(Date.now()-new Date(date).getTime())/1000;if(n<60)return 'Vừa xong';if(n<3600)return Math.floor(n/60)+' phút trước';if(n<86400)return Math.floor(n/3600)+' giờ trước';return new Date(date).toLocaleDateString('vi-VN')};
+let codingQuality=null;
 let codingJobs=[],codingSelected='',codingBusy=false,codingDetail=null,codingVerifications=[];
 let githubConfig=null,githubExports=[],githubSelected='',githubVerified='',githubBusy=false;
 let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')||'',selectedDept='techlead',selectedAgent='techlead-A',world=null,loading=false,documentText='',showAll=false,artifactFilter=null,chatSending=false;
@@ -60,13 +61,14 @@ async function startCoding(e){e.preventDefault();if(codingBusy||!projectId)retur
 async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  try{const r=await api('/api/projects/'+encodeURIComponent(pid)+'/coding');if(pid!==projectId)return;
  codingJobs=r.jobs||[];renderCoding();
- if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status))&&!codingDetail)await loadCodingDetail();
+ if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status)))await loadCodingDetail();
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
 async function loadCodingDetail(){if(!codingSelected)return;
- try{const id=codingSelected;codingDetail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');if(id!==codingSelected)return;codingVerifications=v.verifications||[];renderCoding()}
+ try{const id=codingSelected;const detail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');const quality=await api('/api/coding/'+encodeURIComponent(id)+'/quality');if(id!==codingSelected)return;codingDetail=detail;codingQuality=quality;codingVerifications=v.verifications||[];renderCoding()}
  catch(err){toast(err.message,true)}}
 function renderCoding(){if(!bootstrap)return;
+ const q=$('codingQuality');if(q){const data=codingQuality?.job_id===codingSelected?codingQuality:null; q.textContent=data?['QUALITY GATE · '+data.status,'Profile: '+(data.verification?.profile||'—'),'Evidence: '+(data.verification?.id||'—'),'Gate: '+(data.verification?.gate||'NOT VERIFIED'),...Object.entries(data.verification?.lanes||{}).map(([k,v])=>'DEV-'+k+': '+v.status+' · '+v.steps.map(s=>s.name+' '+(s.passed?'PASS':'FAIL')).join(', ')),'Tech Lead: '+(data.selection_ready?'Đủ bằng chứng để lựa chọn':'Chưa đủ bằng chứng'),'Draft PR: '+(data.draft_pr?.status||'Chưa tạo'),'Production: CHƯA NGHIỆM THU'].join('\n'):'Chưa có dữ liệu Quality Gate.';}
  $('codingMode').textContent=bootstrap.provider.mode==='demo'?'DEMO · NO REAL CODE':'AI MODEL · SANDBOX CLI OPT-IN';
  const list=$('codingJobs');list.replaceChildren();if(!codingJobs.length){list.textContent='Chưa có job coding. Hãy giao một user story.';return}
  for(const j of codingJobs){const btn=document.createElement('button');btn.type='button';btn.className='coding-job'+(j.id===codingSelected?' selected':'');btn.dataset.job=j.id;

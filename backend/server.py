@@ -428,6 +428,9 @@ class Handler(SimpleHTTPRequestHandler):
                 parts = path.strip('/').split('/')
                 if len(parts) in (3,4) and parts[:2]==['api','coding']:
                     with LOCK,db() as c:
+                        if len(parts)==4 and parts[3]=='quality':
+                            from quality_dashboard import quality_summary
+                            self.send_json(200,quality_summary(c,coding_factory.detail(c,parts[2])));return
                         if len(parts)==4 and parts[3]=='verifications':
                             coding_factory.detail(c,parts[2])
                             self.send_json(200,{'verifications': verification_factory.list_reports(c,parts[2])});return
