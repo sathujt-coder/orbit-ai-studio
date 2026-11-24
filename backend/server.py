@@ -175,6 +175,11 @@ def model_call(system,user,lane='A'):
     if lane not in MODEL_LANES:raise ValueError('Unknown model lane')
     return model_provider.chat(MODEL_LANES[lane],system,user)
 
+def structured_model_call(system,user,lane,schema):
+    if lane not in MODEL_LANES:raise ValueError('Unknown model lane')
+    return model_provider.chat(MODEL_LANES[lane],system,user,schema=schema,max_tokens=4096)
+model_call.structured=structured_model_call
+
 
 DEMO_CONTENT = {
  'po': ('Vấn đề & cơ hội', 'Chân dung người dùng, JTBD, North Star Metric, phạm vi MVP, KPI 30/60/90 ngày'),

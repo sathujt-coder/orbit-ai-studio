@@ -2,6 +2,9 @@ name: Offline inference — actual local models
 on:
   pull_request:
     paths:
+      - backend/model_provider.py
+      - backend/coding_factory.py
+      - backend/server.py
       - tools/offline_inference_smoke.py
       - tools/setup_offline_models.sh
       - tools/run_offline_models.sh

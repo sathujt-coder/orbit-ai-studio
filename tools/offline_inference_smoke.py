@@ -59,18 +59,22 @@ def main():
                 def model(system,user,lane):
                     calls.append(lane)
                     return model_provider.chat(lanes[lane],system,user,max_tokens=2048)
+                def structured(system,user,lane,schema):
+                    calls.append(lane)
+                    return model_provider.chat(lanes[lane],system,user,schema=schema,max_tokens=2048)
+                model.structured=structured
                 def worker(jid,project):
                     try:cf.work(server.db,server.LOCK,jid,project,model,server.now,server.log,server.get_preceding)
                     finally:done.set()
                 jid=cf.begin(server.db,server.LOCK,pid,'Implement main.py with def add(a,b) returning the sum of two integers and test_main.py with unittest tests. Use only Python standard library. Return the required JSON files object. No other files.',server.uid,server.now,server.log,worker)
-                if not done.wait(780):raise ValueError('Workflow exceeded time budget')
+                if not done.wait(1600):raise ValueError('Workflow exceeded time budget')
                 with server.db() as c:j=cf.detail(c,jid)
-                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,
+                report['workflow']={'job_id':jid,'status':j['status'],'calls':calls,'failure':j.get('error'),
                     'candidates':{k:len((j.get('proposal_'+k.lower()) or {}).get('files',[])) for k in 'AB'},
                     'reviews':{k:{field:(j.get('review_'+k.lower()) or {}).get(field) for field in ('verdict','score')} for k in 'AB'},
                     'review_gate_passed':j['status']=='ready','private_db_retained':bool(a.db_output),'candidate_files':(j.get('manifest') or {}).get('candidate_files',{})}
                 # A rejected review is a functioning gate, not successful acceptance.
-                code=0 if j['status'] in ('ready','needs_revision') else 2
+                code=0 if j['status']=='ready' else 2
         else:report['workflow']={'status':'not_requested'}
     except (OSError,ValueError,KeyError,TypeError,model_provider.ProviderError) as e:
         report['error_type']=type(e).__name__

@@ -18,7 +18,7 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header('Location',self.server.redirect)
             self.end_headers()
             return
-        result=json.dumps({'choices':[{'message':{'content':'ORBIT_READY'}}]}).encode()
+        result=json.dumps({'done':True,'done_reason':'stop','message':{'content':'{"ok":true}'}} if self.path=='/api/chat' else {'choices':[{'message':{'content':'ORBIT_READY'}}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(result)))
@@ -71,3 +71,13 @@ class ProviderTests(unittest.TestCase):
         lanes=mp.load_config(dict(self.env,AI_PROVIDER_A='ollama'))
         self.assertEqual(mp.mode(lanes),'split')
         self.assertEqual(mp.public_config(lanes)['lanes']['A']['provider'],'ollama')
+
+    def test_ollama_native_structured(self):
+        lane=mp.load_config(dict(self.env,AI_PROVIDER_A='ollama'))['A']
+        schema={'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok']}
+        self.assertEqual(json.loads(mp.chat(lane,'system','user',schema=schema,max_tokens=128)),{'ok':True})
+        path,key,body=self.servers[0].received[0]
+        self.assertEqual(path,'/api/chat')
+        self.assertEqual(body['format'],schema)
+        self.assertEqual(body['options'],{'temperature':0,'num_predict':128})
+        self.assertEqual(key,'Bearer fixture-a')
