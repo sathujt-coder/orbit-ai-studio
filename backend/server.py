@@ -407,10 +407,10 @@ def run_requirements(pid,identifier,lanes):
             if row['status']!='running' or not agent_queue.permitted(c,row['actor'],pid):
                 raise PermissionError('Discovery no longer authorized')
         return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,
-            agent_id='po-'+lane,purpose=phase,run_id=identifier,runtime_settings=True,
-            max_tokens=min(2048,lanes[lane].max_tokens),schema=schema,
+            agent_id=({'research':'research','ba':'ba'}.get(phase.split('_',1)[0],'po'))+'-'+lane,purpose=phase,run_id=identifier,runtime_settings=True,
+            max_tokens=min(768 if phase.startswith(('research_','ba_')) else 2048,lanes[lane].max_tokens),schema=schema,
             resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
-    evidence=requirements_discovery.discover(call,idea)
+    evidence=requirements_discovery.collaborate(call,idea)
     # Evidence and terminal queue state commit atomically. Crash before this transaction is
     # uncertain execution; startup recovery will never automatically replay it.
     with LOCK,db() as c:

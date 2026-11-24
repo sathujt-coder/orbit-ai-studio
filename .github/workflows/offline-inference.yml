@@ -36,7 +36,7 @@ permissions:
 jobs:
   local-models:
     runs-on: ubuntu-24.04
-    timeout-minutes: 65
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,9 +99,9 @@ jobs:
       - name: P5.9 real 24-agent offline stress smoke (not 24h)
         run: |
           timeout 12m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" python:3.12-slim python /repo/tools/offline_stress.py --profile smoke --report /report/stress-smoke.json --confirm 'RUN LOCAL STRESS SMOKE'
-      - name: P6.1 — actual offline requirements discovery and approval storage
+      - name: P6.1 — actual Research, BA, PO collaboration and approval storage
         run: |
-          timeout 12m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" -e ORBIT_RESOURCE_MODE=enforce -e ORBIT_RESOURCE_MIN_FREE_MIB=64 -e ORBIT_RESOURCE_MAX_MEMORY_PERCENT=99 python:3.12-slim python /repo/tools/offline_requirements_smoke.py --report /report/requirements.json --confirm 'RUN LOCAL REQUIREMENTS'
+          timeout 22m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" -e ORBIT_RESOURCE_MODE=enforce -e ORBIT_RESOURCE_MIN_FREE_MIB=64 -e ORBIT_RESOURCE_MAX_MEMORY_PERCENT=99 python:3.12-slim python /repo/tools/offline_requirements_smoke.py --report /report/requirements.json --confirm 'RUN LOCAL REQUIREMENTS'
       - name: Verify actual Ollama container resource bounds
         if: always()
         run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources.json"

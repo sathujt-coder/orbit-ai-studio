@@ -39,3 +39,11 @@ The existing human-authored UI and legacy pipeline remain unchanged.
 - Reviewed draft adoption is explicit, project-scoped and stale-version protected. It creates an unapproved revision with a provenance link; separate human approval remains mandatory.
 - Running discovery cannot be cancelled or paused mid-inference; queued tasks can be controlled in Task Queue.
 - UI polls discovery state without overwriting a user's document edits. Research/BA collaboration and P6.2 enforcement remain separate increments.
+
+## P6.1d — Research / BA collaboration (pending acceptance)
+- Research A/B independently analyze the supplied idea, then cross-review. No web search or fabricated market evidence.
+- BA A/B independently consume both research drafts/reviews; derive workflows, rules, edge cases and unknowns, then cross-review.
+- PO A/B independently consume both department handoffs, cross-review, synthesize and independently review the final document. Department blockers must be assessed and unresolved decisions preserved; semantic correctness remains a human-review responsibility.
+- One durable queue task uses a shared distinct routed A/B pair (not six different models), 14 bounded tracked calls, per-department agent IDs and existing guards. No automatic replay. A deployment must allow at least 14 calls per discovery run, subject to all other budget limits.
+- Full handoffs are included in existing project-scoped evidence and shown in the Requirements UI. No auto-adoption or auto-approval.
+- Real offline smoke now checks exact 14-call phase/agent provenance, department handoffs, token/cost ledgers and existing approval invariants. Browser E2E specific to Requirements and live human sign-off are still pending.

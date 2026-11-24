@@ -26,7 +26,7 @@ def main():
                 AI_MODEL_B='qwen2.5:3b',AI_BASE_URL='http://127.0.0.1:11434/v1',
                 AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
                 AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',ORBIT_BUDGET_MODE='enforce',
-                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='6')
+                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='14')
             import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
             import requirements_jobs as jobs, auth_store
             server.init_db()
@@ -78,7 +78,7 @@ def main():
                 persisted=pr.view(c,pid)
                 revised=pr.save(c,pid,'fixture-author',dict(expected_version=3,document=document),server.now())
                 usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
-                calls=[dict(r) for r in c.execute('SELECT lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
+                calls=[dict(r) for r in c.execute('SELECT agent_id,lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
                 guard=server.BUDGET_GUARD.view(c,all_projects=True)
                 integrity=c.execute('PRAGMA integrity_check').fetchone()[0]
                 foreign_keys=list(c.execute('PRAGMA foreign_key_check'))
@@ -86,11 +86,16 @@ def main():
                 wrong_confirmation_blocked=wrong_confirmation,not_ready_before_approval=not current['planning_ready'],
                 ready_after_approval=approved['planning_ready'],approval_persisted=persisted['planning_ready'] and persisted['current']['digest']==row['digest'],
                 new_revision_invalidates=not revised['planning_ready'],database_integrity=integrity=='ok' and not foreign_keys)
-            expected=[('A','requirements_proposal'),('B','requirements_proposal'),('A','requirements_cross_review'),
-                ('B','requirements_cross_review'),('A','requirements_synthesis'),('B','requirements_final_review')]
-            gates.update(real_calls=[(x['lane'],x['purpose']) for x in calls]==expected and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
-                token_ledger=usage['requests']==usage['complete_calls']==6,
-                local_cost=cost['local_assumed_zero_calls']==6, no_budget_leak=guard['totals']['held_calls']==0,
+            expected=[(dept+'-'+lane,dept+'_'+phase) for dept in ('research','ba')
+                for phase in ('proposal','cross_review') for lane in 'AB']
+            expected += [('po-A','requirements_proposal'),('po-B','requirements_proposal'),('po-A','requirements_cross_review'),
+                ('po-B','requirements_cross_review'),('po-A','requirements_synthesis'),('po-B','requirements_final_review')]
+            collaboration=evidence['collaboration']
+            gates.update(real_calls=[(x['agent_id'],x['purpose']) for x in calls]==expected and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+                department_evidence=collaboration['research_mode']=='input_analysis_only' and all(
+                    set(collaboration[d]['proposals'])==set(collaboration[d]['reviews'])=={'A','B'} for d in ('research','ba')),
+                token_ledger=usage['requests']==usage['complete_calls']==14,
+                local_cost=cost['local_assumed_zero_calls']==14, no_budget_leak=guard['totals']['held_calls']==0,
                 no_active_inference=server.CONCURRENCY.snapshot()['active']==0)
             report.update(gates=gates,calls=calls,token_usage=usage,cost=cost)
             require(all(gates.values()),'Acceptance gate failed')
