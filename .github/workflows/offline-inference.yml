@@ -5,6 +5,7 @@ on:
       - backend/model_provider.py
       - backend/coding_factory.py
       - backend/server.py
+      - tools/offline_sandbox_gate.py
       - tools/offline_inference_smoke.py
       - tools/setup_offline_models.sh
       - tools/run_offline_models.sh
@@ -36,20 +37,26 @@ jobs:
           docker rm -f orbit-download
       - name: Run inference with no external network
         run: |
-          mkdir -p "$RUNNER_TEMP/offline-report"
+          mkdir -p "$RUNNER_TEMP/offline-report" "$RUNNER_TEMP/offline-private"
+          chmod 700 "$RUNNER_TEMP/offline-private"
           docker run -d --name orbit-airgap --network none -e OLLAMA_NO_CLOUD=1 -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_CONTEXT_LENGTH=4096 -v orbit-offline-models:/root/.ollama ollama/ollama:latest
           test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' orbit-airgap)" = none
           for i in $(seq 1 60); do
             if docker exec orbit-airgap ollama list; then break; fi
             sleep 1
           done
-          docker run --rm --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --report /report/report.json --confirm 'RUN LOCAL INFERENCE'
+          docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" --mount "type=bind,src=$RUNNER_TEMP/offline-private,dst=/private" -e PYTHONDONTWRITEBYTECODE=1 python:3.12-slim python /repo/tools/offline_inference_smoke.py --workflow --db-output /private/job.sqlite --report /report/report.json --confirm 'RUN LOCAL INFERENCE'
+      - name: Verify actual AI candidates in isolated Docker sandboxes
+        run: |
+          image="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          jid="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow"]["job_id"])' "$RUNNER_TEMP/offline-report/report.json")"
+          python tools/offline_sandbox_gate.py --db "$RUNNER_TEMP/offline-private/job.sqlite" --inference-report "$RUNNER_TEMP/offline-report/report.json" --image "$image" --output "$RUNNER_TEMP/offline-report/sandbox.json" --confirm "RUN OFFLINE SANDBOX $jid"
       - name: Retain model inference evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: offline-inference-report
-          path: ${{ runner.temp }}/offline-report/report.json
+          path: ${{ runner.temp }}/offline-report/*.json
           if-no-files-found: warn
           retention-days: 7
       - name: Cleanup
@@ -57,3 +64,4 @@ jobs:
         run: |
           docker rm -f orbit-airgap orbit-download || true
           docker volume rm orbit-offline-models || true
+          rm -rf "$RUNNER_TEMP/offline-private"
