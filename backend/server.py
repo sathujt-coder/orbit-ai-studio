@@ -12,6 +12,7 @@ import coding_factory
 import verification_factory
 import auth_store
 import auth_http
+import auth_policy
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'web'
@@ -412,6 +413,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.end_headers(); self.wfile.write(data)
+    def do_HEAD(self):
+        # No API or protected HTML via inherited static HEAD handler.
+        self.send_response(405);self.end_headers()
+    def visible_projects(self):
+        with LOCK,db() as c:return auth_policy.visible_projects(c,self.auth_context[0])
+    def guard(self,method,path,body=None):
+        with LOCK,db() as c:
+            status,context=auth_policy.check(c,method,path,urlparse(self.path).query,body,self.headers,PORT)
+        if status!=200:
+            self.send_json(status,{'error':{401:'Authentication required',403:'Access denied',404:'Endpoint không tồn tại'}[status]});return False
+        self.auth_context=context
+        return True
     def do_GET(self):
         if not self.request_is_local():
             self.send_json(403, {'error':'Local host/origin required'}); return
@@ -420,10 +433,21 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/auth/session':
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers)
                 self.send_json(status,data,headers);return
+            if path.startswith('/api/') and not self.guard('GET',path):return
+            if path in ('/','/index.html'):
+                with LOCK,db() as c: status,_,_=auth_http.session(c,self.headers)
+                if status!=200:
+                    self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
             if path=='/api/github/status':
                 self.send_json(200, github_bridge.config()); return
             if path=='/api/bootstrap':
-                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=list_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.6.0-web-first')); return
+                self.send_json(200,dict(stages=STAGES,agents=AGENTS,projects=self.visible_projects(),provider=dict(mode=PROVIDER,modelA=MODEL_A if PROVIDER!='demo' else 'Demo mode',modelB=MODEL_B if PROVIDER!='demo' else 'Demo mode'),version='0.6.0-web-first')); return
+            if path.startswith('/api/projects/') and path.endswith('/members'):
+                with LOCK,db() as c: data=rows(c,'SELECT user_id,role FROM auth_memberships WHERE project_id=?', (self.auth_context[1],))
+                self.send_json(200,{'members':data});return
+            if path.startswith('/api/projects/') and path.endswith('/audit'):
+                with LOCK,db() as c: data=rows(c,'SELECT * FROM auth_audit WHERE project_id=? ORDER BY id DESC LIMIT 100',(self.auth_context[1],))
+                self.send_json(200,{'audit':data});return
             if path.startswith('/api/projects/') and path.endswith('/coding'):
                 pid = path.split('/')[3]
                 with LOCK,db() as c:
@@ -462,6 +486,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/styles.css','/world3d.js','/app.js'):
+                self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
     def do_POST(self):
@@ -475,6 +501,8 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c:
                     status,data,headers=auth_http.handle(c,path,self.headers,body,PORT)
                 self.send_json(status,data,headers);return
+            if not isinstance(body,dict):raise ValueError('Invalid body')
+            if not self.guard('POST',path,body):return
             if path=='/api/coding/start':
                 pid = str(body.get('project_id',''))
                 spec = body.get('spec','')
@@ -494,12 +522,21 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/projects':
                 name=str(body.get('name','')).strip();idea=str(body.get('idea','')).strip()
                 if len(name)<3 or len(idea)<10: raise ValueError('Tên tối thiểu 3 ký tự, ý tưởng tối thiểu 10 ký tự')
-                with LOCK,db() as c: pid=create_project(name,idea,str(body.get('platform','Web app')),c)
+                platform=str(body.get('platform','Web app'))
+                if platform not in ('Web app','SaaS + API'):raise ValueError('Web platform required')
+                with LOCK,db() as c:
+                    pid=create_project(name,idea,platform,c)
+                    auth_store.grant(c,self.auth_context[0],pid,'owner')
+                    auth_store.authorize(c,self.auth_context[0],pid,'manage')
                 self.send_json(201,{'project_id':pid});return
             if path.startswith('/api/projects/'):
                 spl=path.strip('/').split('/')
                 if len(spl)==4 and spl[0]=='api' and spl[1]=='projects':
                     pid,action=spl[2:]
+                    if action=='members':
+                        with LOCK,db() as c:
+                            auth_policy.set_member(c,self.auth_context[0],pid,str(body.get('user','')),str(body.get('role','')))
+                        self.send_json(200,{'ok':True});return
                     if action=='run': run_pipeline(pid,str(body.get('mode','next'))); self.send_json(200,{'ok':True});return
                     if action=='pause':
                         if not RUNNING.get(pid,{}).get('running'): raise ValueError('Dự án không chạy')
@@ -516,6 +553,8 @@ class Handler(SimpleHTTPRequestHandler):
                 reply=agent_chat(str(body.get('project_id','')),str(body.get('agent_id','')),str(body.get('message','')))
                 self.send_json(200,{'reply':reply});return
             self.send_json(404,{'error':'Endpoint không tồn tại'})
+        except PermissionError:
+            self.send_json(403,{'error':'Access denied'})
         except Exception as ex:
             self.send_json(400,{'error':str(ex)})
 

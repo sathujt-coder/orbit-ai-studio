@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
-const ORIGIN = 'http://127.0.0.1:8787';
+const {login,headers,ORIGIN}=require('./auth-helper.cjs');
 
 test('Web-first UI boots, project form excludes Mobile and creates a Web project', async () => {
   const browser = await chromium.launch({headless: true, args: ['--disable-gpu', '--no-sandbox']});
@@ -12,6 +12,7 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   try {
+    await login(page);
     const response = await page.goto(ORIGIN + '/', {waitUntil: 'domcontentloaded'});
     assert.equal(response.status(), 200);
     await page.locator('#projectSide .project-item').first().waitFor({timeout: 15000});
@@ -47,6 +48,7 @@ test('API rejects cross-origin and unsafe project creation', async () => {
   const browser = await chromium.launch({headless: true, args: ['--disable-gpu', '--no-sandbox']});
   const page = await browser.newPage();
   try {
+    const csrf=await login(page);
     const bootstrap = await page.request.get(ORIGIN + '/api/bootstrap');
     assert.equal(bootstrap.status(), 200);
     const data = await bootstrap.json();
@@ -58,7 +60,7 @@ test('API rejects cross-origin and unsafe project creation', async () => {
     });
     assert.equal(forbidden.status(), 403);
     const invalid = await page.request.post(ORIGIN + '/api/projects', {
-      headers: {'Content-Type':'application/json', 'X-ORBIT-UI':'1'},
+      headers: headers(csrf),
       data: {name:'A', idea:'short'}
     });
     assert.equal(invalid.status(), 400);
@@ -71,11 +73,12 @@ test('Quality dashboard shows unverified state for a real demo coding job', asyn
  const browser=await chromium.launch({headless:true});
  try{
   const page=await browser.newPage();
+  const csrf=await login(page);
   await page.goto(ORIGIN+'/');
   await page.locator('#projectSide .project-item').first().waitFor();
   const b=await (await page.request.get(ORIGIN+'/api/bootstrap')).json();
   const pid=b.projects[0].id;
-  const res=await page.request.post(ORIGIN+'/api/coding/start',{headers:{'X-ORBIT-UI':'1','Content-Type':'application/json'},data:{project_id:pid,spec:'Quality dashboard browser test for a demo web feature'}});
+  const res=await page.request.post(ORIGIN+'/api/coding/start',{headers:headers(csrf),data:{project_id:pid,spec:'Quality dashboard browser test for a demo web feature'}});
   assert.equal(res.status(),202);
   const {job_id}=await res.json();
   await page.evaluate(id=>localStorage.setItem('orbit-project',id),pid);

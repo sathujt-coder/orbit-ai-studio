@@ -1,0 +1,62 @@
+"""Deny-by-default HTTP route authorization for local ORBIT."""
+import re
+from urllib.parse import parse_qs
+import auth_store
+import auth_http
+import hmac
+
+ID=r'[A-Za-z0-9_-]{1,100}'
+def resource_project(c,table,identifier):
+    # Table names are fixed by the route policy, never supplied by clients.
+    row=c.execute('SELECT project_id FROM '+table+' WHERE id=?',(identifier,)).fetchone()
+    return row[0] if row else ''
+def scope(c,method,path,query='',body=None):
+    body=body or {}
+    if method=='GET':
+        if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
+        if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance)',path)
+        if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
+        m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
+        if m:return (resource_project(c,'coding_jobs',m[1]),'read')
+        m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
+        if m:return (resource_project(c,'artifacts',m[1]),'read')
+    if method=='POST':
+        if path=='/api/projects':return ('','create')
+        if path in ('/api/coding/start','/api/chat','/api/github/preview','/api/github/draft-pr'):
+            pid=body.get('project_id','')
+            return (pid if isinstance(pid,str) else '', {'/api/github/preview':'read','/api/github/draft-pr':'publish'}.get(path,'write'))
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(run|pause|members)',path)
+        if m:return (m[1],'manage' if m[2]=='members' else 'write')
+        m=re.fullmatch(r'/api/stages/('+ID+r')/('+ID+r')/(approve|retry)',path)
+        if m:return (m[1],'approve' if m[3]=='approve' else 'write')
+    return None
+def check(c,method,path,query,body,headers,port):
+    token=auth_http.token_from(headers)
+    user=auth_store.principal(c,token)
+    if not user:
+        auth_http.audit(c,'anonymous','http:'+method,'denied')
+        return 401,None
+    if method=='POST':
+        csrf=headers.get('X-ORBIT-CSRF','')
+        if headers.get('Origin') not in {f'http://127.0.0.1:{port}',f'http://localhost:{port}'} or not re.fullmatch('[0-9a-f]{64}',csrf) or not hmac.compare_digest(csrf,auth_http.csrf_for(token)):
+            auth_http.audit(c,user,'csrf','denied')
+            return 403,None
+    target=scope(c,method,path,query,body)
+    if target is None:return 404,None
+    pid,action=target
+    if action in ('authenticated','create'):return 200,(user,pid,action)
+    if not pid or not c.execute('SELECT 1 FROM projects WHERE id=?',(pid,)).fetchone():
+        auth_http.audit(c,user,'resource_scope','denied')
+        return 403,None
+    if not auth_store.authorize(c,user,pid,action):return 403,None
+    return 200,(user,pid,action)
+
+def set_member(c,actor,pid,target,role):
+    if target==actor or role not in ('developer','reviewer','viewer'):
+        raise PermissionError('Cannot change own role or grant ownership')
+    existing=c.execute('SELECT role FROM auth_memberships WHERE user_id=? AND project_id=?',(target,pid)).fetchone()
+    if existing and existing[0]=='owner':raise PermissionError('Owner role protected')
+    auth_store.grant(c,target,pid,role)
+def visible_projects(c,user):
+    return [dict(row) for row in c.execute('SELECT p.* FROM projects p JOIN auth_memberships m ON m.project_id=p.id WHERE m.user_id=? ORDER BY p.created_at DESC',(user,))]
