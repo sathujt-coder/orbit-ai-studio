@@ -15,3 +15,5 @@ deployment/tls/
 *.key
 
 deployment/proxy-tls/
+
+offline-inference-report.json
