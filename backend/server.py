@@ -383,6 +383,11 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(WEB),**kwargs)
     def log_message(self,format,*args): pass
     def send_json(self,status,data,headers=None):
+        if getattr(self,'command','')=='POST' and getattr(self,'auth_context',None):
+            actor,pid,action=self.auth_context
+            with LOCK,db() as c:
+                c.execute('INSERT INTO auth_audit(actor,project_id,action,outcome,created_at) VALUES(?,?,?,?,?)',(actor,pid,'http:'+action,'success' if status<400 else 'failed',int(time.time())))
+            self.auth_context=None
         raw=json.dumps(data,ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type','application/json; charset=utf-8')
@@ -528,6 +533,7 @@ class Handler(SimpleHTTPRequestHandler):
                     pid=create_project(name,idea,platform,c)
                     auth_store.grant(c,self.auth_context[0],pid,'owner')
                     auth_store.authorize(c,self.auth_context[0],pid,'manage')
+                self.auth_context=(self.auth_context[0],pid,'create')
                 self.send_json(201,{'project_id':pid});return
             if path.startswith('/api/projects/'):
                 spl=path.strip('/').split('/')
@@ -560,6 +566,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
+    if HOST not in ('127.0.0.1','localhost'):
+        raise SystemExit('ORBIT is localhost-only until HTTPS/staging security is reviewed')
     init_db()
     srv=ThreadingHTTPServer((HOST,PORT),Handler)
     print(f'AI Studio Company → http://{HOST}:{PORT} | mode={PROVIDER} | modelA={MODEL_A} modelB={MODEL_B}',flush=True)

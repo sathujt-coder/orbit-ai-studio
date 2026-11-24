@@ -15,7 +15,7 @@ def scope(c,method,path,query='',body=None):
     if method=='GET':
         if path in ('/api/bootstrap','/api/github/status'):return ('','authenticated')
         if path=='/api/chat':return (parse_qs(query).get('project_id',[''])[0],'read')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit|acceptance)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/(state|coding|github|members|audit)',path)
         if m:return (m[1], 'manage' if m[2] in ('members','audit') else 'read')
         m=re.fullmatch(r'/api/coding/('+ID+r')(?:/(quality|verifications|download))?',path)
         if m:return (resource_project(c,'coding_jobs',m[1]),'read')
@@ -53,10 +53,12 @@ def check(c,method,path,query,body,headers,port):
     return 200,(user,pid,action)
 
 def set_member(c,actor,pid,target,role):
-    if target==actor or role not in ('developer','reviewer','viewer'):
+    if target==actor or role not in ('developer','reviewer','viewer','revoke'):
         raise PermissionError('Cannot change own role or grant ownership')
     existing=c.execute('SELECT role FROM auth_memberships WHERE user_id=? AND project_id=?',(target,pid)).fetchone()
     if existing and existing[0]=='owner':raise PermissionError('Owner role protected')
-    auth_store.grant(c,target,pid,role)
+    if role=='revoke':
+        c.execute('DELETE FROM auth_memberships WHERE user_id=? AND project_id=?',(target,pid))
+    else:auth_store.grant(c,target,pid,role)
 def visible_projects(c,user):
     return [dict(row) for row in c.execute('SELECT p.* FROM projects p JOIN auth_memberships m ON m.project_id=p.id WHERE m.user_id=? ORDER BY p.created_at DESC',(user,))]

@@ -1,4 +1,4 @@
-"""Local HTTP authentication endpoints. Existing application routes not yet protected."""
+"""Local HTTP authentication endpoints. Local session cookie shared with protected dashboard."""
 import hashlib
 import hmac
 import secrets
@@ -6,7 +6,7 @@ import time
 from http.cookies import SimpleCookie, CookieError
 import auth_store
 
-COOKIE='orbit_session'
+COOKIE='orbit_session_v2'
 def token_from(headers):
     try:
         cookie=SimpleCookie()
@@ -17,7 +17,7 @@ def csrf_for(token):
     return hashlib.sha256(('orbit-csrf-v1:'+token).encode()).hexdigest()
 def cookie(token='',age=0):
     # Local HTTP only. Secure flag required when migrating to HTTPS.
-    return f'{COOKIE}={token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age={age}'
+    return f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={age}'
 def session(c,headers):
     token=token_from(headers)
     user=auth_store.principal(c,token)
@@ -47,7 +47,7 @@ def handle(c,path,headers,body,port):
     if path=='/api/auth/logout':
         user=auth_store.principal(c,token)
         if not user:return 401,{'error':'Authentication required'},{}
-        if not hmac.compare_digest(headers.get('X-ORBIT-CSRF',''),csrf_for(token)):
+        if not hmac.compare_digest(headers.get('X-ORBIT-CSRF','').encode(),csrf_for(token).encode()):
             audit(c,user,'logout','denied')
             return 403,{'error':'CSRF validation failed'},{}
         auth_store.logout(c,token)

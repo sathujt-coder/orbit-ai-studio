@@ -13,7 +13,7 @@ cd ai-studio-company
 python3 backend/server.py
 ```
 
-Mở: **http://127.0.0.1:8787**
+Mở: **http://127.0.0.1:8787**. Phiên bản có P3.6 yêu cầu đăng nhập. Sau khi khởi động lần đầu, tạo người dùng với `python tools/create_auth_user.py --user admin`. Dự án cũ cần cấp quyền rõ ràng bằng `python tools/manage_auth_membership.py --user admin --project <project-id> --role owner`; xem ID qua `python tools/manage_auth_membership.py --list-projects`. Không tự cấp quyền vào dữ liệu cũ. Chỉ chạy localhost.
 
 Hoặc trên macOS/Linux:
 
