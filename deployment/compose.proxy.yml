@@ -17,7 +17,7 @@ services:
       - ./proxy-tls/upstream:/tls:ro
     networks: [private]
     read_only: true
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 128
@@ -35,7 +35,7 @@ services:
       - ./proxy-tls/edge:/edge-tls:ro
       - ./proxy-tls/trust:/trust:ro
     read_only: true
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m,mode=1777]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m,mode=1777"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 64
