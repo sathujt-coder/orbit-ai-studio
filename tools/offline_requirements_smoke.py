@@ -26,7 +26,7 @@ def main():
                 AI_MODEL_B='qwen2.5:3b',AI_BASE_URL='http://127.0.0.1:11434/v1',
                 AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
                 AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',AI_TIMEOUT='300',ORBIT_BUDGET_MODE='enforce',
-                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='17')
+                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='20')
             import server, model_provider as mp, usage_store, cost_store, product_requirements as pr
             import requirements_jobs as jobs, auth_store
             server.init_db()
@@ -44,11 +44,8 @@ def main():
             report['discovery']=evidence
             with server.db() as c:
                 report['attempts']=[dict(r) for r in c.execute('SELECT agent_id,lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
-            require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review: '+queued['reason'])
-            with server.db() as c:
-                adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
-                    expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
-                require(not adopted['planning_ready'] and jobs.latest(c,pid)['adopted_version']==1,'Adoption gate failed')
+            if not evidence:
+                raise RuntimeError('No completed discovery evidence: '+queued['reason'])
             document=evidence['document']
             # Independent lightweight fixture checks; not a general semantic quality oracle.
             functional=' '.join(r['description']+' '+' '.join(r['acceptance']) for r in document['requirements'] if r['kind']=='functional').lower()
@@ -56,9 +53,23 @@ def main():
             checks={'save':('save' in functional or 'store' in functional) and ('url' in functional or 'link' in functional),
                 'list':any(k in functional for k in ('list','display','view','retrieve')),
                 'isolation': 'project' in nonfunctional and any(k in nonfunctional for k in ('denied','deny','unauthorized','prevent','restrict','isolation','cannot','access','only'))}
+            # Explicit scope checks on actual must/should/could features, not on assumptions
+            # or out-of-scope text. This catches the observed registration/project CRUD creep.
+            import re
+            checks['no_new_registration_or_project_management']=not any(
+                re.search(r'\b(register|registration|sign.up|create (?:a |new )?projects?|delete (?:a |existing )?projects?|manage (?:their |own )?projects?|project management)\b',
+                    r['description']+' '+' '.join(r['acceptance']),re.I)
+                for r in document['requirements'] if r['kind']=='functional')
             report['fixture_checks']=checks
-            require(all(checks.values()),'Essential fixture scope missing')
+            report['final_review']=evidence['final_review']
+            report['open_questions']=document['open_questions']
+            require(all(checks.values()),'Essential fixture scope missing or unrequested scope added')
+            require(queued['status']=='succeeded' and queued['can_adopt'],'Queued discovery did not pass review: '+queued['reason'])
             require(evidence['ready_for_human_review'],'Final review or open questions block adoption')
+            with server.db() as c:
+                adopted=jobs.adopt(c,pid,'fixture-author',dict(queue_id=run,digest=queued['digest'],
+                    expected_version=0,confirmation='ADOPT AI REQUIREMENTS'),server.now())
+                require(not adopted['planning_ready'] and jobs.latest(c,pid)['adopted_version']==1,'Adoption gate failed')
             def denied(fn):
                 try:fn()
                 except ValueError:return True
@@ -93,6 +104,9 @@ def main():
             expected += [('po-A','requirements_proposal'),('po-B','requirements_proposal'),('po-A','requirements_cross_review'),
                 ('po-B','requirements_cross_review'),('po-A','requirements_synthesis'),('po-B','requirements_final_review')]
             collaboration=evidence['collaboration']
+            revised_quality=evidence.get('quality_revision') is not None
+            if revised_quality:
+                expected += [('po-A','requirements_quality_revision'),('po-B','requirements_quality_recheck')]
             # Optional, bounded repair immediately after each document phase. No extra calls
             # or arbitrary retries can satisfy this sequence gate.
             index=0;sequence_ok=True;repairs=0
@@ -100,10 +114,11 @@ def main():
                 if index>=len(calls) or (calls[index]['agent_id'],calls[index]['purpose'])!=(agent,phase):
                     sequence_ok=False;break
                 index+=1
-                if phase in ('requirements_proposal','requirements_synthesis') and index<len(calls) and (calls[index]['agent_id'],calls[index]['purpose'])==(agent,phase+'_repair'):
+                if phase in ('requirements_proposal','requirements_synthesis','requirements_quality_revision') and index<len(calls) and (calls[index]['agent_id'],calls[index]['purpose'])==(agent,phase+'_repair'):
                     repairs+=1;index+=1
             report['repair_calls']=repairs
-            gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs and repairs<=3 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
+            report['quality_revision_calls']=2 if revised_quality else 0
+            gates.update(real_calls=sequence_ok and index==len(calls) and len(calls)==14+repairs+(2 if revised_quality else 0) and repairs<=(4 if revised_quality else 3) and len(calls)<=20 and all(x['provider']=='ollama' and x['status']=='ok' and x['model']==lanes[x['lane']].model and x['coverage']=='complete' and x['total_tokens']>0 for x in calls),
                 department_evidence=collaboration['research_mode']=='input_analysis_only' and all(
                     set(collaboration[d]['proposals'])==set(collaboration[d]['reviews'])=={'A','B'} for d in ('research','ba')),
                 token_ledger=usage['requests']==usage['complete_calls']==len(calls),

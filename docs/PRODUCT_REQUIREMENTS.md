@@ -72,3 +72,16 @@ Repair regenerates from the original inputs plus validation error without append
 The real offline test uses a 300-second provider timeout (not a production default change);
 the 17-call cap, existing resource limits and strict final-review/approval gates remain in force.
 Provider failures surface a bounded phase/class diagnostic, with no automatic retry.
+
+## P6.1e follow-up — scope fidelity and bounded semantic revision
+Commit ec9649b completed all 14 real inference calls but the final quality gate blocked:
+registration/project management scope creep, unresolved questions, and repeated draft review feedback.
+The original user idea is authoritative; existing capabilities are dependencies, not deliverables.
+Nonblocking research unknowns remain in preserved department evidence; essential unknowns still block.
+Final B review independently evaluates the actual latest document against the idea, without copying
+historical reviewer verdicts. One A semantic revision and one fresh B review are allowed;
+initial and revised evidence are retained. Persistent blockers or open questions still prevent adoption.
+No auto-approval or backend removal of questions. 14 normal calls, at most 2 semantic revision calls
+and up to 4 bounded document-format repairs (20 total maximum). The offline test checks exact phase
+order, all token/cost and adoption gates, plus an independent fixture scope-creep check.
+CI timeout is extended only to accommodate the bounded extra model calls.

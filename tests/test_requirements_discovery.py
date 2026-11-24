@@ -33,7 +33,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_final_review_blocks(self):
         def call(lane,phase,system,user,schema):
             if schema is discovery.REVIEW_SCHEMA:
-                return json.dumps(dict(blocking=['Missing isolation'] if phase=='requirements_final_review' else [],feedback=['Review fixture']))
+                return json.dumps(dict(blocking=['Missing isolation'] if phase in ('requirements_final_review','requirements_quality_recheck') else [],feedback=['Review fixture']))
             return json.dumps(model_document())
         self.assertFalse(discovery.discover(call,'Save links')['ready_for_human_review'])
     def test_open_questions_block(self):
@@ -54,7 +54,7 @@ class CollaborationTests(unittest.TestCase):
             if schema is discovery.BA_SCHEMA:
                 return json.dumps(dict(workflows=['Save and list'],business_rules=['Project access'],edge_cases=['Denied read'],unknowns=[]))
             if schema in (discovery.REVIEW_SCHEMA,discovery.BRIEF_REVIEW_SCHEMA):
-                return json.dumps(dict(blocking=['Unresolved access'] if blocking and phase=='requirements_final_review' else [],feedback=['Review fixture']))
+                return json.dumps(dict(blocking=['Unresolved access'] if blocking and phase in ('requirements_final_review','requirements_quality_recheck') else [],feedback=['Review fixture']))
             return json.dumps(model_document())
         return call,calls
     def test_department_order_and_independence(self):
@@ -70,7 +70,8 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(calls[4][2]['research'],result['collaboration']['research'])
         self.assertEqual(calls[8][2],calls[9][2])
         self.assertEqual(calls[8][2]['department_handoffs'],result['collaboration'])
-        self.assertEqual(calls[-1][2]['department_handoffs'],result['collaboration'])
+        self.assertEqual(set(calls[-1][2]),{'idea','document'})
+        self.assertEqual(calls[-1][2]['document'],result['document'])
         self.assertTrue(result['ready_for_human_review'])
     def test_review_gate_and_invalid_handoff(self):
         call,_=self.fixture(True)
@@ -118,3 +119,36 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(result['requirements'][0]['description'],raw['functional'][0]['description'])
         raw['nonfunctional']=[]
         with self.assertRaises(ValueError):discovery.parse_document(json.dumps(raw))
+
+class SemanticRevisionTests(unittest.TestCase):
+    def test_revision_requires_fresh_independent_review(self):
+        calls=[]
+        def call(lane,phase,system,user,schema):
+            data=json.loads(user);calls.append((lane,phase,data))
+            if schema is discovery.REVIEW_SCHEMA:
+                return json.dumps(dict(blocking=['Unrequested registration'] if phase=='requirements_final_review' else [],feedback=['Review fixture']))
+            d=model_document()
+            if phase=='requirements_synthesis':
+                d['functional'][0]['description']='Unrequested registration'
+            return json.dumps(d)
+        result=discovery.discover(call,'Save links using existing membership')
+        self.assertEqual(len(calls),8)
+        self.assertEqual(calls[-2][:2],('A','requirements_quality_revision'))
+        self.assertEqual(calls[-1][:2],('B','requirements_quality_recheck'))
+        self.assertEqual(calls[-2][2]['review']['blocking'],['Unrequested registration'])
+        self.assertEqual(set(calls[-1][2]),{'idea','document'})
+        self.assertEqual(result['initial_final_review']['review']['blocking'],['Unrequested registration'])
+        self.assertTrue(result['quality_revision'])
+        self.assertTrue(result['ready_for_human_review'])
+    def test_revision_does_not_bypass_persistent_blockers(self):
+        calls=[]
+        def call(lane,phase,system,user,schema):
+            calls.append(phase)
+            if schema is discovery.REVIEW_SCHEMA:
+                return json.dumps(dict(blocking=['Missing decision'] if phase in ('requirements_final_review','requirements_quality_recheck') else [],feedback=['Review fixture']))
+            d=model_document();d['open_questions']=['Unresolved decision']
+            return json.dumps(d)
+        result=discovery.discover(call,'Save links')
+        self.assertEqual(calls.count('requirements_quality_revision'),1)
+        self.assertFalse(result['ready_for_human_review'])
+        self.assertEqual(result['document']['open_questions'],['Unresolved decision'])
