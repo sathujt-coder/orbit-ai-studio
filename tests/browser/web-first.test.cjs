@@ -42,7 +42,7 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
       await page.locator('[data-role-id="'+role+'"] .line-select').click();
       assert.equal(await page.locator('#roleWorkspace').getAttribute('data-role'),role);
       titles.add(await page.locator('#roleWorkspace h2').textContent());
-      assert.equal(await page.locator('#roleWorkspace .role-workspace-panel').count(),6);
+      assert.equal(await page.locator('#roleWorkspace .role-workspace-panel').count(),7);
     }
     assert.equal(titles.size,12);
     await page.locator('[data-role-id="pm"] .line-select').click();
@@ -67,6 +67,11 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     const detail = await (await page.request.get(ORIGIN + '/api/projects/' + state.id + '/state')).json();
     assert.equal(detail.tasks.length, 12);
     assert.equal(detail.project.platform, 'Web app');
+    assert.equal(detail.handoff.project_id,state.id);
+    assert.equal(detail.handoff.roles.length,12);
+    assert.equal(detail.handoff.roles[0].input_status,'project_idea');
+    assert.ok(detail.handoff.roles.every(r=>r.output.status==='blocked'&&r.consumption_status==='NOT_RECORDED'));
+    assert.equal(detail.handoff.production_release_authorized,false);
     assert.notEqual(state.id,initialId);
     await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id);
     assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
@@ -130,6 +135,8 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id,{timeout:10000});
     assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
     assert.equal(await page.locator('#roleWorkspace').getAttribute('data-project-id'),state.id);
+    assert.equal(await page.locator('#roleWorkspace .role-handoff').getAttribute('data-output-status'),'blocked');
+    assert.match(await page.locator('#roleWorkspace .role-handoff').textContent(),/NOT_RECORDED/);
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.locator('#roleWorkspace .role-workspace-grid').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
     assert.equal(await page.locator('#studioLine .line-row').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);

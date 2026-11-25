@@ -35,6 +35,7 @@ function workspaceModel(stages,state,id){
   title:config.title,focus:config.focus,inputs:config.inputs,deliverable:stage.deliverable,
   status:task?.status||'unknown',label:LABELS[task?.status]||'Chưa xác minh',
   approval:stage.approval===true,link:LINKS[id]||null,
+  handoff:state.handoff?.project_id===state.project.id?state.handoff.roles?.find(r=>r.stage_id===id)||null:null,
   artifacts:(state.artifacts||[]).filter(a=>a.stage_id===id),
   reviews:(state.reviews||[]).filter(a=>a.stage_id===id),
   events:(state.events||[]).filter(a=>a.stage_id===id)};
@@ -62,6 +63,29 @@ function renderWorkspace(holder,stages,state,id,actions){
  for(const lane of ['A','B'])button('Trao đổi '+m.short+'-'+lane,'chat-'+lane,()=>actions.chat(m.id,lane,m.projectId));
  button('Chi tiết phòng ban','inspector',()=>actions.inspect(m.id,m.projectId));
  holder.append(controls);
+ const handoff=el('section','role-workspace-panel role-handoff');
+ handoff.dataset.inputStatus=m.handoff?.input_status||'unknown';
+ handoff.dataset.outputStatus=m.handoff?.output?.status||'unknown';
+ handoff.append(el('h3','','Bằng chứng đầu vào / đầu ra · Legacy pipeline'));
+ const describe=record=>{
+  if(!record)return 'Chưa xác minh';
+  return record.status==='reviewed_output'?'Final đã qua review nội bộ · v'+record.version+' · SHA256 '+record.content_digest:'BLOCK · '+record.reason;
+ };
+ const output=m.handoff?.output;
+ handoff.append(el('p','line-notice','Đầu ra: '+describe(output)));
+ function sourceButton(record,label){
+  if(!record?.artifact_id||record.status!=='reviewed_output')return;
+  const b=el('button','role-evidence-item',label+' · '+record.artifact_id);b.type='button';b.dataset.focusKey='handoff-'+record.artifact_id;
+  b.addEventListener('click',()=>actions.artifact(record.artifact_id,m.projectId));handoff.append(b);
+ }
+ sourceButton(output,'Xem final');
+ if(m.handoff?.input_status==='project_idea')handoff.append(el('p','line-notice','Đầu vào: ý tưởng dự án'));
+ for(const record of m.handoff?.inputs||[]){
+  handoff.append(el('p','line-notice',record.stage_id+' → '+m.short+': '+describe(record)));
+  sourceButton(record,'Xem nguồn '+record.stage_id);
+ }
+ handoff.append(el('p','line-notice','Chưa có biên nhận sử dụng đầu vào (NOT_RECORDED). Phiên bản là thứ tự final hiện có; digest tính từ nội dung hiện tại, không phải chứng nhận bất biến lịch sử. Không cấp quyền thực thi.'));
+ holder.append(handoff);
  const evidence=el('div','role-workspace-grid');
  const docs=el('section','role-workspace-panel');docs.append(el('h3','','Tài liệu gần đây · '+m.artifacts.length));
  if(!m.artifacts.length)docs.append(el('p','line-notice','Chưa có tài liệu cho vai trò này.'));
@@ -91,7 +115,7 @@ function model(stages,tasks){
 function el(tag,cls,text){
  const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;
 }
-function render(holder,stages,tasks,selected,onSelect){
+function render(holder,stages,tasks,selected,onSelect,handoff){
  const cards=model(stages,tasks);const active=document.activeElement;
  const focusId=holder.contains(active)?active.closest('[data-role-id]')?.dataset.roleId:null;
  const hadFocus=active?.classList.contains('line-select');
@@ -112,7 +136,7 @@ function render(holder,stages,tasks,selected,onSelect){
    article.append(el('p','line-evidence',card.artifacts===null?'Chưa có dữ liệu evidence':card.artifacts+' tài liệu · '+card.reviews+' review (gần đây)'));
    article.append(el('p','line-gate',card.approval?'Quality gate + người duyệt':'Quality gate nội bộ'));
    if(card.link){const a=el('a','line-link',card.link[0]+' ↗');a.href=card.link[1];article.append(a)}
-   article.append(el('p','line-handoff',card.next?'Bàn giao dự kiến → '+card.next:'Cuối dây chuyền · không tự release'));
+   const actual=handoff?.roles?.find(r=>r.stage_id===id);article.append(el('p','line-handoff',card.next?(actual?.output?.status==='reviewed_output'?'Final đã review · nguồn cho '+card.next:'Chưa đủ bằng chứng bàn giao → '+card.next):'Cuối dây chuyền · không tự release'));
    row.append(article);
   }
   section.append(row);holder.append(section);

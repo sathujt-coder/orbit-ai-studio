@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
+import studio_handoff
 import coding_factory
 import verification_factory
 import auth_store
@@ -176,6 +177,7 @@ def project_state(pid):
         working=next((t for t in tasks if t['status'] in ('drafting','reviewing','synthesizing','awaiting_approval','needs_revision')),None)
         q=agent_queue.active(c,pid,'pipeline')
         return dict(project=dict(p),tasks=tasks,artifacts=artifacts,reviews=reviews,events=events,
+                    handoff=studio_handoff.view(c,pid,STAGES,tasks),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 
