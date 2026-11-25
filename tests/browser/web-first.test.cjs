@@ -13,12 +13,21 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
   page.on('pageerror', e => errors.push(e.message));
   try {
     await login(page);
+    for(const [path,mime] of [['/studio-line.js',/javascript/],['/studio-line.css',/text\/css/]]){
+      const asset=await page.request.get(ORIGIN+path);
+      assert.equal(asset.status(),200,path+' must be served by static allowlist');
+      assert.match(asset.headers()['content-type'],mime);
+    }
+    assert.equal((await page.request.get(ORIGIN+'/not-allowlisted.js')).status(),404);
     const response = await page.goto(ORIGIN + '/', {waitUntil: 'domcontentloaded'});
     assert.equal(response.status(), 200);
     await page.locator('#projectSide .project-item').first().waitFor({timeout: 15000});
     await page.waitForFunction(() => document.querySelectorAll('#agentMembers .agent-card').length === 2, null, {timeout: 15000});
     assert.equal(await page.locator('#agentMembers .agent-card').count(), 2);
     assert.equal(await page.locator('#pipelineTrack').isVisible(), true);
+    await page.locator('#studioLine[data-ready="true"]').waitFor({state:'visible'});
+    const initialId=await page.locator('#studioLine').getAttribute('data-project-id');
+    assert.ok(initialId);
     assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
     assert.equal(await page.locator('#studioLine .line-lane').count(),24);
     assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.roleId)),['po','research','ba','pm','design','techlead','dev','qa','qc','security','devops','marketing']);
@@ -38,17 +47,38 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     await page.getByText(name, {exact: true}).first().waitFor({timeout: 15000});
     const state = await page.evaluate(async () => {
       const projects = (await (await fetch('/api/bootstrap')).json()).projects;
-      const target = projects.find(p => p.name.startsWith('Web E2E '));
+      const target = projects.find(p => p.name===document.querySelector('#projectSide .project-item.active strong').textContent);
       return {platform: target.platform, id: target.id};
     });
     assert.equal(state.platform, 'Web app');
     const detail = await (await page.request.get(ORIGIN + '/api/projects/' + state.id + '/state')).json();
     assert.equal(detail.tasks.length, 12);
     assert.equal(detail.project.platform, 'Web app');
-    await page.waitForFunction(()=>document.querySelectorAll('#studioLine [data-role-id]').length===12);
+    assert.notEqual(state.id,initialId);
+    await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id);
+    assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
+    assert.equal(await page.locator('#studioLine .line-lane').count(),24);
     assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
+    // Delay a real state request, switch projects while it is in flight, then
+    // verify the obsolete response cannot repaint the current project's line.
+    let releaseOld,notifyOld;
+    const oldHeld=new Promise(resolve=>{notifyOld=resolve});
+    const oldRelease=new Promise(resolve=>{releaseOld=resolve});
+    const oldPath='**/api/projects/'+state.id+'/state';
+    await page.route(oldPath,async route=>{notifyOld();await oldRelease;await route.continue()});
+    try{
+      await oldHeld;
+      await page.locator('#projectSide [data-pid="'+initialId+'"]').click();
+      await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',initialId);
+      releaseOld();
+      await page.unroute(oldPath);
+      await page.locator('#projectSide [data-pid="'+state.id+'"]').click();
+      await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id);
+    }finally{releaseOld();await page.unroute(oldPath)}
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.locator('#studioLine .line-row').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
+    assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
+    assert.equal(await page.locator('#studioLine .line-lane').count(),24);
     assert.deepEqual(errors, [], 'Unexpected browser JavaScript errors: ' + errors.join('; '));
   } finally {
     await browser.close();
