@@ -59,22 +59,62 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
     assert.equal(await page.locator('#studioLine .line-lane').count(),24);
     assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
-    // Delay a real state request, switch projects while it is in flight, then
-    // verify the obsolete response cannot repaint the current project's line.
-    let releaseOld,notifyOld;
-    const oldHeld=new Promise(resolve=>{notifyOld=resolve});
-    const oldRelease=new Promise(resolve=>{releaseOld=resolve});
-    const oldPath='**/api/projects/'+state.id+'/state';
-    await page.route(oldPath,async route=>{notifyOld();await oldRelease;await route.continue()});
+    // Hold a real state response in the page, not a Playwright Route.
+    // This also observes JSON consumption, rather than merely network arrival.
+    await page.evaluate(pid=>{
+      const original=window.fetch;
+      const gate={held:false,released:false,consumed:false,failed:false};
+      let release;
+      const pending=new Promise(resolve=>{release=resolve});
+      gate.release=()=>{gate.released=true;release()};
+      window.__studioTestGate=gate;
+      window.fetch=async function(input,...args){
+        const response=await original.call(this,input,...args);
+        const path=new URL(typeof input==='string'?input:input.url,location.href).pathname;
+        if(path!=='/api/projects/'+pid+'/state'||gate.held)return response;
+        const originalJson=response.json.bind(response);
+        response.json=async()=>{
+          const data=await originalJson();
+          gate.held=true;
+          await pending;
+          // The next browser task runs after the application's await continuation.
+          setTimeout(()=>{gate.consumed=true},0);
+          return data;
+        };
+        return response;
+      };
+      gate.restore=()=>{gate.release();window.fetch=original};
+    },state.id);
     try{
-      await oldHeld;
+      await page.waitForFunction(()=>window.__studioTestGate.held,null,{timeout:10000});
       await page.locator('#projectSide [data-pid="'+initialId+'"]').click();
-      await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',initialId);
-      releaseOld();
-      await page.unroute(oldPath);
-      await page.locator('#projectSide [data-pid="'+state.id+'"]').click();
-      await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id);
-    }finally{releaseOld();await page.unroute(oldPath)}
+      await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',initialId,{timeout:10000});
+      // Record any transient repaint too, not only the final polling state.
+      await page.evaluate(()=>{
+        const holder=document.querySelector('#studioLine'),gate=window.__studioTestGate;
+        gate.observed=[];
+        gate.observer=new MutationObserver(()=>gate.observed.push(holder.dataset.projectId||null));
+        gate.observer.observe(holder,{attributes:true,attributeFilter:['data-project-id']});
+        gate.release();
+      });
+      await page.waitForFunction(()=>window.__studioTestGate.consumed,null,{timeout:10000});
+      const isolation=await page.evaluate(()=>{
+        const gate=window.__studioTestGate,holder=document.querySelector('#studioLine');
+        gate.observer.disconnect();
+        return {project:holder.dataset.projectId,ready:holder.dataset.ready,observed:gate.observed,
+          roles:holder.querySelectorAll('[data-role-id]').length,agents:holder.querySelectorAll('.line-lane').length};
+      });
+      assert.equal(isolation.project,initialId);
+      assert.equal(isolation.ready,'true');
+      assert.ok(isolation.observed.every(pid=>pid===initialId),'Obsolete response repainted the selected project');
+      assert.equal(isolation.roles,12);
+      assert.equal(isolation.agents,24);
+    }finally{
+      await page.evaluate(()=>{const gate=window.__studioTestGate;gate.observer?.disconnect();gate.restore();delete window.__studioTestGate});
+    }
+    await page.locator('#projectSide [data-pid="'+state.id+'"]').click();
+    await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id,{timeout:10000});
+    assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.locator('#studioLine .line-row').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
     assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
