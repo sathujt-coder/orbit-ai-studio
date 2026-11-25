@@ -113,3 +113,25 @@ class PlanningTests(unittest.TestCase):
         self.c.execute("UPDATE product_requirements SET digest='bad' WHERE project_id='p'")
         self.assertFalse(plan.view(self.c,'p')['input_ready'])
         with self.assertRaises(ValueError):self.seed(row)
+
+    def test_dependency_graph_bound_to_saved_revision_and_digest(self):
+        row=self.req()
+        seeded=self.seed(row)
+        graph=seeded['analysis']['dependency_graph']
+        self.assertFalse(graph['timing_ready'])
+        self.assertEqual(graph['layers'],[['TASK-1','TASK-3'],['TASK-2','TASK-4']])
+        d=self.estimated(seeded['current']['document'])
+        d['tasks'][2]['depends_on']=['TASK-2']
+        saved=self.save(row,d)
+        graph=saved['analysis']['dependency_graph']
+        self.assertEqual(graph['critical_path'],['TASK-1','TASK-2','TASK-3','TASK-4'])
+        self.assertEqual(graph['critical_path_minutes'],80)
+        self.assertFalse(saved['execution_ready'])
+        approved=self.approval(row,saved['current'])
+        self.assertTrue(approved['execution_ready'])
+        self.assertEqual(approved['analysis']['dependency_graph'],graph)
+        self.c.execute("UPDATE project_plans SET digest='bad' WHERE project_id='p' AND version=2")
+        stale=plan.view(self.c,'p')
+        self.assertTrue(stale['stale'])
+        self.assertIsNone(stale['analysis'])
+        self.assertFalse(stale['execution_ready'])
