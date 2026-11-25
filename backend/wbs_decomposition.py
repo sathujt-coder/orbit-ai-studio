@@ -6,8 +6,9 @@ import planning_discovery as pd
 import work_breakdown as w
 import model_provider as mp
 import requirements_scope as rs
+import planning_constraints as pc
 
-POLICY='orbit.wbs-decomposition.v2'
+POLICY='orbit.wbs-decomposition.v3'
 BATCH=3
 MAX_OUTPUT=1536
 MAX_CONTEXT_BYTES=16000
@@ -47,15 +48,7 @@ def schema(ids,fields=None):
         for pid in ids})
 
 def exact_terms(groups):
-    # Prefer a single term shared by multiple still-uncovered groups.
-    # These are prompt hints selected solely from the approved contract;
-    # no keyword is inserted into the model output by backend code.
-    pending=list(groups);terms=[]
-    while pending:
-        choices=list(dict.fromkeys(x for group in pending for x in group))
-        best=max(choices,key=lambda x:sum(x in group for group in pending))
-        terms.append(best);pending=[group for group in pending if best not in group]
-    return terms
+    return pc.required_exact_terms(groups)
 
 def context(source,document,ids,issues=None,fields=None):
     fields=full_fields(ids) if fields is None else fields
@@ -66,14 +59,13 @@ def context(source,document,ids,issues=None,fields=None):
             if pid not in ids:continue
             criteria=[a for a in d['acceptance'] if a['id'] in p['criteria']]
             retained={k:p[k] for k in w.DETAIL_FIELDS if k not in fields[pid]}
-            groups=[g for rule in w.match_rules(d,p,source['policy']) for g in rule['matches']]
+            groups=pc.groups_for(w.match_rules(d,p,source['policy']))
             # Recompute against retained fields, not the old broken text:
             # replacing a field can remove a formerly satisfied group.
             retained_text=' '.join(v or '' for v in retained.values())
-            needed=[g for g in groups if not any(rs.contains(retained_text,x) for x in g)]
             targets.append(dict(id=pid,kind=p['kind'],requirement=d['requirement'],description=d['outcome'],
                 acceptance=criteria,editable_fields=fields[pid],retained=retained,match_groups=groups,
-                required_exact_terms=exact_terms(needed),issues=[x for x in (issues or []) if x['package']==pid]))
+                required_exact_terms=pc.required_exact_terms(groups,retained_text),issues=[x for x in (issues or []) if x['package']==pid]))
     used=[p[k] for pid,p in packages(document).items() for k in w.DETAIL_FIELDS
         if (pid not in fields or k not in fields[pid]) and p[k] is not None]
     return dict(source=w.bindings(source),forbidden=source['policy']['forbidden'],targets=targets,used_details=used)
@@ -120,8 +112,11 @@ def convergence(before,after,source,ids,fields):
     # An initially clean field must remain unchanged, except the designated
     # action needed to repair a package-wide missing evidence group.
     no_op=not any(rs.norm(old[pid][k] or '')!=rs.norm(new[pid][k] or '') for pid,k in changed)
-    return dict(passed=bool(a and not b and not introduced and not no_op and set(changed)<=allowed),
-        before_issues=len(a),after_issues=len(b),new_issues=introduced,unchanged_unflagged=set(changed)<=allowed,
+    lost=[dict(package=p['id'],**item) for d in before['deliverables'] for p in d['packages']
+        for item in pc.losses(' '.join(p[k] or '' for k in w.DETAIL_FIELDS),
+            ' '.join(new[p['id']][k] or '' for k in w.DETAIL_FIELDS),w.match_rules(d,p,source['policy']))]
+    return dict(passed=bool(a and not b and not introduced and not no_op and set(changed)<=allowed and not lost),
+        before_issues=len(a),after_issues=len(b),new_issues=introduced,lost_scope_groups=lost,unchanged_unflagged=set(changed)<=allowed,
         no_op=no_op,before_digest=pp.digest(before),after_digest=pp.digest(after))
 
 def blank(source,document):

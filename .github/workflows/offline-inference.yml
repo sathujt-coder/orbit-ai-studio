@@ -12,6 +12,7 @@ on:
       - tests/test_work_breakdown.py
       - backend/planning_discovery.py
       - backend/planning_scope.py
+      - backend/planning_constraints.py
       - tests/test_planning_scope.py
       - tests/test_planning_repair.py
       - backend/planning_jobs.py

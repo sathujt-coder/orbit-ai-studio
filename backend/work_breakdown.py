@@ -6,6 +6,7 @@ import planning_jobs as pj
 import planning_discovery as pd
 import planning_scope as ps
 import requirements_scope as rs
+import planning_constraints as pc
 
 POLICY='orbit.wbs.v1'
 MAX_BYTES=24000
@@ -86,11 +87,10 @@ def validate(document,source):
 
 def match_rules(deliverable,package,policy):
     relevant={ac['text'] for ac in deliverable['acceptance'] if ac['id'] in package['criteria']}|{deliverable['outcome']}
-    return [rule for rule in policy['rules'] if rule['requirement']==deliverable['requirement']
-        and rule['kind']==package['kind'] and rule['evidence'] in relevant]
+    return pc.rules_for(policy,[deliverable['requirement']],package['kind'],relevant)
 
 def missing_groups(text,rule):
-    return [group for group in rule['matches'] if not any(rs.contains(text,phrase) for phrase in group)]
+    return pc.missing_groups(text,rule['matches'])
 
 def technical_codes(field,value):
     # Conservative, language-neutral minimum plus a narrow English generic-verb

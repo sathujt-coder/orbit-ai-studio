@@ -5,6 +5,7 @@ import unicodedata
 import product_requirements as pr
 import project_planning as pp
 import requirements_scope as rs
+import planning_constraints as pc
 
 def contract(document,extra=None):
     doc=pr.validate(document);reqs={r['id']:r for r in doc['requirements']}
@@ -83,11 +84,10 @@ def assess(plan,document,policy):
     forbidden('objective',doc['objective'])
     for task in doc['tasks']:
         tid=task['id'];title=task['title'];forbidden(tid,title)
-        for rule in policy['rules']:
-            if rule['requirement'] in task['requirements'] and rule['kind']==task['kind']:
-                missing=[group for group in rule['matches'] if not any(rs.contains(title,phrase) for phrase in group)]
-                if missing:issues.append(dict(target=tid,code='missing_acceptance_evidence',
-                    requirement=rule['requirement'],evidence=rule['evidence'],missing=missing))
+        for rule in pc.rules_for(policy,task['requirements'],task['kind']):
+            missing=pc.missing_groups(title,rule['matches'])
+            if missing:issues.append(dict(target=tid,code='missing_acceptance_evidence',
+                requirement=rule['requirement'],evidence=rule['evidence'],missing=missing))
     issues.extend(content_findings(doc)['issues'])
     return dict(passed=not issues,issues=issues,contract_digest=pp.digest(policy))
 
@@ -122,7 +122,10 @@ def convergence(before,after,document,policy):
     no_op=(before_text==after_text and rs.norm(before['objective'])==rs.norm(after['objective']))
     old_issues={pr.canonical(i) for i in a['issues']}
     new_issues=[i for i in b['issues'] if pr.canonical(i) not in old_issues]
-    passed=bool(a['issues'] and b['passed'] and unchanged and not no_op and not new_issues)
+    lost=[dict(target=tid,**item) for tid in old if tid in new
+        for item in pc.losses(old[tid]['title'],new[tid]['title'],
+            pc.rules_for(policy,old[tid]['requirements'],old[tid]['kind']))]
+    passed=bool(a['issues'] and b['passed'] and unchanged and not no_op and not new_issues and not lost)
     return dict(passed=passed,before_issues=len(a['issues']),after_issues=len(b['issues']),
-        unchanged_unflagged=bool(unchanged),no_op=no_op,new_issues=new_issues,
+        unchanged_unflagged=bool(unchanged),no_op=no_op,new_issues=new_issues,lost_scope_groups=lost,
         before_digest=pp.digest(before),after_digest=pp.digest(after))

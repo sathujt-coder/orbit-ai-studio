@@ -147,3 +147,64 @@ class RepairTests(unittest.TestCase):
             def call(*args):calls.append(args);raise error
             with self.assertRaises(type(error)):pd.discover(call,self.src)
             self.assertEqual(len(calls),1)
+
+
+class Artifact14993296469Tests(unittest.TestCase):
+    def setUp(self):
+        self.src=fixture_source();self.shared=pd.packet(self.src)
+        self.policy=self.shared['planning_scope']
+        self.raw_a=dict(objective='Implement URL saving and listing features in existing projects',work=[
+            dict(requirement='REQ-1',implement='Create a form for saving URLs in the project management interface',verify='Ensure URLs are persisted in the database'),
+            dict(requirement='REQ-2',implement='Display a list of saved URLs in the project management interface',verify='Ensure URLs appear in the list'),
+            dict(requirement='REQ-3',implement='Implement project isolation to prevent unauthorized access to other projects',verify='Ensure unauthorized cross-project reads are denied')])
+        self.raw_b=dict(objective='Implement URL storage and project isolation',work=[
+            dict(requirement='REQ-1',implement='Save URL in own project',verify='A saved URL is persisted'),
+            dict(requirement='REQ-2',implement='List saved links in own project',verify='Saved URL appears in list'),
+            dict(requirement='REQ-3',implement='Enforce project isolation',verify='Unauthorized cross-project read is denied')])
+        self.bad={'TASK-1':'Save URL in own project','TASK-2':'Verify URL persistence','TASK-3':'List saved links in own project'}
+        self.good=dict(self.bad,**{'TASK-2':'Verify saved URL is persisted in project storage'})
+        self.before=pd.parse(json.dumps(self.raw_a),self.shared)
+        self.findings=ps.assess(self.before,self.src['document'],self.policy)
+    def test_historical_repair_loses_previously_satisfied_group(self):
+        revised=ps.patch(self.before,pd.decode_patch(json.dumps(self.bad),self.findings),self.findings,self.src['document'])
+        self.assertEqual([x['target'] for x in self.findings['issues']],['TASK-1','TASK-2','TASK-3'])
+        result=ps.convergence(self.before,revised,self.src['document'],self.policy)
+        self.assertEqual((result['before_issues'],result['after_issues']),(3,1))
+        self.assertFalse(result['passed']);self.assertEqual(result['lost_scope_groups'],[
+            dict(target='TASK-2',requirement='REQ-1',kind='verify',evidence='A saved URL is persisted',
+                 lost_groups=[['save','saved','persist','persisted','saving','persists','storage']])])
+    def test_shared_hints_cover_all_groups_and_preserve_alternatives(self):
+        import planning_constraints as pc
+        ctx=pd.repair_context(self.shared,self.before,self.findings)
+        self.assertEqual(self.shared['required_exact_terms']['REQ-1']['verify'],['save','url'])
+        target=next(x for x in ctx['targets'] if x['target']=='TASK-2')
+        self.assertEqual(target['required_exact_terms'],['save','url'])
+        self.assertEqual(len(target['match_groups']),3)
+        self.assertEqual(target['missing_evidence'][0]['missing_groups'],[['save','saved','persist','saving','storage']])
+        self.assertEqual(pc.missing_groups(' '.join(target['required_exact_terms']),target['match_groups']),[])
+        self.assertEqual(pc.required_exact_terms(target['match_groups'],'A saved URL'),[])
+        self.assertEqual(pc.required_exact_terms(target['match_groups'],'URL persistence'),['save'])
+        self.assertTrue(ps.assess(pd.parse(json.dumps(self.raw_b),self.shared),self.src['document'],self.policy)['passed'])
+    def test_bounded_repair_and_replayed_provenance(self):
+        calls=[]
+        def call(lane,phase,system,user,schema):
+            calls.append((lane,phase,json.loads(user)))
+            return json.dumps(self.good if phase=='planning_scope_repair' else self.raw_a if lane=='A' else self.raw_b)
+        e=pd.discover(call,self.src)
+        self.assertEqual(len(calls),3);self.assertTrue(e['scope_ready'])
+        self.assertEqual(e['scope_convergence']['A']['lost_scope_groups'],[])
+        self.assertEqual(e['scope_convergence']['A']['after_issues'],0)
+        self.assertEqual(e['proposals']['A']['tasks'][3:],self.before['tasks'][3:])
+        for key in ('constraint_policy','proposal_context_digest'):
+            bad=copy.deepcopy(e);bad[key]='wrong'
+            self.assertFalse(pd.quality_gate(bad,self.src)['scope_ready'])
+        bad=copy.deepcopy(e);bad['scope_repairs']['A']['convergence']['lost_scope_groups']=['forged']
+        self.assertFalse(pd.quality_gate(bad,self.src)['scope_ready'])
+    def test_bad_patch_cannot_add_third_call(self):
+        calls=[]
+        def call(lane,phase,*args):
+            calls.append((lane,phase))
+            return json.dumps(self.bad if phase=='planning_scope_repair' else self.raw_a if lane=='A' else self.raw_b)
+        e=pd.discover(call,self.src)
+        self.assertFalse(e['scope_ready']);self.assertEqual(len(calls),3)
+        self.assertTrue(e['scope_convergence']['A']['lost_scope_groups'])

@@ -237,6 +237,23 @@ class Artifact14990478494Tests(unittest.TestCase):
         e=d.run(synthetic(blank,[],True),src,blank)
         e['history'][0]['attempts'][1]['convergence']['after_issues']=42
         with self.assertRaises(ValueError):d.gate(e,src,blank)
+    def test_shared_constraints_audit_previously_satisfied_group_loss(self):
+        import planning_constraints as pc
+        doc=self.base('A')
+        before=d.apply(doc,{'D-1.2':dict(action='Test persisted URL after reopening database',
+            output='Fresh connection test report',evidence='Expected database row identifier assertion')},self.src)
+        fields={'D-1.2':['action']}
+        ctx=d.context(self.src,before,list(fields),d.local_issues(before,self.src,list(fields)),fields)
+        self.assertEqual(ctx['targets'][0]['required_exact_terms'],['save','url'])
+        after=d.apply(before,{'D-1.2':dict(action='Test URL persistence after reopening database')},self.src)
+        audit=d.convergence(before,after,self.src,list(fields),fields)
+        self.assertFalse(audit['passed']);self.assertTrue(audit['unchanged_unflagged'])
+        self.assertEqual(audit['lost_scope_groups'],[
+            dict(package='D-1.2',requirement='REQ-1',kind='verify',evidence='A saved URL is persisted',
+                 lost_groups=[['save','saved','persist','persisted','saving','persists','storage']])])
+        self.assertEqual(pc.required_exact_terms([['cross project','isolation'],['project']],''),['cross project'])
+        self.assertEqual(pc.required_exact_terms([['cross project','isolation'],['project']],'Cross-project'),[])
+        self.assertEqual(pc.missing_groups('persistence',[['persist']]),[['persist']])
     def test_technical_specificity_and_exact_word_matching(self):
         self.assertIn('action_missing_technical_anchor',w.technical_codes('action','Implement URL persistence in own project'))
         self.assertIn('action_lacks_specificity',w.technical_codes('action','Verify URL persistence'))
