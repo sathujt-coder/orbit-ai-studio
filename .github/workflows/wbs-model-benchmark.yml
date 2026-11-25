@@ -1,0 +1,91 @@
+name: P6.2d.7 — local WBS model qualification
+on:
+  pull_request:
+    paths:
+      - tools/wbs_benchmark.py
+      - tools/planning_fixture.py
+      - tests/test_wbs_benchmark.py
+      - backend/wbs_decomposition.py
+      - backend/work_breakdown.py
+      - backend/planning_constraints.py
+      - backend/planning_scope.py
+      - backend/model_provider.py
+      - .github/workflows/wbs-model-benchmark.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      ollama: ${{ steps.pin.outputs.ollama }}
+      python: ${{ steps.pin.outputs.python }}
+    steps:
+      - id: pin
+        run: |
+          docker pull ollama/ollama:latest
+          docker pull python:3.12-slim
+          echo "ollama=$(docker image inspect ollama/ollama:latest --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+          echo "python=$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+  benchmark:
+    name: WBS qualification (${{ matrix.model }})
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {model: 'qwen2.5-coder:3b', id: coder3}
+          - {model: 'qwen2.5:3b', id: qwen3base}
+          - {model: 'qwen3:4b', id: qwen3-4b}
+          - {model: 'qwen2.5-coder:7b', id: coder7}
+          - {model: 'qwen2.5:7b', id: qwen7}
+          - {model: 'qwen3:8b', id: qwen3-8b}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Actual isolated local inference
+        env:
+          BENCH_MODEL: ${{ matrix.model }}
+          OLLAMA_IMAGE: ${{ needs.images.outputs.ollama }}
+          PYTHON_IMAGE: ${{ needs.images.outputs.python }}
+        run: |
+          python tools/wbs_benchmark.py run --model "$BENCH_MODEL" --commit "$GITHUB_SHA" --report "$RUNNER_TEMP/wbs-benchmark" --ollama-image "$OLLAMA_IMAGE" --python-image "$PYTHON_IMAGE" --confirm 'RUN LOCAL WBS BENCHMARK'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wbs-model-${{ matrix.id }}
+          path: ${{ runner.temp }}/wbs-benchmark/*.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Cleanup isolated runtime
+        if: always()
+        run: |
+          docker rm -f orbit-bench-client orbit-bench-airgap orbit-bench-download || true
+          docker volume rm orbit-bench-models || true
+  qualify:
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wbs-model-*
+          path: model-reports
+      - name: Recompute qualification across all candidates
+        run: python tools/wbs_benchmark.py aggregate --commit "$GITHUB_SHA" --input model-reports --report qualification.json --confirm 'RUN LOCAL WBS BENCHMARK'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wbs-model-qualification
+          path: qualification.json
+          if-no-files-found: error
+          retention-days: 14

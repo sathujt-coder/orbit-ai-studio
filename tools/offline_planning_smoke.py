@@ -69,14 +69,8 @@ def main():
                 ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='4')
             import server,auth_store,product_requirements as pr,project_planning as pp,planning_jobs as pj,model_provider as mp,usage_store,cost_store
             server.init_db()
-            doc=dict(problem='Readers need to save and retrieve links securely',goals=['Save and list links'],users=['Readers'],
-                scope=['Web link storage and listing in existing projects'],out_of_scope=['Mobile','Sharing','Registration','Project management'],
-                assumptions=['Authenticated project membership is provided'],open_questions=[],
-                requirements=[
-                    dict(id='REQ-1',kind='functional',description='Save URL in own project',priority='must',acceptance=['A saved URL is persisted']),
-                    dict(id='REQ-2',kind='functional',description='List saved links in own project',priority='must',acceptance=['Saved URL appears in list']),
-                    dict(id='REQ-3',kind='nonfunctional',description='Enforce project isolation',priority='must',acceptance=['Unauthorized cross-project read is denied'])],
-                stories=[dict(id='US-1',actor='Reader',goal='Save and retrieve own links securely',benefit='Find links later',requirements=['REQ-1','REQ-2','REQ-3'])])
+            from planning_fixture import approved_fixture
+            doc,policy=approved_fixture()
             with server.db() as c:
                 pid=server.create_project('Planning fixture',doc['problem'],'Web app',c)
                 auth_store.create_user(c,'fixture-author','local-fixture-password');auth_store.grant(c,'fixture-author',pid,'owner')
@@ -85,13 +79,6 @@ def main():
             lanes=mp.require_distinct_real(server.provider_snapshot()[1])
             require(all(v.provider=='ollama' and v.base_url=='http://127.0.0.1:11434/v1' for v in lanes.values()),'Nonlocal provider forbidden')
             # Explicit fixture-author decisions: exact approved evidence and literal action/object groups.
-            policy=dict(forbidden=['register','sign up','create projects'],rules=[
-                dict(requirement='REQ-1',kind='implement',evidence=doc['requirements'][0]['description'],matches=[['save','store','persist','saving','storing','persisting','insert'],['url','urls','link','links']]),
-                dict(requirement='REQ-1',kind='verify',evidence=doc['requirements'][0]['acceptance'][0],matches=[['save','saved','persist','persisted','saving','persists','storage'],['url','urls','link','links'],['save','saved','persist','saving','storage']]),
-                dict(requirement='REQ-2',kind='implement',evidence=doc['requirements'][1]['description'],matches=[['list','display','retrieve','view','listing','retrieval','show','fetch'],['url','urls','link','links']]),
-                dict(requirement='REQ-2',kind='verify',evidence=doc['requirements'][1]['acceptance'][0],matches=[['list','listed','listing','display','displayed','retrieve','view','fetch'],['url','urls','link','links'],['list','listed','listing','display','retrieve','view','fetch']]),
-                dict(requirement='REQ-3',kind='implement',evidence=doc['requirements'][2]['description'],matches=[['isolation','isolate','authorization','unauthorized','access','deny','restrict','security'],['project','projects']]),
-                dict(requirement='REQ-3',kind='verify',evidence=doc['requirements'][2]['acceptance'][0],matches=[['isolation','unauthorized','denied','deny','cannot','restrict','access'],['project','projects']])])
             run=server.enqueue_planning(pid,'fixture-author',dict(requirements_version=row['version'],requirements_digest=row['digest'],confirmation='RUN AI PLANNING',scope_contract=policy))['queue_id']
             require(server.dispatch_one(),'Queue did not dispatch')
             with server.db() as c:

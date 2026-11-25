@@ -11,6 +11,8 @@ REQUIRED = (
     'web/index.html', 'tests/test_coding_factory.py',
     'tests/test_verification_factory.py', 'tests/test_verified_pr.py',
     'tools/verify_coding_job.py', 'tools/publish_verified_code.py',
+    'tools/planning_fixture.py', 'tools/wbs_benchmark.py', 'tests/test_wbs_benchmark.py',
+    '.github/workflows/wbs-model-benchmark.yml',
     '.github/workflows/orbit-ci.yml',
 )
 missing = [file for file in REQUIRED if not (ROOT / file).is_file()]

@@ -17,6 +17,7 @@ on:
       - tests/test_planning_repair.py
       - backend/planning_jobs.py
       - tools/offline_planning_smoke.py
+      - tools/planning_fixture.py
       - tests/test_planning_discovery.py
       - backend/requirements_jobs.py
       - backend/requirements_discovery.py
