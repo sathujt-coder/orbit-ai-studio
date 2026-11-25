@@ -7,6 +7,7 @@ import planning_discovery as pd
 import planning_scope as ps
 import requirements_scope as rs
 import planning_constraints as pc
+import dependency_graph
 
 POLICY='orbit.wbs.v1'
 MAX_BYTES=24000
@@ -245,8 +246,18 @@ def assess(document,source):
 def bindings(source):
     return {k:source[k] for k in ('requirements_version','requirements_digest','queue_id','lane','proposal_digest')}
 
+def dependency_view(document,source):
+    """Validated WBS topology only; estimates belong to P6.2f.
+
+    Keep the existing WBS schema and inference audit unchanged. No fabricated
+    effort or cross-deliverable dependencies.
+    """
+    doc=validate(document,source)
+    return dependency_graph.analyze([dict(id=p['id'],depends_on=p['depends_on'],effort_minutes=None)
+        for deliverable in doc['deliverables'] for p in deliverable['packages']])
+
 def view(c,pid,discovery=None):
-    row=latest(c,pid);sources={};current=None;analysis=None;stale=False
+    row=latest(c,pid);sources={};current=None;analysis=None;graph=None;stale=False
     # Project-scoped discovery must still pass the P6.2b gates.
     run=discovery if discovery is not None else pj.latest(c,pid)
     if run and run['ready']:
@@ -259,9 +270,12 @@ def view(c,pid,discovery=None):
         try:
             source=current_source(c,pid,row['lane'],run)
             stale=any(row[k]!=v for k,v in bindings(source).items()) or pp.digest(current['document'])!=row['digest']
-            if not stale:analysis=assess(current['document'],source)
+            if not stale:
+                analysis=assess(current['document'],source)
+                graph=dependency_view(current['document'],source)
         except (KeyError,ValueError,TypeError):stale=True
-    return dict(current=current,sources=sources,stale=stale,analysis=analysis,
+    return dict(current=current,sources=sources,stale=stale,analysis=analysis if not stale else None,
+        dependency_graph=graph if not stale else None,
         decomposition_ready=bool(analysis and analysis['detail_ready'] and not stale),
         history=[dict(x) for x in c.execute("""SELECT version,requirements_version,requirements_digest,queue_id,lane,proposal_digest,digest,author,created_at
             FROM work_breakdowns WHERE project_id=? ORDER BY version DESC LIMIT 50""",(pid,))])
