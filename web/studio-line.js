@@ -12,6 +12,70 @@ const COMPLETE=new Set(['done','approved']);
 const ACTIVE=new Set(['drafting','reviewing','synthesizing']);
 const BLOCKED=new Set(['awaiting_approval','needs_revision']);
 const LINKS={po:['PRD','/requirements.html'],research:['PRD','/requirements.html'],ba:['PRD','/requirements.html'],pm:['Planning','/planning.html'],dev:['Coding Factory','#codingSection'],devops:['GitHub Delivery','#githubSection']};
+// Role-specific work areas: descriptions are design intent, never acceptance evidence.
+const WORKSPACES={
+ po:{title:'Product Strategy',focus:['Product vision','Mục tiêu & KPI','Phạm vi MVP'],inputs:['Ý tưởng dự án','Nhu cầu người dùng']},
+ research:{title:'Research Lab',focus:['Nghiên cứu thị trường','Phân tích đối thủ','Bằng chứng & giả định'],inputs:['Product vision','Câu hỏi nghiên cứu']},
+ ba:{title:'Business Analysis',focus:['User stories','Use cases','Acceptance criteria'],inputs:['Product vision','Research findings']},
+ pm:{title:'Planning & Delivery',focus:['WBS & dependencies','Resource estimates','Sprint schedule & cross-review'],inputs:['Approved PRD','PM proposals']},
+ design:{title:'Design Studio',focus:['User journey','Wireframes & design system','Accessibility'],inputs:['Requirements','Planning constraints']},
+ techlead:{title:'Architecture Lab',focus:['Architecture & ADR','API contracts','Data model & risks'],inputs:['Requirements','Design specification']},
+ dev:{title:'Engineering Factory',focus:['Phương án A/B','Code & review evidence','Sandbox verification'],inputs:['Architecture','Work specification']},
+ qa:{title:'Quality Assurance',focus:['Test strategy','Quality process','Acceptance coverage'],inputs:['Requirements','Implementation specification']},
+ qc:{title:'Quality Control',focus:['Test cases','Defect report','Release evidence'],inputs:['Test strategy','Build & test evidence']},
+ security:{title:'Security Review',focus:['Threat model','Authorization & data protection','Human security review'],inputs:['Architecture','Verification evidence']},
+ devops:{title:'Delivery Operations',focus:['CI/CD checklist','GitHub draft delivery','Human release review'],inputs:['Quality & security evidence','Release candidate']},
+ marketing:{title:'Growth Studio',focus:['SEO & onboarding','Growth hypotheses','Human campaign approval'],inputs:['Product strategy','Release readiness']}
+};
+function workspaceModel(stages,state,id){
+ const stage=stages.find(s=>s.id===id),config=WORKSPACES[id];
+ if(!stage||!config||!state?.project?.id)return null;
+ const task=state.tasks.find(t=>t.stage_id===id);
+ return {id,projectId:state.project.id,projectName:state.project.name,name:stage.name,short:stage.short,
+  title:config.title,focus:config.focus,inputs:config.inputs,deliverable:stage.deliverable,
+  status:task?.status||'unknown',label:LABELS[task?.status]||'Chưa xác minh',
+  approval:stage.approval===true,link:LINKS[id]||null,
+  artifacts:(state.artifacts||[]).filter(a=>a.stage_id===id),
+  reviews:(state.reviews||[]).filter(a=>a.stage_id===id),
+  events:(state.events||[]).filter(a=>a.stage_id===id)};
+}
+function renderWorkspace(holder,stages,state,id,actions){
+ const m=workspaceModel(stages,state,id);
+ if(!m){holder.replaceChildren(el('p','line-notice','Chưa có workspace cho dự án hiện tại.'));delete holder.dataset.projectId;delete holder.dataset.role;return}
+ // Preserve focus and avoid replacing unchanged interactive nodes during polling.
+ const signature=JSON.stringify(m);
+ if(holder.dataset.signature===signature)return;
+ const focused=holder.contains(document.activeElement)?document.activeElement.dataset.focusKey:null;
+ holder.replaceChildren();holder.dataset.signature=signature;holder.dataset.projectId=m.projectId;holder.dataset.role=m.id;
+ const head=el('div','role-workspace-heading');
+ head.append(el('p','section-label',m.short+' / ROLE WORKSPACE'),el('h2','',m.title),el('p','line-notice',m.name+' · '+m.projectName+' · '+m.label));holder.append(head);
+ const columns=el('div','role-workspace-grid');
+ function panel(title,values){
+  const section=el('section','role-workspace-panel');section.append(el('h3','',title));
+  const ul=el('ul','');for(const v of values)ul.append(el('li','',v));section.append(ul);columns.append(section);return section;
+ }
+ panel('Đầu vào dự kiến',m.inputs);panel('Phạm vi công việc',m.focus);panel('Đầu ra & kiểm soát',[m.deliverable,'Hai đề xuất độc lập và review chéo',m.approval?'Yêu cầu phê duyệt của con người':'Quality gate nội bộ']);
+ holder.append(columns);
+ const controls=el('div','role-workspace-actions');
+ function button(label,key,fn){const b=el('button','btn outline',label);b.type='button';b.dataset.focusKey=key;b.addEventListener('click',fn);controls.append(b)}
+ if(m.link){const link=el('a','btn outline','Mở '+m.link[0]+' ↗');link.href=m.link[1];link.dataset.focusKey='workspace-link';controls.append(link)}
+ for(const lane of ['A','B'])button('Trao đổi '+m.short+'-'+lane,'chat-'+lane,()=>actions.chat(m.id,lane,m.projectId));
+ button('Chi tiết phòng ban','inspector',()=>actions.inspect(m.id,m.projectId));
+ holder.append(controls);
+ const evidence=el('div','role-workspace-grid');
+ const docs=el('section','role-workspace-panel');docs.append(el('h3','','Tài liệu gần đây · '+m.artifacts.length));
+ if(!m.artifacts.length)docs.append(el('p','line-notice','Chưa có tài liệu cho vai trò này.'));
+ for(const a of m.artifacts.slice(0,8)){const b=el('button','role-evidence-item',a.kind+' · '+a.agent_id+' · '+(a.preview||''));b.type='button';b.dataset.focusKey='artifact-'+a.id;b.addEventListener('click',()=>actions.artifact(a.id,m.projectId));docs.append(b)}
+ const reviews=el('section','role-workspace-panel');reviews.append(el('h3','','Review gần đây · '+m.reviews.length));
+ if(!m.reviews.length)reviews.append(el('p','line-notice','Chưa có review cho vai trò này.'));
+ for(const r of m.reviews.slice(0,8))reviews.append(el('p','role-evidence-item',r.reviewer_id+' → '+r.author_id+' · '+r.verdict+' · '+r.score+' · '+r.feedback));
+ const events=el('section','role-workspace-panel');events.append(el('h3','','Hoạt động gần đây'));
+ if(!m.events.length)events.append(el('p','line-notice','Chưa có sự kiện cho vai trò này.'));
+ for(const event of m.events.slice(0,8))events.append(el('p','role-evidence-item',event.message));
+ evidence.append(docs,reviews,events);holder.append(evidence);
+ holder.append(el('p','line-notice','Phạm vi và đầu vào là mô tả vai trò, không phải xác nhận bàn giao. Evidence thuộc legacy pipeline; workspace chuyên biệt có quality gates riêng. Không cấp quyền thực thi hoặc release.'));
+ if(focused)Array.from(holder.querySelectorAll('[data-focus-key]')).find(n=>n.dataset.focusKey===focused)?.focus({preventScroll:true});
+}
 function model(stages,tasks){
  const byId=new Map(tasks.map(t=>[t.stage_id,t]));
  return stages.map((stage,index)=>{
@@ -55,6 +119,6 @@ function render(holder,stages,tasks,selected,onSelect){
  }
  if(hadFocus&&focusId){const target=Array.from(holder.querySelectorAll('[data-role-id]')).find(n=>n.dataset.roleId===focusId);target?.querySelector('button')?.focus({preventScroll:true})}
 }
-root.StudioLine={model,render};
-if(typeof module!=='undefined')module.exports={model};
+root.StudioLine={model,render,workspaceModel,renderWorkspace};
+if(typeof module!=='undefined')module.exports={model,workspaceModel};
 })(typeof window!=='undefined'?window:globalThis);

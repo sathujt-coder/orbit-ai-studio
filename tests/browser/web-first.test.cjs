@@ -34,6 +34,19 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     await page.locator('[data-role-id="pm"] .line-select').click();
     assert.equal(await page.locator('#officeDetails').evaluate(e=>e.open),true);
     assert.equal(await page.locator('#deptName').textContent(),'Project Manager');
+    assert.equal(await page.locator('#roleWorkspace').getAttribute('data-role'),'pm');
+    assert.equal(await page.locator('#roleWorkspace').getAttribute('data-project-id'),initialId);
+    const roleIds=['po','research','ba','pm','design','techlead','dev','qa','qc','security','devops','marketing'];
+    const titles=new Set();
+    for(const role of roleIds){
+      await page.locator('[data-role-id="'+role+'"] .line-select').click();
+      assert.equal(await page.locator('#roleWorkspace').getAttribute('data-role'),role);
+      titles.add(await page.locator('#roleWorkspace h2').textContent());
+      assert.equal(await page.locator('#roleWorkspace .role-workspace-panel').count(),6);
+    }
+    assert.equal(titles.size,12);
+    await page.locator('[data-role-id="pm"] .line-select').click();
+    assert.equal(await page.locator('#roleWorkspace [data-focus-key="workspace-link"]').getAttribute('href'),'/planning.html');
     assert.equal(await page.locator('[data-role-id="pm"] .line-link').getAttribute('href'),'/planning.html');
     await page.locator('#newProjectBtn').click();
     await page.locator('#createModal:not(.hidden)').waitFor();
@@ -109,13 +122,16 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
       assert.ok(isolation.observed.every(pid=>pid===initialId),'Obsolete response repainted the selected project');
       assert.equal(isolation.roles,12);
       assert.equal(isolation.agents,24);
+      assert.equal(await page.locator('#roleWorkspace').getAttribute('data-project-id'),initialId);
     }finally{
       await page.evaluate(()=>{const gate=window.__studioTestGate;gate.observer?.disconnect();gate.restore();delete window.__studioTestGate});
     }
     await page.locator('#projectSide [data-pid="'+state.id+'"]').click();
     await page.waitForFunction(pid=>document.querySelector('#studioLine').dataset.projectId===pid&&document.querySelector('#studioLine').dataset.ready==='true',state.id,{timeout:10000});
     assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
+    assert.equal(await page.locator('#roleWorkspace').getAttribute('data-project-id'),state.id);
     await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('#roleWorkspace .role-workspace-grid').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
     assert.equal(await page.locator('#studioLine .line-row').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
     assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
     assert.equal(await page.locator('#studioLine .line-lane').count(),24);
