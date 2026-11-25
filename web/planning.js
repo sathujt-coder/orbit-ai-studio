@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null;
+let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null,estimateBinding=null;
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/planning';
 async function api(path,body){
  const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});
@@ -21,6 +21,9 @@ function buttons(){
  $('wbs-save').disabled=busy||!d?.can_write||!w?.current||w.stale||w.current.version!==wbsEditVersion||!w.sources?.[w.current.lane];
  $('wbs-document').readOnly=$('wbs-save').disabled;
  $('wbs-lane').disabled=busy;
+ const e=w?.resource_estimates;
+ $('estimate-save').disabled=busy||!d?.can_write||!w?.current||w.stale||!e?.draft||estimateBinding!==estimateKey(w);
+ $('estimate-document').readOnly=$('estimate-save').disabled;
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
@@ -69,7 +72,25 @@ function renderDiscovery(d){
  $('discovery-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.status==='succeeded'&&!x.ready?' · QUALITY BLOCKED':''):'Chưa có đề xuất AI';
  $('discovery-evidence').textContent=x?.evidence?JSON.stringify({models:x.models,...x.evidence},null,2):'';
 }
+function estimateKey(w){return w?.current?JSON.stringify([w.current.version,w.current.digest,w.resource_estimates?.current?.version||0]):null}
+function renderEstimates(w,reset){
+ const e=w?.resource_estimates,key=estimateKey(w);
+ if(reset){estimateBinding=key;$('estimate-document').value=e?.draft?JSON.stringify(e.current&&!e.stale?e.current.document:e.draft,null,2):''}
+ $('estimate-state').textContent=!e?.draft?'BLOCKED · Cần WBS hiện tại':key!==estimateBinding?'VERSION CHANGED · Tải lại trước khi sửa':e.stale?'STALE · Nhập ước lượng mới':e.analysis?.ready?'ESTIMATES READY':e.current?'PARTIAL · Còn thiếu dữ liệu':'Chưa ước lượng';
+ $('estimate-analysis').textContent=e?JSON.stringify({analysis:e.analysis,history:e.history},null,2):'';
+}
+async function saveEstimates(){
+ if(busy||$('estimate-save').disabled||!current)return;
+ const d=current,w=d.wbs,p=w.current,e=w.resource_estimates;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  d.wbs=await api(base(d.project_id)+'/wbs/estimates',{expected_version:e.current?.version||0,wbs_version:p.version,wbs_digest:p.digest,document:JSON.parse($('estimate-document').value),confirmation:'SAVE RESOURCE ESTIMATES'});
+  renderWbs(d.wbs,true);graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph();
+ }catch(err){$('status').textContent=err.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 function renderWbs(w,reset=false){
+ renderEstimates(w,reset);
  if(reset){wbsEditVersion=w?.current?.version??null;$('wbs-document').value=w?.current?JSON.stringify(w.current.document,null,2):''}
  const a=w?.analysis;
  $('wbs-status').textContent=!w?.current?'Chưa có WBS phân cấp':w.stale?'STALE · WBS v'+w.current.version :w.current.version!==wbsEditVersion?'VERSION CHANGED · Tải lại trước khi sửa':(w.decomposition_ready?'DETAIL READY · ':'DRAFT · Cần chi tiết · ')+'WBS v'+w.current.version;
@@ -155,7 +176,8 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const d=await api('/api/bootstrap');$('project').replaceChildren(...d.projects.map(p=>new Option(p.name,p.id)));
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
-  $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
+  $('estimate-save').addEventListener('click',saveEstimates);
+ $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();
  }catch(e){$('status').textContent=e.message}

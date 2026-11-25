@@ -864,6 +864,12 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/estimates',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    work_breakdown.resource_estimates.save(c,pid,actor,body,now(),work_breakdown.view(c,pid))
+                    data=work_breakdown.view(c,pid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs(?:/seed)?',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:

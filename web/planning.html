@@ -17,6 +17,9 @@
 <button id="wbs-decompose" type="button" class="btn outline">AI phân rã WBS (local)</button><p id="decomposition-status" role="status"></p><details><summary>Đề xuất AI và bằng chứng (chưa tiếp nhận)</summary><pre id="decomposition-evidence"></pre></details><p id="wbs-status" role="status"></p><div id="wbs-tree"></div>
 <label>WBS JSON<textarea id="wbs-document" rows="18" maxlength="50000" spellcheck="false"></textarea></label>
 <details><summary>Traceability và Quality Findings</summary><pre id="wbs-findings"></pre></details>
+<h2>Resource Estimates</h2><p>Ước lượng thủ công theo package: effort_minutes (phút công), role (vai trò dự kiến). Null là chưa xác định. Không phân bổ nhân sự hoặc cam kết lịch.</p>
+<p id="estimate-state" role="status"></p><label>Estimates JSON<textarea id="estimate-document" rows="12" maxlength="50000" spellcheck="false"></textarea></label>
+<button id="estimate-save" type="button" class="btn outline">Lưu ước lượng</button><details><summary>Tổng effort theo vai trò và lịch sử</summary><pre id="estimate-analysis"></pre></details>
 <h2>Kế hoạch phẳng đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
 <h2>Dependency Graph &amp; Critical Path</h2>
 <p>Phân tích dựa trên phiên bản đã lưu, không phải lịch cam kết. Các lớp chỉ biểu thị thứ tự phụ thuộc; số phút giả định tài nguyên song song không giới hạn.</p>

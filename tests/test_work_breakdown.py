@@ -61,6 +61,39 @@ class WbsTests(unittest.TestCase):
     def save(self,d,v=1,actor='developer',**kw):
         src=w.view(self.c,'p')['sources']['A'];body=dict(src,expected_version=v,document=d);body.update(kw)
         return w.save(self.c,'p',actor,body,'t')
+    def test_resource_estimates_revision_and_cpm(self):
+        self.run_pm();v=self.seed();r=w.resource_estimates
+        self.assertFalse(v['dependency_graph']['timing_ready'])
+        doc=v['resource_estimates']['draft'];p=v['current']
+        body=dict(expected_version=0,wbs_version=p['version'],wbs_digest=p['digest'],
+                  document=doc,confirmation='SAVE RESOURCE ESTIMATES')
+        with self.assertRaises(PermissionError):r.save(self.c,'p','viewer',body,'t',v)
+        for item in doc['packages']:item.update(effort_minutes=30,role='QA' if item['id'].endswith('.2') else 'Dev')
+        doc['packages'][0]['effort_minutes']=True
+        with self.assertRaises(ValueError):r.save(self.c,'p','owner',body,'t',v)
+        doc['packages'][0]['effort_minutes']=None
+        partial=r.save(self.c,'p','owner',body,'t',v)
+        self.assertFalse(partial['analysis']['ready'])
+        self.assertIsNone(partial['analysis']['total_effort_minutes'])
+        self.assertIsNone(partial['analysis']['dependency_graph']['critical_path_minutes'])
+        doc['packages'][0]['effort_minutes']=30
+        with self.assertRaises(ValueError):r.save(self.c,'p','owner',body,'t',v)
+        body['expected_version']=1
+        ready=r.save(self.c,'p','developer',body,'t',v)
+        self.assertTrue(ready['analysis']['ready'])
+        self.assertEqual(ready['analysis']['total_effort_minutes'],180)
+        self.assertEqual(ready['analysis']['known_effort_by_role'],{'Dev':90,'QA':90})
+        self.assertEqual(w.view(self.c,'p')['dependency_graph']['critical_path_minutes'],60)
+        self.assertEqual(w.view(self.c,'p')['current']['digest'],p['digest'])
+        newer=self.save(detail(p['document']))
+        self.assertTrue(newer['resource_estimates']['stale'])
+        self.assertIsNone(newer['resource_estimates']['analysis'])
+        self.assertFalse(newer['dependency_graph']['timing_ready'])
+        body['expected_version']=2
+        with self.assertRaises(ValueError):r.save(self.c,'p','owner',body,'t',newer)
+        self.assertIsNone(r.view(self.c,'q',None,False)['current'])
+        self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/estimates'),('p','write'))
+
     def test_no_pm_no_wbs_and_separate_plan(self):
         self.assertEqual(w.view(self.c,'p')['sources'],{})
         with self.assertRaises(ValueError):w.current_source(self.c,'p','A')
