@@ -108,6 +108,11 @@ def technical_codes(field,value):
             result.append('action_missing_technical_anchor')
         return result
     if field=='evidence' and len(words)<4:return ['evidence_lacks_specificity']
+    if field=='output' and words:
+        # A narrow additional check for action/assertion text in the artifact
+        # slot. Do not require English artifact nouns for other languages.
+        if words[0] in ('verify','assert','simulate','inspect','compare') or words[-1] in ('assertion','assertions'):
+            return ['output_role_confusion']
     return []
 
 def assess(document,source):
@@ -132,7 +137,10 @@ def assess(document,source):
                 for code in technical_codes(field,value):issue(code)
                 if rs.review_text(value):issue('review_contamination')
                 if any(rs.contains(value,x) for x in forbidden):issue('forbidden_scope')
-                if normalized in seen:issue('duplicate_detail')
+                if normalized in seen:
+                    other_id,other_field=seen[normalized]
+                    issues.append(dict(package=p['id'],field=field,code='duplicate_detail',
+                        conflicts_with=dict(package=other_id,field=other_field)))
                 else:seen[normalized]=(p['id'],field)
             # All additional human-confirmed literal rules still apply. For
             # verification, require the rule for this criterion (or description).
@@ -142,6 +150,9 @@ def assess(document,source):
                 if missing:
                     issues.append(dict(package=p['id'],field='details',code='missing_scope_evidence',
                         requirement=d['requirement'],criterion=rule['evidence'],missing_groups=missing))
+            if p['kind']=='implement' and p['action'] is not None and re.match(
+                    r'^(verify|test|assert|simulate|inspect|compare|kiểm tra|kiểm thử|xác minh|đối chiếu)\b',rs.norm(p['action'])):
+                issues.append(dict(package=p['id'],field='action',code='implementation_action_required'))
             if p['kind']=='verify' and p['action'] is not None:
                 # Verification is an explicit check, not an implementation instruction.
                 action=rs.norm(p['action'])

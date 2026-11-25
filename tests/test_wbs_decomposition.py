@@ -23,11 +23,17 @@ def source():
 def output(doc,ids):
     return {pid:{k:p[k] for k in w.DETAIL_FIELDS} for pid,p in d.packages(fixture.detail(doc)).items() if pid in ids}
 
+def wire_output(doc,schema):
+    ids=list(dict.fromkeys(key.rsplit('.',1)[0] for key in schema['required']))
+    values=d.flatten(output(doc,ids))
+    return {key:values[key] for key in schema['required']}
+
 def synthetic(doc,record,broken=False):
     def call(phase,system,user,schema):
-        ids=schema['required'];record.append((phase,ids,json.loads(user)))
-        patch={pid:{k:v for k,v in values.items() if k in schema['properties'][pid]['required']} for pid,values in output(doc,ids).items()}
-        if broken and len(record)==1:patch[ids[0]]['action']='Create project management interface'
+        ids=list(dict.fromkeys(key.rsplit('.',1)[0] for key in schema['required']))
+        record.append((phase,ids,json.loads(user)))
+        patch=wire_output(doc,schema)
+        if broken and len(record)==1:patch[ids[0]+'.action']='Create project management interface'
         return json.dumps(patch)
     return call
 
@@ -56,8 +62,9 @@ class DecompositionTests(unittest.TestCase):
     def test_noop_scope_failure_and_no_third_call(self):
         record=[]
         def call(phase,system,user,schema):
-            record.append(phase);patch={pid:{k:v for k,v in values.items() if k in schema['properties'][pid]['required']} for pid,values in output(self.doc,schema['required']).items()}
-            for p in patch.values():p['action']='Create project management interface'
+            record.append(phase);patch=wire_output(self.doc,schema)
+            for key in patch:
+                if key.endswith('.action'):patch[key]='Create project management interface'
             return json.dumps(patch)
         e=d.run(call,self.src,self.doc)
         self.assertFalse(e['ready']);self.assertEqual(len(record),2);self.assertFalse(e['repair_audit_valid'])
@@ -213,10 +220,9 @@ class Artifact14990478494Tests(unittest.TestCase):
             self.assertIn('save',payload['targets'][0]['required_exact_terms'])
             def call(phase,system,user,schema):
                 record.append((phase,schema))
-                if len(record)==1:return json.dumps(initial)
-                full=output(doc,schema['required'])
+                if len(record)==1:return json.dumps(d.flatten(initial))
                 # Repair test outputs are synthetic and only use schema-authorized fields.
-                return json.dumps({pid:{k:values[k] for k in schema['properties'][pid]['required']} for pid,values in full.items()})
+                return json.dumps(wire_output(doc,schema))
             e=d.run(call,self.src,doc)
             self.assertTrue(e['ready'],e['analysis']['issues'])
             self.assertEqual(e['call_count'],3)
@@ -229,7 +235,7 @@ class Artifact14990478494Tests(unittest.TestCase):
         doc=self.base('A')
         before=d.apply(doc,ARTIFACT_PATCHES['A'][0],self.src)
         issues=d.local_issues(before,self.src,self.ids);fields=d.repair_fields(self.ids,issues)
-        with self.assertRaises(ValueError):d.decode(json.dumps(ARTIFACT_PATCHES['A'][1]),list(fields),fields)
+        with self.assertRaises(ValueError):d.decode(json.dumps(d.flatten(ARTIFACT_PATCHES['A'][1])),list(fields),fields)
         complete=d.apply(doc,output(doc,self.ids),self.src)
         audit=d.convergence(before,complete,self.src,self.ids,fields)
         self.assertFalse(audit['unchanged_unflagged']);self.assertFalse(audit['passed'])
@@ -261,3 +267,139 @@ class Artifact14990478494Tests(unittest.TestCase):
         self.assertEqual(w.technical_codes('action','Add a save handler using authenticated project identifiers'),[])
         self.assertEqual(w.technical_codes('evidence','Stored URL and project identifier assertion'),[])
         self.assertEqual(w.missing_groups('URL persisted and stored',dict(matches=[['persist','store']])),[['persist','store']])
+
+
+# Exact PM titles and model patches from artifact 14998801172.
+# The historical nested patch is converted losslessly to the new flat wire.
+ARTIFACT_14998801172={
+    'A':[
+        {'D-1.1':dict(action='Save URL in own project',output='Persisted URL',evidence='Persisted URL test assertion'),
+         'D-1.2':dict(action='Save URL in own project',output='Persisted URL',evidence='Persisted URL test assertion'),
+         'D-2.1':dict(action='List saved links in own project',output='Listed URLs',evidence='Listed URLs test assertion')},
+        {'D-1.1':dict(action='Save URL',output='Persisted URL test assertion'),
+         'D-1.2':dict(action='Save URL',output='Persisted URL test assertion',evidence='Persisted URL test assertion'),
+         'D-2.1':dict(action='List saved links',output='Listed URLs test assertion')}],
+    'B':[
+        {'D-1.1':dict(action='Save URL in own project',output='Persisted URL in own project',evidence='Persisted URL retrieval test assertion'),
+         'D-1.2':dict(action='Verify saved URL in own project',output='Persisted URL in own project',evidence='Persisted URL visibility test assertion'),
+         'D-2.1':dict(action='List saved links in own project',output='List of saved links displayed',evidence='Saved link list retrieval test assertion')},
+        {'D-1.1':dict(action='Save URL in own project'),
+         'D-1.2':dict(output='Verify saved URL in own project'),
+         'D-2.1':dict(action='List saved links in own project')}]}
+ARTIFACT_PM={
+    'A':("Implement URL saving and listing features for existing projects",[
+        ("Create a function to save URLs in the user's project","Save URL in own project"),
+        ("Develop a function to list saved URLs in the user's project","Verify URLs are displayed correctly in the list"),
+        ("Implement project isolation to prevent unauthorized access to other projects","Ensure unauthorized users cannot access other projects")]),
+    'B':("Implement URL storage and project isolation",[
+        ("Save URL in own project","A saved URL is persisted"),
+        ("List saved links in own project","A saved URL appears in list"),
+        ("Enforce project isolation","Unauthorized cross-project read is denied")])}
+
+class FlatTechnicalProtocolTests(unittest.TestCase):
+    def artifact(self,lane):
+        from test_planning_repair import fixture_source
+        import planning_scope as ps
+        src=source();approved=fixture_source()
+        src['lane']=lane
+        src['policy']=ps.contract(src['document'],approved['scope_contract'])
+        objective,titles=ARTIFACT_PM[lane]
+        raw=dict(objective=objective,work=[dict(requirement=req['id'],implement=t[0],verify=t[1])
+            for req,t in zip(src['document']['requirements'],titles)])
+        src['proposal']=pd.parse(json.dumps(raw),dict(document=src['document']))
+        return src,w.skeleton(src)
+    def test_exact_flat_schema_and_role_contracts(self):
+        src,doc=self.artifact('A')
+        ids=d.batches(doc)[0]
+        body,shape,meta=d.request(src,doc,ids)
+        keys=[pid+'.'+k for pid in ids for k in w.DETAIL_FIELDS]
+        self.assertEqual(shape['required'],keys);self.assertEqual(meta['keys'],keys)
+        self.assertEqual(set(shape['properties']),set(keys));self.assertFalse(shape['additionalProperties'])
+        self.assertTrue(all(x['type']=='string' and x['maxLength']==159 for x in shape['properties'].values()))
+        self.assertIn('Imperative technical change',shape['properties']['D-1.1.action']['description'])
+        self.assertIn('Begin Test, Verify or Check',shape['properties']['D-1.2.action']['description'])
+        self.assertIn('verification artifact',shape['properties']['D-1.2.output']['description'])
+        self.assertIn('expected observable',shape['properties']['D-1.2.evidence']['description'])
+        ctx=json.loads(body);self.assertEqual(ctx['wire'],d.WIRE)
+        self.assertIn(ARTIFACT_PM['A'][1][0][0],ctx['targets'][0]['avoid_exact'])
+        self.assertEqual(ctx['targets'][0]['required_exact_terms'],['save','url'])
+        self.assertEqual(meta['prompt_digest'],pp.digest(d.RULES))
+        self.assertLessEqual(meta['context_bytes'],d.MAX_CONTEXT_BYTES)
+    def test_flat_decoder_rejects_nested_duplicate_and_unauthorized_fields(self):
+        ids=['D-1.1'];fields={'D-1.1':['action']};good={'D-1.1.action':'Add a handler for URL storage'}
+        self.assertEqual(d.decode(json.dumps(good),ids,fields),{'D-1.1':{'action':good['D-1.1.action']}})
+        for raw in ('{"D-1.1.action":"first","D-1.1.action":"second"}',
+                    json.dumps({'D-1.1':{'action':good['D-1.1.action']}}),
+                    json.dumps(dict(good,**{'D-1.1.output':'Unauthorized output'})),
+                    json.dumps({'D-1.1.action':{'value':'bad'}}),
+                    json.dumps({'D-1.1.action':''}),json.dumps({'D-1.1.action':'x'*160})):
+            with self.subTest(raw=raw),self.assertRaises(ValueError):d.decode(raw,ids,fields)
+    def test_historical_failed_repairs_are_still_blocked(self):
+        for lane in 'AB':
+            with self.subTest(lane=lane):
+                src,doc=self.artifact(lane);calls=[]
+                def call(phase,system,user,schema):
+                    patch=d.flatten(ARTIFACT_14998801172[lane][len(calls)])
+                    calls.append(phase)
+                    self.assertEqual(set(patch),set(schema['required']))
+                    return json.dumps(patch)
+                e=d.run(call,src,doc)
+                self.assertFalse(e['ready']);self.assertFalse(e['repair_audit_valid'])
+                self.assertEqual(len(calls),2);self.assertEqual(len(e['history']),1)
+                initial,repaired=e['history'][0]['attempts']
+                self.assertEqual(len(initial['issues_after']),10 if lane=='A' else 3)
+                self.assertGreaterEqual(len(repaired['issues_after']),11 if lane=='A' else 3)
+                self.assertEqual(repaired['convergence']['lost_scope_groups'],[])
+                self.assertFalse(repaired['convergence']['passed'])
+                self.assertTrue(any(x['code']=='output_role_confusion' for x in repaired['issues_after']))
+    def test_duplicate_diagnostics_and_field_specific_instructions(self):
+        src,doc=self.artifact('B');ids=d.batches(doc)[0]
+        before=d.apply(doc,ARTIFACT_14998801172['B'][0],src)
+        issues=d.local_issues(before,src,ids)
+        duplicate=next(x for x in issues if x['code']=='duplicate_detail')
+        self.assertEqual(duplicate,dict(package='D-1.2',field='output',code='duplicate_detail',
+            conflicts_with=dict(package='D-1.1',field='output')))
+        fields=d.repair_fields(ids,issues)
+        self.assertEqual(fields,{'D-1.1':['action'],'D-1.2':['output'],'D-2.1':['action']})
+        body,shape,meta=d.request(src,before,list(fields),issues,fields)
+        self.assertEqual(shape['required'],['D-1.1.action','D-1.2.output','D-2.1.action'])
+        ctx=json.loads(body);target=next(x for x in ctx['targets'] if x['id']=='D-1.2')
+        entry=target['field_contracts']['D-1.2.output']
+        self.assertEqual(entry['conflicts_with'],[dict(key='D-1.1.output')])
+        self.assertTrue(entry['fix']);self.assertIn('verification artifact',entry['instruction'])
+        self.assertEqual(target['retained']['action'],ARTIFACT_14998801172['B'][0]['D-1.2']['action'])
+        self.assertIn('Persisted URL in own project',ctx['used_details'])
+    def test_synthetic_exact_field_repairs_preserve_retained_model_text(self):
+        for lane in 'AB':
+            with self.subTest(lane=lane):
+                src,doc=self.artifact(lane);calls=[]
+                def call(phase,system,user,schema):
+                    calls.append(phase)
+                    if len(calls)==1:return json.dumps(d.flatten(ARTIFACT_14998801172[lane][0]))
+                    return json.dumps(wire_output(doc,schema))
+                e=d.run(call,src,doc)
+                self.assertTrue(e['ready'],e['analysis']['issues'])
+                self.assertEqual(e['call_count'],3);self.assertEqual(e['max_calls'],4)
+                repair=e['history'][0]['attempts'][1]
+                self.assertTrue(repair['convergence']['passed'])
+                self.assertEqual(repair['convergence']['lost_scope_groups'],[])
+                self.assertTrue(repair['convergence']['unchanged_unflagged'])
+                self.assertEqual(set(repair['patch']),set(repair['request']['keys']))
+                for pid,values in ARTIFACT_14998801172[lane][0].items():
+                    for key,value in values.items():
+                        if pid+'.'+key not in repair['patch']:
+                            self.assertEqual(d.packages(e['candidate'])[pid][key],value)
+                self.assertTrue(d.gate(e,src,doc)['ready'])
+    def test_role_confusion_and_wire_provenance_tampering(self):
+        src,doc=self.artifact('B')
+        bad=d.apply(doc,{'D-1.1':dict(action='Test URL persistence using a fresh connection',
+            output='Verify URL persistence in storage',evidence='Expected stored URL identifier assertion')},src)
+        codes={x['code'] for x in d.local_issues(bad,src,['D-1.1'])}
+        self.assertTrue({'implementation_action_required','output_role_confusion'}<=codes)
+        e=d.run(synthetic(doc,[]),src,doc);self.assertTrue(e['ready'])
+        for change in (lambda x:x.update(wire='legacy'),
+                       lambda x:x['history'][0]['attempts'][0]['request'].update(prompt_digest='forged'),
+                       lambda x:x['history'][0]['attempts'][0]['request'].update(keys=['D-1.1.action']),
+                       lambda x:x['history'][0]['attempts'][0]['patch'].update({'D-99.1.action':'forged'})):
+            bad=copy.deepcopy(e);change(bad)
+            with self.assertRaises(ValueError):d.gate(bad,src,doc)

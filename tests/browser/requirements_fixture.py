@@ -33,7 +33,7 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
             'D-1.2':dict(action='Test saved URL retrieval in the project list',output='URL retrieval integration test',evidence='Returned list includes saved URL'),
             'D-2.1':dict(action='Filter link reads by authenticated project membership',output='Membership access guard for link queries',evidence='Authorization code review checklist'),
             'D-2.2':dict(action='Test another project member requesting a foreign URL',output='Cross project denial integration test',evidence='Denied response without link payload')}
-        result={pid:{k:details[pid][k] for k in schema['properties'][pid]['required']} for pid in schema['required']}
+        result={key:details[key.rsplit('.',1)[0]][key.rsplit('.',1)[1]] for key in schema['required']}
     elif schema is discovery.DOCUMENT_SCHEMA:
         result=model_document()
     else:
