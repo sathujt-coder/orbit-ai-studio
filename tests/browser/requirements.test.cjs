@@ -51,11 +51,34 @@ test('P6.1 real Chromium and HTTP with synthetic inference: queue, adoption, app
   const approval={version:1,digest:data.current.digest,confirmation:'APPROVE PRODUCT REQUIREMENTS'};
   assert.equal((await post(developer,dc,path+'/approve',approval)).status(),403);
   assert.equal((await post(reviewer,rc,path+'/approve',{...approval,digest:'wrong'})).status(),400);
+  // Explicitly exercise multi-project reviewer selection. The shared browser
+  // fixture can contain projects from concurrently running Planning tests.
+  const decoy=await make('Reviewer selection decoy');
+  const decoyPath='/api/projects/'+decoy+'/requirements';
+  assert.equal((await post(owner,csrf,'/api/projects/'+decoy+'/members',{user:'ci-reviewer',role:'reviewer'})).status(),200);
+  assert.equal((await post(owner,csrf,decoyPath,{expected_version:0,document:data.current.document})).status(),200);
+  await reviewer.addInitScript(projectId=>localStorage.setItem('orbit-project',projectId),decoy);
   await reviewer.goto(ORIGIN+'/requirements.html');await reviewer.locator('#panel').waitFor({state:'visible'});
+  assert.equal(await reviewer.locator('#project').inputValue(),decoy);
+  await reviewer.locator('#project').selectOption(pid);
+  await reviewer.locator('#panel').waitFor({state:'visible'});
+  assert.equal(await reviewer.locator('#project').inputValue(),pid);
+  await reviewer.waitForFunction(()=>!document.querySelector('#approve').disabled);
+  assert.match(await reviewer.locator('#version').textContent(),/^Version 1 · Chưa duyệt · AI draft adopted$/);
+  assert.deepEqual(JSON.parse(await reviewer.locator('#document').inputValue()),data.current.document);
   assert.equal(await reviewer.locator('#save').isDisabled(),true);assert.equal(await reviewer.locator('#discover').isDisabled(),true);
-  reviewer.on('dialog',d=>d.accept());await reviewer.locator('#approve').click();
+  reviewer.on('dialog',d=>d.accept());
+  // Bind the real UI mutation to the exact target, version and digest.
+  const approvalResponse=reviewer.waitForResponse(r=>r.url()===ORIGIN+path+'/approve'&&r.request().method()==='POST');
+  await reviewer.locator('#approve').click();
+  const response=await approvalResponse;
+  assert.equal(response.status(),200);
+  assert.deepEqual(response.request().postDataJSON(),approval);
   await reviewer.waitForFunction(()=>document.querySelector('#version').textContent.includes('Đã duyệt'));
   data=await get(owner,path);assert.equal(data.planning_ready,true);assert.equal(data.current.approved_by,'ci-reviewer');
+  assert.equal(data.current.digest,approval.digest);
+  const untouched=await get(owner,decoyPath);
+  assert.equal(untouched.planning_ready,false);assert.equal(untouched.current.approved_at,null);
   await owner.locator('#reload').click();await owner.waitForFunction(()=>document.querySelector('#version').textContent.includes('Đã duyệt'));
   await owner.locator('#save').click();await owner.waitForFunction(()=>document.querySelector('#version').textContent.includes('Version 2'));
   data=await get(owner,path);assert.equal(data.planning_ready,false);
