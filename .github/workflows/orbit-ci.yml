@@ -45,6 +45,7 @@ jobs:
       - name: Validate frontend syntax
         run: |
           node --check web/app.js
+          node --check web/studio-line.js
           node --check web/world3d.js
           node --check web/auth-account.js
           node --check web/access.js
@@ -96,7 +97,7 @@ jobs:
         run: |
           PYTHONPATH=backend python -c "import os, sqlite3, auth_store; c=sqlite3.connect(os.environ['RUNNER_TEMP']+'/orbit-web-e2e.sqlite'); auth_store.create_user(c,'ci-browser-user','local-ci-fixture-password'); auth_store.create_user(c,'ci-viewer','local-ci-fixture-password'); pid=c.execute('SELECT id FROM projects LIMIT 1').fetchone()[0]; auth_store.grant(c,'ci-browser-user',pid,'owner'); auth_store.grant(c,'ci-viewer',pid,'viewer'); c.commit(); c.close()"
       - name: Run real Chromium E2E
-        run: node --test tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs tests/browser/resources.test.cjs tests/browser/agent-queue.test.cjs tests/browser/concurrency.test.cjs tests/browser/routing.test.cjs tests/browser/protection.test.cjs tests/browser/monitoring.test.cjs
+        run: node --test tests/browser/studio-line.test.cjs tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs tests/browser/resources.test.cjs tests/browser/agent-queue.test.cjs tests/browser/concurrency.test.cjs tests/browser/routing.test.cjs tests/browser/protection.test.cjs tests/browser/monitoring.test.cjs
       - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090f1d"><title>ORBIT AI — Autonomous Software Studio</title><link rel="stylesheet" href="/styles.css"></head>
+<html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090f1d"><title>ORBIT AI — Autonomous Software Studio</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio-line.css"></head>
 <body>
 <div class="app-shell">
   <aside class="sidebar">
     <div class="brand"><div class="brand-icon"><span>✺</span></div><div class="brand-copy"><b>ORBIT<span> AI</span></b><small>AUTONOMOUS STUDIO</small></div></div>
     <div class="space-label">WORKSPACE</div>
     <nav class="side-nav" id="sideNav">
-      <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Tổng quan <i></i></button>
+      <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Dây chuyền <i></i></button>
       <button class="nav-item" data-view="departments"><span class="nav-icon">▦</span> Phòng ban <span class="nav-count">12</span></button>
       <button class="nav-item" data-view="workflow"><span class="nav-icon">↗</span> Quy trình <span class="nav-count">12</span></button>
       <button class="nav-item" data-view="coding"><span class="nav-icon">⌨</span> AI Coding Factory</button>
@@ -27,7 +27,7 @@
       <div class="topbar-actions"><span class="header-date" id="headerDate"></span><span class="header-badge"><span></span> LIVE CONTROL</span><a class="btn outline" href="/usage.html">Token Usage</a><a class="btn outline" href="/cost.html">AI Cost</a><a class="btn outline" href="/queue.html">Task Queue</a><a class="btn outline" href="/requirements.html">Product Requirements</a><a class="btn outline" href="/planning.html">Project Planning</a><a class="btn outline" id="monitoringLink" href="/monitoring.html" hidden>Operations</a><a class="btn outline" id="resourceSettingsLink" href="/resources.html" hidden>Resources</a><a class="btn outline" id="providerSettingsLink" href="/providers.html" hidden>AI Providers</a><a class="btn outline" id="authAccount" href="/account.html">Tài khoản</a><div class="profile-avatar">AI</div></div>
     </header>
     <main class="main-content" id="mainContent">
-      <div class="page-heading"><div><div class="eyebrow"><span class="tiny-star">✳</span> AUTONOMOUS SOFTWARE COMPANY</div><h1>Trung tâm điều hành <em>AI</em></h1><p>12 phòng ban · 24 agent · 2 lớp làm việc và phản biện độc lập</p></div><button class="btn primary new-project-btn" id="newProjectBtn"><span>＋</span> Dự án mới</button></div>
+      <div class="page-heading"><div><div class="eyebrow"><span class="tiny-star">✳</span> AUTONOMOUS SOFTWARE COMPANY</div><h1>Studio <em>Generator</em></h1><p>12 phòng ban · 24 agent · 2 lớp làm việc và phản biện độc lập</p></div><button class="btn primary new-project-btn" id="newProjectBtn"><span>＋</span> Dự án mới</button></div>
       <div class="stats-row" id="statsRow">
         <div class="metric"><div class="metric-head">TỔNG AGENT <span class="metric-glyph">◈</span></div><div class="metric-value">24 <span class="metric-unit">AGENTS</span></div><div class="metric-foot"><span class="mini-dot mint"></span> 12 cặp làm việc độc lập</div></div>
         <div class="metric"><div class="metric-head">PHÒNG BAN <span class="metric-glyph purple">▦</span></div><div class="metric-value">12 <span class="metric-unit">TEAMS</span></div><div class="metric-foot"><span class="mini-dot purple"></span> Toàn bộ vòng đời sản phẩm</div></div>
@@ -35,7 +35,14 @@
         <div class="metric"><div class="metric-head">QUALITY REVIEWS <span class="metric-glyph teal">✓</span></div><div class="metric-value" id="statReviews">0</div><div class="metric-foot"><span class="mini-dot mint"></span> Kiểm tra chéo A ↔ B</div></div>
       </div>
 
-      <div class="workspace-grid" id="overviewSection">
+      <section class="studio-line" id="overviewSection" aria-labelledby="lineTitle">
+        <div class="section-heading"><div><div class="section-label">ROLE-BASED PRODUCTION LINE</div><h2 id="lineTitle">Dây chuyền sản xuất theo vai trò</h2><p>12 vai trò · 24 agent · bàn giao theo thứ tự hiện tại của backend</p></div><a class="btn outline" href="/queue.html">Task Queue ↗</a></div>
+        <p class="line-notice" id="lineFreshness" role="status">Chưa tải trạng thái dự án.</p>
+        <p class="line-notice">Trạng thái theo giai đoạn legacy pipeline, không phải trạng thái từng agent hoặc bằng chứng phát hành. PRD, Planning và Coding Factory là workflow riêng; các liên kết không tự kích hoạt công việc.</p>
+        <div id="studioLine"></div>
+      </section>
+      <details class="studio-office" id="officeDetails"><summary>Văn phòng 3D và chi tiết phòng ban</summary>
+      <div class="workspace-grid" id="officeSection">
         <section class="world-panel">
           <div class="panel-top"><div><div class="section-label">LIVE SIMULATION <span class="live-pill"><i></i> 3D WORKSPACE</span></div><h2>Văn phòng AI ảo</h2></div><div class="world-top-right"><span class="project-indicator" id="worldActive">● Sẵn sàng</span><button class="outline-icon" id="resetCamera" title="Đặt lại góc nhìn">⟳</button></div></div>
           <div class="world-wrap" id="worldWrap"><canvas id="world" aria-label="Bản đồ văn phòng 3D, kéo để xoay, cuộn để phóng to"></canvas><div class="world-labels" id="worldLabels"></div>
@@ -57,6 +64,7 @@
         </section>
       </div>
 
+      </details>
       <section class="pipeline-card" id="workflowSection"><div class="section-heading"><div><div class="section-label">SOFTWARE DELIVERY LIFECYCLE</div><h2>Quy trình phát triển sản phẩm</h2><p>Mỗi giai đoạn: 2 bản độc lập → review chéo → hợp nhất → quality gate</p></div><div class="pipeline-controls"><button class="btn outline" id="nextStage">▶ Chạy 1 bước</button><button class="btn primary" id="runPipeline">✳ Chạy quy trình</button><button class="btn danger hidden" id="pausePipeline">Ⅱ Tạm dừng</button></div></div>
         <div class="pipeline-track" id="pipelineTrack"></div>
         <div class="quality-footer"><div class="shield-glyph">⬡</div><div><b>Độc lập trước · Phản biện sau</b><small>Agent A và B tạo bản nháp riêng; chỉ được đọc bài nhau ở vòng đánh giá. Cả hai phải duyệt mới qua gate. Security, DevOps và Marketing cần bạn phê duyệt.</small></div><span class="quality-tag">HUMAN-IN-THE-LOOP</span></div>
@@ -122,5 +130,5 @@
 <div class="modal-backdrop hidden" id="artifactModal" role="dialog" aria-modal="true"><div class="modal modal-large"><div class="modal-head"><div><div class="section-label" id="artifactModalMeta">ARTIFACT</div><h2 id="artifactModalTitle">Chi tiết tài liệu</h2></div><button class="close-btn" data-close="artifactModal">×</button></div><div class="document-body" id="artifactBody"></div><div class="modal-actions"><button class="btn outline" id="copyArtifact">⧉ Sao chép</button><button class="btn primary" data-close="artifactModal">Đóng</button></div></div></div>
 <div class="modal-backdrop hidden" id="chatModal" role="dialog" aria-modal="true"><div class="modal modal-chat"><div class="modal-head"><div><div class="section-label">DIRECT AGENT COMMUNICATION</div><h2 id="chatTitle">Trao đổi với Agent</h2></div><button class="close-btn" data-close="chatModal">×</button></div><div class="chat-feed" id="chatFeed"></div><form id="chatForm" class="chat-form"><textarea id="chatInput" placeholder="Giao nhiệm vụ / yêu cầu phản biện..." rows="2" required></textarea><button class="btn primary" type="submit">Gửi ↗</button></form></div></div>
 <div class="toast-wrap" id="toastWrap"></div>
-<script src="/auth-account.js"></script><script src="/world3d.js"></script><script src="/app.js"></script>
+<script src="/auth-account.js"></script><script src="/world3d.js"></script><script src="/studio-line.js"></script><script src="/app.js"></script>
 </body></html>

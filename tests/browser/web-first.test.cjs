@@ -19,6 +19,13 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     await page.waitForFunction(() => document.querySelectorAll('#agentMembers .agent-card').length === 2, null, {timeout: 15000});
     assert.equal(await page.locator('#agentMembers .agent-card').count(), 2);
     assert.equal(await page.locator('#pipelineTrack').isVisible(), true);
+    assert.equal(await page.locator('#studioLine [data-role-id]').count(),12);
+    assert.equal(await page.locator('#studioLine .line-lane').count(),24);
+    assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.roleId)),['po','research','ba','pm','design','techlead','dev','qa','qc','security','devops','marketing']);
+    await page.locator('[data-role-id="pm"] .line-select').click();
+    assert.equal(await page.locator('#officeDetails').evaluate(e=>e.open),true);
+    assert.equal(await page.locator('#deptName').textContent(),'Project Manager');
+    assert.equal(await page.locator('[data-role-id="pm"] .line-link').getAttribute('href'),'/planning.html');
     await page.locator('#newProjectBtn').click();
     await page.locator('#createModal:not(.hidden)').waitFor();
     const options = await page.locator('#newProjectForm select[name=platform] option').allTextContents();
@@ -38,6 +45,10 @@ test('Web-first UI boots, project form excludes Mobile and creates a Web project
     const detail = await (await page.request.get(ORIGIN + '/api/projects/' + state.id + '/state')).json();
     assert.equal(detail.tasks.length, 12);
     assert.equal(detail.project.platform, 'Web app');
+    await page.waitForFunction(()=>document.querySelectorAll('#studioLine [data-role-id]').length===12);
+    assert.deepEqual(await page.locator('#studioLine [data-role-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),detail.tasks.map(t=>t.status));
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('#studioLine .line-row').first().evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
     assert.deepEqual(errors, [], 'Unexpected browser JavaScript errors: ' + errors.join('; '));
   } finally {
     await browser.close();

@@ -8,6 +8,7 @@ REQUIRED = (
     'backend/dependency_graph.py', 'tests/test_dependency_graph.py', 'backend/project_planning.py', 'backend/work_breakdown.py', 'backend/wbs_decomposition.py', 'backend/decomposition_jobs.py', 'tests/test_wbs_decomposition.py', 'tests/test_work_breakdown.py', 'backend/planning_discovery.py', 'backend/planning_scope.py', 'backend/planning_constraints.py', 'backend/planning_jobs.py', 'web/planning.html', 'web/planning.js', 'tests/test_project_planning.py', 'tests/test_planning_repair.py',
     'backend/verification_factory.py', 'backend/verified_pr.py',
     'backend/github_bridge.py', 'web/app.js', 'web/world3d.js',
+    'web/studio-line.js', 'web/studio-line.css', 'tests/browser/studio-line.test.cjs',
     'web/index.html', 'tests/test_coding_factory.py',
     'tests/test_verification_factory.py', 'tests/test_verified_pr.py',
     'tools/verify_coding_job.py', 'tools/publish_verified_code.py',
