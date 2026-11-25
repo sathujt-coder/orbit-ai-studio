@@ -81,6 +81,26 @@ def persist(c,pid,identifier,evidence,model,stamp):
     c.execute('INSERT INTO decomposition_runs VALUES(?,?,?,?,?,?)',(identifier,pid,payload,pr.canonical(provenance),int(ready),stamp))
     return 'ready' if ready else 'needs_revision'
 
+def workflow_guidance(state):
+    """Read-only workflow guidance, not model qualification or authorization.
+
+    An explicit queue retry uses the current configured local lane and retains
+    the original source snapshot. It never changes providers automatically.
+    """
+    if state['stale']:
+        action='refresh_source'
+    elif state['ready']:
+        action='human_review'
+    elif state['status'] in ('dead','interrupted','cancelled'):
+        action='operator_review'
+    elif state['status'] in ('queued','running','paused','waiting_approval'):
+        action='wait_for_queue'
+    else:
+        action='operator_review'
+    return dict(schema='orbit.wbs-workflow-guidance.v1',next_action=action,
+        operator_retry_available=action=='operator_review' and state['status'] in ('dead','interrupted','cancelled'),
+        automatic_fallback=False,automatic_adoption=False,model_qualification='not_assessed')
+
 def latest(c,pid):
     row=c.execute("""SELECT q.id AS queue_id,q.status,q.reason,i.wbs_version,i.wbs_digest,i.snapshot,
         r.evidence,r.model,r.ready FROM decomposition_inputs i JOIN agent_queue q ON q.id=i.queue_id
@@ -104,4 +124,5 @@ def latest(c,pid):
         if isinstance(data[key],str):
             try:data[key]=json.loads(data[key])
             except ValueError:data[key]=None
+    data['workflow']=workflow_guidance(data)
     return data
