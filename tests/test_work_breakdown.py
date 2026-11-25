@@ -131,3 +131,20 @@ class WbsTests(unittest.TestCase):
         for suffix in ('/wbs','/wbs/seed'):
             self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning'+suffix),('p','write'))
         self.assertIsNone(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/approve'))
+
+    def test_dependency_graph_is_structural_and_source_bound(self):
+        self.run_pm()
+        view=self.seed()
+        graph=view['dependency_graph']
+        self.assertEqual(graph['node_count'],6)
+        self.assertEqual(graph['edge_count'],3)
+        self.assertEqual(graph['layers'],[['D-1.1','D-2.1','D-3.1'],['D-1.2','D-2.2','D-3.2']])
+        self.assertFalse(graph['timing_ready'])
+        self.assertIsNone(graph['critical_path'])
+        self.assertFalse(view['decomposition_ready'])
+        self.assertEqual(self.save(detail(view['current']['document']))['dependency_graph'],graph)
+        self.row=self.new_prd(1)
+        stale=w.view(self.c,'p')
+        self.assertTrue(stale['stale'])
+        self.assertIsNone(stale['dependency_graph'])
+        self.assertFalse(stale['decomposition_ready'])
