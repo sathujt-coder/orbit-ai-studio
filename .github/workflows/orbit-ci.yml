@@ -151,6 +151,43 @@ jobs:
         run: |
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
+  planning-system-acceptance:
+    name: P6.2d.10 — system acceptance (not model qualification)
+    needs: [validate, requirements-browser]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record independently scoped system acceptance
+        env:
+          REGRESSION_RESULT: ${{ needs.validate.result }}
+          BROWSER_RESULT: ${{ needs.requirements-browser.result }}
+        run: |
+          python - <<'PY'
+          import json, os
+          checks = dict(regression=os.environ['REGRESSION_RESULT'],
+                        browser=os.environ['BROWSER_RESULT'])
+          passed = all(value == 'success' for value in checks.values())
+          report = dict(schema='orbit.planning-system-acceptance.v1',
+                        source_commit=os.environ['GITHUB_SHA'],
+                        transport='isolated_synthetic_fixture',
+                        checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
+                        model_qualification='NOT_ASSESSED',
+                        real_ai_acceptance='NOT_ASSESSED',
+                        production_release_authorized=False)
+          with open('planning-system-acceptance.json', 'x') as out:
+              json.dump(report, out, indent=2)
+          print(json.dumps(report, indent=2))
+          raise SystemExit(0 if passed else 1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: planning-system-acceptance
+          path: planning-system-acceptance.json
+          if-no-files-found: error
+          retention-days: 14
+
   web-typescript-docker:
     name: Real Docker TypeScript sandbox — two candidates
     runs-on: ubuntu-24.04
