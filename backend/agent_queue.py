@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 import auth_store
@@ -12,18 +13,29 @@ import provider_settings as ps
 ACTIVE=('queued','running','paused','waiting_approval')
 TERMINAL=('succeeded','dead','interrupted','cancelled')
 MAX_QUEUED=200
+QUEUE_KINDS=('pipeline','coding','requirements','planning','decomposition','planning_review')
+KIND_CHECK=re.compile(r"CHECK\s*\(\s*kind\s+IN\s*\(\s*('(?:[a-z_]+)'(?:\s*,\s*'[a-z_]+')*)\s*\)\s*\)",re.IGNORECASE)
 
 def migrate_requirements_kind(c):
     old=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_queue'").fetchone()
-    if not old or "'planning_review'" in old[0]:return
+    if not old:return
+    matches=list(KIND_CHECK.finditer(old[0]))
+    if len(matches)!=1:raise RuntimeError('Unknown queue kind constraint; migration blocked')
+    match=matches[0]
+    kinds=tuple(re.findall(r"'([a-z_]+)'",match.group(1)))
+    if len(kinds)!=len(set(kinds)) or not {'pipeline','coding'}<=set(kinds) or not set(kinds)<=set(QUEUE_KINDS):
+        raise RuntimeError('Unknown queue kinds; migration blocked')
+    if set(kinds)==set(QUEUE_KINDS):return
     # SQLite cannot alter CHECK constraints. Startup-only atomic rebuild with original IDs,
     # row order and dependent event/queue links preserved. Never disable FK inside a transaction.
     if c.in_transaction:raise RuntimeError('Queue migration requires an idle connection')
     enabled=c.execute('PRAGMA foreign_keys').fetchone()[0]
-    sql=old[0]
-    for kinds in ("'pipeline','coding'","'pipeline','coding','requirements'","'pipeline','coding','requirements','planning'","'pipeline','coding','requirements','planning','decomposition'"):
-        sql=sql.replace("CHECK(kind IN ("+kinds+"))","CHECK(kind IN ('pipeline','coding','requirements','planning','decomposition','planning_review'))")
-    if sql==old[0]:raise RuntimeError('Unknown queue schema; migration blocked')
+    # Replace only the recognized kind CHECK; retain every other table constraint.
+    sql=old[0][:match.start()]+"CHECK(kind IN ("+','.join(repr(k) for k in QUEUE_KINDS)+"))"+old[0][match.end():]
+    # Preserve explicit indexes and triggers, including locally added ones.
+    objects=[row[0] for row in c.execute("""SELECT sql FROM sqlite_master
+        WHERE tbl_name='agent_queue' AND type IN ('index','trigger') AND sql IS NOT NULL
+        ORDER BY CASE type WHEN 'index' THEN 0 ELSE 1 END,name""")]
     # SQLite quotes the table name after ALTER TABLE RENAME; support databases
     # already migrated by P6.1/P6.2b as well as freshly created schemas.
     sql=sql.replace('CREATE TABLE "agent_queue"(','CREATE TABLE agent_queue_new(',1)
@@ -37,9 +49,10 @@ def migrate_requirements_kind(c):
         c.execute('INSERT INTO agent_queue_new(rowid,id,project_id,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,provider_revision,provider_fingerprint,status,control,reason,checkpoint_stage,attempts,deferrals,available_at,created_at,updated_at) SELECT rowid,id,project_id,kind,mode,coding_job_id,actor,priority,dependency_id,retry_of,provider_revision,provider_fingerprint,status,control,reason,checkpoint_stage,attempts,deferrals,available_at,created_at,updated_at FROM agent_queue')
         c.execute('DROP TABLE agent_queue')
         c.execute('ALTER TABLE agent_queue_new RENAME TO agent_queue')
-        c.execute("CREATE UNIQUE INDEX aq_active_kind ON agent_queue(project_id,kind) WHERE status IN ('queued','running','paused','waiting_approval')")
-        c.execute("CREATE UNIQUE INDEX aq_one_running_project ON agent_queue(project_id) WHERE status='running'")
-        c.execute("CREATE INDEX aq_dispatch ON agent_queue(status,available_at,priority,created_at)")
+        for statement in objects:c.execute(statement)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS aq_active_kind ON agent_queue(project_id,kind) WHERE status IN ('queued','running','paused','waiting_approval')")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS aq_one_running_project ON agent_queue(project_id) WHERE status='running'")
+        c.execute("CREATE INDEX IF NOT EXISTS aq_dispatch ON agent_queue(status,available_at,priority,created_at)")
         if c.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Queue migration foreign key violation')
         c.commit()
     except Exception:
@@ -95,7 +108,7 @@ def get(c,pid,identifier):
 def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,priority=5,dependency_id=None,retry_of=None,now=None,routing=None):
     now=int(time.time()) if now is None else now
     if not permitted(c,actor,pid):raise PermissionError('Project write permission required')
-    if kind not in ('pipeline','coding','requirements','planning','decomposition','planning_review') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
+    if kind not in QUEUE_KINDS or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
     if kind=='pipeline' and (mode not in ('next','all') or coding_job_id is not None):raise ValueError('Invalid pipeline task')
     if kind=='coding' and (not coding_job_id or mode is not None):raise ValueError('Invalid coding task')
     if kind in ('requirements','planning','decomposition','planning_review') and (mode is not None or coding_job_id is not None):raise ValueError('Invalid discovery task')

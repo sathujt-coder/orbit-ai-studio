@@ -89,7 +89,7 @@ class RequirementsQueueTests(unittest.TestCase):
         old.execute('PRAGMA foreign_keys=ON')
         old.execute('CREATE TABLE projects(id TEXT PRIMARY KEY)')
         schema=self.c.execute("SELECT sql FROM sqlite_master WHERE name='agent_queue'").fetchone()[0]
-        old.execute(schema.replace("'pipeline','coding','requirements'","'pipeline','coding'"))
+        old.execute(schema.replace("'pipeline','coding','requirements','planning','decomposition','planning_review'","'pipeline','coding'"))
         old.execute("INSERT INTO projects VALUES('p')")
         old.execute("""INSERT INTO agent_queue(id,project_id,kind,mode,actor,priority,provider_revision,provider_fingerprint,status,available_at,created_at,updated_at)
             VALUES('old','p','pipeline','next','owner',5,0,'fp','queued',1,1,1)""")

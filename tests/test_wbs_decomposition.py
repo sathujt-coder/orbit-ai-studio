@@ -134,7 +134,7 @@ class QueueMigrationTests(unittest.TestCase):
         q.ensure_schema(c)
         sql=c.execute("SELECT sql FROM sqlite_master WHERE name='agent_queue'").fetchone()[0]
         c.commit();c.execute('PRAGMA foreign_keys=OFF');c.execute('DROP TABLE agent_queue')
-        c.execute(sql.replace(",'decomposition'",""));c.commit();c.execute('PRAGMA foreign_keys=ON')
+        c.execute(sql.replace(",'decomposition','planning_review'",""));c.commit();c.execute('PRAGMA foreign_keys=ON')
         lanes=mp.load_config(dict(AI_PROVIDER='ollama',AI_MODEL_A='a',AI_MODEL_B='b'))
         i=q.enqueue(c,'p','planning','owner',0,lanes,now=100)
         c.execute('CREATE TABLE old_child(id TEXT REFERENCES agent_queue(id))');c.execute('INSERT INTO old_child VALUES(?)',(i,));c.commit()
