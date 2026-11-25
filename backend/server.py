@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
 import studio_handoff
 import studio_activity
+import studio_quality
 import coding_factory
 import verification_factory
 import auth_store
@@ -182,6 +183,7 @@ def project_state(pid):
         handoff=studio_handoff.view(c,pid,STAGES,tasks)
         return dict(project=dict(p),tasks=tasks,artifacts=artifacts,reviews=reviews,events=events,
                     handoff=handoff,activity=studio_activity.view(c,pid,STAGES,handoff),
+                    quality=studio_quality.view(c,pid,STAGES,tasks,handoff),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 

@@ -37,6 +37,7 @@ function workspaceModel(stages,state,id){
   approval:stage.approval===true,link:LINKS[id]||null,
   handoff:state.handoff?.project_id===state.project.id?state.handoff.roles?.find(r=>r.stage_id===id)||null:null,
   activity:state.activity?.project_id===state.project.id?state.activity.roles?.find(r=>r.stage_id===id)||null:null,
+  quality:state.quality?.project_id===state.project.id?state.quality.roles?.find(r=>r.stage_id===id)||null:null,
   artifacts:(state.artifacts||[]).filter(a=>a.stage_id===id),
   reviews:(state.reviews||[]).filter(a=>a.stage_id===id),
   events:(state.events||[]).filter(a=>a.stage_id===id)};
@@ -109,6 +110,17 @@ function renderWorkspace(holder,stages,state,id,actions){
  }
  activity.append(el('p','line-notice','Pending không xác nhận kết nối model đang chạy; DEMO không có token ledger. Queue là trạng thái công việc, không phải trạng thái từng agent.'));
  holder.append(activity);
+ const quality=el('section','role-quality');const gate=m.quality;
+ quality.dataset.qualityState=gate?.state||'PENDING';
+ quality.append(el('h3','','Quality Gates · Legacy pipeline'));
+ quality.append(el('p','line-notice',(gate?.state||'PENDING')+' · Run '+(gate?.run_id||'unknown')+' · '+(gate?.mode==='demo'?'DEMO — không phải real AI':gate?.mode||'Mode chưa xác minh')));
+ for(const check of gate?.checks||[]){const line=el('p','quality-check',check.key+' · '+check.status);line.dataset.check=check.key;line.dataset.checkStatus=check.status;quality.append(line)}
+ for(const review of gate?.reviews||[]){const line=el('p','role-evidence-item',review.reviewer_id+' → '+review.author_id+' · '+review.verdict+' · '+review.score+'/100 · Review '+review.id+' · '+review.feedback);line.dataset.reviewId=review.id;quality.append(line)}
+ for(const artifact of [...(gate?.drafts||[]),...(gate?.final?[gate.final]:[])]){const b=el('button','role-evidence-item','Xem bằng chứng '+artifact.id);b.type='button';b.dataset.focusKey='quality-'+artifact.id;b.addEventListener('click',()=>actions.artifact(artifact.id,m.projectId));quality.append(b)}
+ if(gate?.approved_at)quality.append(el('p','line-notice','Human approval: '+gate.approved_at));
+ if(gate?.output_reason)quality.append(el('p','line-notice','Handoff: '+gate.output_reason));
+ quality.append(el('p','line-notice','Ngưỡng từng reviewer ≥80, không lấy trung bình. System/Real AI/Model Qualification không được nghiệm thu tại đây. Không cấp quyền thực thi hoặc release.'));
+ holder.append(quality);
  const evidence=el('div','role-workspace-grid');
  const docs=el('section','role-workspace-panel');docs.append(el('h3','','Tài liệu gần đây · '+m.artifacts.length));
  if(!m.artifacts.length)docs.append(el('p','line-notice','Chưa có tài liệu cho vai trò này.'));
@@ -138,7 +150,7 @@ function model(stages,tasks){
 function el(tag,cls,text){
  const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;
 }
-function render(holder,stages,tasks,selected,onSelect,handoff,activity){
+function render(holder,stages,tasks,selected,onSelect,handoff,activity,quality){
  const cards=model(stages,tasks);const active=document.activeElement;
  const focusId=holder.contains(active)?active.closest('[data-role-id]')?.dataset.roleId:null;
  const hadFocus=active?.classList.contains('line-select');
@@ -157,7 +169,7 @@ function render(holder,stages,tasks,selected,onSelect,handoff,activity){
    for(const lane of ['A','B']){const agent=activity?.roles?.find(r=>r.stage_id===id)?.agents?.find(a=>a.lane===lane);const node=el('span','line-lane',card.short+'-'+lane+' · '+(agent?.state||'NO_EVIDENCE'));node.dataset.agentId=id+'-'+lane;node.dataset.activityState=agent?.state||'NO_EVIDENCE';lanes.append(node)}
    article.append(lanes,el('p','line-output','Đầu ra: '+card.deliverable));
    article.append(el('p','line-evidence',card.artifacts===null?'Chưa có dữ liệu evidence':card.artifacts+' tài liệu · '+card.reviews+' review (gần đây)'));
-   article.append(el('p','line-gate',card.approval?'Quality gate + người duyệt':'Quality gate nội bộ'));
+   const gate=quality?.roles?.find(r=>r.stage_id===id);const gateNode=el('p','line-gate',(card.approval?'Quality gate + người duyệt':'Quality gate nội bộ')+' · '+(gate?.state||'PENDING'));gateNode.dataset.qualityState=gate?.state||'PENDING';article.append(gateNode);
    if(card.link){const a=el('a','line-link',card.link[0]+' ↗');a.href=card.link[1];article.append(a)}
    const actual=handoff?.roles?.find(r=>r.stage_id===id);article.append(el('p','line-handoff',card.next?(actual?.output?.status==='reviewed_output'?'Final đã review · nguồn cho '+card.next:'Chưa đủ bằng chứng bàn giao → '+card.next):'Cuối dây chuyền · không tự release'));
    row.append(article);

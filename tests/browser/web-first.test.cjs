@@ -232,6 +232,13 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   assert.equal(target.output.status,'reviewed_output');
   assert.equal(target.consumption_status,'DEMO_DRAFTS');
   assert.equal(target.receipt.mode,'demo');
+  const gate=second.quality.roles.find(r=>r.stage_id==='research');
+  assert.equal(gate.state,'REVIEWED_OUTPUT');
+  assert.equal(gate.mode,'demo');
+  assert.equal(gate.run_id,target.receipt.run_id);
+  assert.equal(gate.final.id,target.output.artifact_id);
+  assert.deepEqual(gate.reviews.map(r=>r.score).sort((a,b)=>a-b),[89,92]);
+  assert.equal(second.quality.production_release_authorized,false);
   const observed=second.activity.roles.find(r=>r.stage_id==='research');
   assert.equal(observed.run_id,target.receipt.run_id);
   assert.equal(observed.queue.status,'succeeded');
@@ -244,6 +251,9 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   await page.locator('[data-role-id="research"] .line-select').click();
   await page.locator('#roleWorkspace .role-handoff[data-consumption-status="DEMO_DRAFTS"][data-output-status="reviewed_output"]').waitFor({timeout:15000});
   assert.equal(await page.locator('#roleWorkspace [data-activity-agent][data-activity-state="DEMO_DRAFT_RECORDED"]').count(),2);
+  await page.locator('#roleWorkspace .role-quality[data-quality-state="REVIEWED_OUTPUT"]').waitFor();
+  assert.equal(await page.locator('#roleWorkspace .role-quality [data-review-id]').count(),2);
+  assert.match(await page.locator('#roleWorkspace .role-quality').textContent(),/DEMO/);
   const panel=page.locator('#roleWorkspace .role-handoff');
   assert.match(await panel.textContent(),new RegExp(source.content_digest));
   assert.match(await panel.textContent(),new RegExp(target.receipt.context_digest));
