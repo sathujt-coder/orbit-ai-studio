@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null,estimateBinding=null;
+let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null,estimateBinding=null,scheduleBinding=null;
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/planning';
 async function api(path,body){
  const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});
@@ -24,6 +24,8 @@ function buttons(){
  const e=w?.resource_estimates;
  $('estimate-save').disabled=busy||!d?.can_write||!w?.current||w.stale||!e?.draft||estimateBinding!==estimateKey(w);
  $('estimate-document').readOnly=$('estimate-save').disabled;
+ $('schedule-save').disabled=busy||!d?.can_write||!w?.sprint_schedule?.draft||scheduleBinding!==scheduleKey(w);
+ $('schedule-document').readOnly=$('schedule-save').disabled;
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
@@ -89,7 +91,25 @@ async function saveEstimates(){
  }catch(err){$('status').textContent=err.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
+function scheduleKey(w){const s=w?.sprint_schedule;return s?.source?JSON.stringify([s.source,s.current?.version||0]):null}
+function renderSchedule(w,reset){
+ const s=w?.sprint_schedule,key=scheduleKey(w);
+ if(reset){scheduleBinding=key;$('schedule-document').value=s?.draft?JSON.stringify(s.current&&!s.stale?s.current.document:s.draft,null,2):''}
+ $('schedule-state').textContent=!s?.draft?'BLOCKED · Cần estimate hiện tại đầy đủ':key!==scheduleBinding?'VERSION CHANGED · Tải lại trước khi sửa':s.stale?'STALE · Lập lịch mới':s.analysis?.ready?'SCHEDULE CHECKS PASS · DRAFT':s.current?'DRAFT · Có findings':'Chưa lập lịch';
+ $('schedule-analysis').textContent=s?JSON.stringify({analysis:s.analysis,history:s.history},null,2):'';
+}
+async function saveSchedule(){
+ if(busy||$('schedule-save').disabled||!current)return;
+ const d=current,s=d.wbs.sprint_schedule;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  d.wbs=await api(base(d.project_id)+'/wbs/schedule',{...s.source,expected_version:s.current?.version||0,document:JSON.parse($('schedule-document').value),confirmation:'SAVE SPRINT SCHEDULE'});
+  renderWbs(d.wbs,true);graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph();
+ }catch(err){$('status').textContent=err.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 function renderWbs(w,reset=false){
+ renderSchedule(w,reset);
  renderEstimates(w,reset);
  if(reset){wbsEditVersion=w?.current?.version??null;$('wbs-document').value=w?.current?JSON.stringify(w.current.document,null,2):''}
  const a=w?.analysis;
@@ -177,6 +197,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
   $('estimate-save').addEventListener('click',saveEstimates);
+  $('schedule-save').addEventListener('click',saveSchedule);
  $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();

@@ -90,6 +90,38 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await get(owner,pp)).decomposition.stale,true);
   assert.equal((await get(owner,pp)).decomposition.ready,false);
   assert.equal((await get(owner,pp)).current,null);
+  // P6.2f/g: real Chromium editor and HTTP persistence, no real inference claim.
+  wbs=(await get(owner,pp)).wbs;
+  const estimates=JSON.parse(await owner.locator('#estimate-document').inputValue());
+  for(const item of estimates.packages){item.effort_minutes=15;item.role='Dev'}
+  const eb={expected_version:0,wbs_version:wbs.current.version,wbs_digest:wbs.current.digest,document:estimates,confirmation:'SAVE RESOURCE ESTIMATES'};
+  assert.equal((await post(viewer,vc,pp+'/wbs/estimates',eb)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/wbs/estimates',eb)).status(),403);
+  assert.equal((await post(owner,csrf,pp+'/wbs/estimates',{...eb,wbs_digest:'wrong'})).status(),400);
+  await owner.locator('#estimate-document').fill(JSON.stringify(estimates));
+  await owner.locator('#estimate-save').click();
+  await owner.waitForFunction(()=>document.querySelector('#estimate-state').textContent.includes('ESTIMATES READY'));
+  wbs=(await get(owner,pp)).wbs;
+  assert.equal(wbs.resource_estimates.analysis.total_effort_minutes,60);
+  assert.equal(wbs.dependency_graph.critical_path_minutes,30);
+  assert.equal((await post(owner,csrf,pp+'/wbs/estimates',eb)).status(),400);
+  const sd=JSON.parse(await owner.locator('#schedule-document').inputValue());
+  sd.sprints=[{id:'S1',start:'2026-12-01',end:'2026-12-07',capacity:{Dev:60}}];
+  for(const item of sd.assignments)item.sprint='S1';
+  sd.milestones=[{id:'M1',title:'Release draft',sprint:'S1',packages:sd.assignments.map(x=>x.id)}];
+  const sb={...wbs.sprint_schedule.source,expected_version:0,document:sd,confirmation:'SAVE SPRINT SCHEDULE'};
+  assert.equal((await post(viewer,vc,pp+'/wbs/schedule',sb)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/wbs/schedule',sb)).status(),403);
+  await owner.locator('#schedule-document').fill(JSON.stringify(sd));
+  await owner.locator('#schedule-save').click();
+  await owner.waitForFunction(()=>document.querySelector('#schedule-state').textContent.includes('SCHEDULE CHECKS PASS'));
+  wbs=(await get(owner,pp)).wbs;
+  assert.equal(wbs.sprint_schedule.analysis.ready,true);
+  assert.equal(wbs.sprint_schedule.analysis.execution_authorized,false);
+  assert.equal((await post(owner,csrf,pp+'/wbs/schedule',sb)).status(),400);
+  await owner.locator('#reload').click();
+  await owner.waitForFunction(()=>document.querySelector('#schedule-state').textContent.includes('SCHEDULE CHECKS PASS'));
+  assert.deepEqual(JSON.parse(await owner.locator('#schedule-document').inputValue()),wbs.sprint_schedule.current.document);
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);
@@ -123,6 +155,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await get(owner,pp)).wbs.stale,true);
   assert.equal((await get(owner,pp)).wbs.decomposition_ready,false);
   assert.equal(await owner.locator('#wbs-save').isDisabled(),true);
+  assert.equal(await owner.locator('#estimate-save').isDisabled(),true);
+  assert.equal(await owner.locator('#schedule-save').isDisabled(),true);
+  assert.equal((await get(owner,pp)).wbs.sprint_schedule.analysis,null);
   assert.equal(await owner.locator('#seed').isDisabled(),true);
   assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
  }finally{await browser.close()}

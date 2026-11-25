@@ -9,6 +9,7 @@ import requirements_scope as rs
 import planning_constraints as pc
 import dependency_graph
 import resource_estimates
+import sprint_schedule
 
 POLICY='orbit.wbs.v1'
 MAX_BYTES=24000
@@ -103,6 +104,7 @@ def ensure_schema(c):
         FOREIGN KEY(project_id,requirements_version) REFERENCES product_requirements(project_id,version))""")
 
     resource_estimates.ensure_schema(c)
+    sprint_schedule.ensure_schema(c)
 
 def latest(c,pid):
     return c.execute('SELECT * FROM work_breakdowns WHERE project_id=? ORDER BY version DESC LIMIT 1',(pid,)).fetchone()
@@ -279,12 +281,14 @@ def view(c,pid,discovery=None):
         except (KeyError,ValueError,TypeError):stale=True
     estimates=resource_estimates.view(c,pid,current,stale)
     if estimates['analysis'] is not None:graph=estimates['analysis']['dependency_graph']
-    return dict(current=current,sources=sources,stale=stale,analysis=analysis if not stale else None,
+    result=dict(current=current,sources=sources,stale=stale,analysis=analysis if not stale else None,
         resource_estimates=estimates,
         dependency_graph=graph if not stale else None,
         decomposition_ready=bool(analysis and analysis['detail_ready'] and not stale),
         history=[dict(x) for x in c.execute("""SELECT version,requirements_version,requirements_digest,queue_id,lane,proposal_digest,digest,author,created_at
             FROM work_breakdowns WHERE project_id=? ORDER BY version DESC LIMIT 50""",(pid,))])
+    result['sprint_schedule']=sprint_schedule.view(c,pid,result)
+    return result
 
 def save(c,pid,actor,body,stamp,*,seed=False):
     pp.check_role(c,pid,actor,'write')

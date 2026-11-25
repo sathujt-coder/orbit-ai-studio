@@ -94,6 +94,37 @@ class WbsTests(unittest.TestCase):
         self.assertIsNone(r.view(self.c,'q',None,False)['current'])
         self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/estimates'),('p','write'))
 
+    def test_sprint_schedule_capacity_dependency_milestone_and_staleness(self):
+        self.run_pm();v=self.seed();r=w.resource_estimates;s=w.sprint_schedule
+        self.assertIsNone(v['sprint_schedule']['draft'])
+        p=v['current'];doc=v['resource_estimates']['draft']
+        for item in doc['packages']:item.update(effort_minutes=30,role='QA' if item['id'].endswith('.2') else 'Dev')
+        body=dict(expected_version=0,wbs_version=p['version'],wbs_digest=p['digest'],document=doc,confirmation='SAVE RESOURCE ESTIMATES')
+        r.save(self.c,'p','owner',body,'t',v);v=w.view(self.c,'p')
+        schedule=v['sprint_schedule']['draft']
+        schedule['sprints']=[dict(id='S1',start='2026-12-01',end='2026-12-07',capacity={'Dev':90,'QA':90}),
+            dict(id='S2',start='2026-12-08',end='2026-12-14',capacity={'Dev':90,'QA':90})]
+        for item in schedule['assignments']:item['sprint']='S2' if item['id'].endswith('.2') else 'S1'
+        schedule['milestones']=[dict(id='M1',title='All packages',sprint='S2',packages=[x['id'] for x in schedule['assignments']])]
+        payload=dict(v['sprint_schedule']['source'],expected_version=0,document=schedule,confirmation='SAVE SPRINT SCHEDULE')
+        with self.assertRaises(PermissionError):s.save(self.c,'p','viewer',payload,'t',v)
+        bad=copy.deepcopy(schedule);bad['sprints'][1]['start']='2026-12-07'
+        with self.assertRaises(ValueError):s.analyze(bad,v)
+        bad=copy.deepcopy(schedule);bad['assignments'][0]['sprint']='S2';bad['assignments'][1]['sprint']='S1'
+        bad['sprints'][0]['capacity']['QA']=0;bad['milestones'][0]['sprint']='S1'
+        codes={x['code'] for x in s.analyze(bad,v)[1]['issues']}
+        self.assertTrue({'dependency_order','capacity_exceeded','milestone_dependency'}<=codes)
+        ready=s.save(self.c,'p','developer',payload,'t',v)
+        self.assertTrue(ready['analysis']['ready']);self.assertFalse(ready['analysis']['execution_authorized'])
+        self.assertEqual(ready['analysis']['loads']['S1']['Dev'],90)
+        with self.assertRaises(ValueError):s.save(self.c,'p','owner',payload,'t',v)
+        body['expected_version']=1;r.save(self.c,'p','owner',body,'t',v)
+        fresh=w.view(self.c,'p');self.assertTrue(fresh['sprint_schedule']['stale'])
+        self.assertIsNone(fresh['sprint_schedule']['analysis'])
+        with self.assertRaises(ValueError):s.save(self.c,'p','owner',payload,'t',fresh)
+        self.assertIsNone(w.view(self.c,'q')['sprint_schedule']['current'])
+        self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/schedule'),('p','write'))
+
     def test_no_pm_no_wbs_and_separate_plan(self):
         self.assertEqual(w.view(self.c,'p')['sources'],{})
         with self.assertRaises(ValueError):w.current_source(self.c,'p','A')
