@@ -54,6 +54,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   let wbs=(await get(owner,pp)).wbs;
   assert.equal(wbs.analysis.deliverable_count,2);assert.equal(wbs.analysis.package_count,4);
   assert.equal(wbs.decomposition_ready,false);
+  assert.equal(wbs.dependency_graph.node_count,4);
+  assert.equal(wbs.dependency_graph.timing_ready,false);
+  await owner.locator('#graph-source').selectOption('wbs');
+  await owner.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('STRUCTURE ONLY'));
+  assert.equal(await owner.locator('#graph-nodes tr').count(),4);
+  assert.equal(await owner.locator('#graph-layers li').count(),2);
   assert.equal(await owner.locator('#wbs-tree details').count(),2);
   // P6.2d: exercise real HTTP/queue with isolated synthetic provider only.
   const decomposition={wbs_version:wbs.current.version,wbs_digest:wbs.current.digest,confirmation:'RUN AI DECOMPOSITION'};
@@ -93,6 +99,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   await owner.locator('#document').fill(JSON.stringify(estimated));
   await owner.locator('#save').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v2'));
   data=await get(owner,pp);assert.equal(data.analysis.total_effort_minutes,60);
+  assert.equal(data.analysis.dependency_graph.critical_path_minutes,30);
+  assert.equal(data.analysis.dependency_graph.critical_nodes.length,4);
+  await owner.locator('#graph-source').selectOption('plan');
+  await owner.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('CPM READY · 30 phút'));
+  assert.equal(await owner.locator('#graph-nodes tr').count(),4);
+  assert.equal(await owner.locator('#graph-edges li').count(),2);
   const ready={...approval,version:2,digest:data.current.digest};
   assert.equal((await post(dev,dc,pp+'/approve',ready)).status(),403);
   reviewer.on('dialog',d=>d.accept());
@@ -104,6 +116,10 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,rp,{expected_version:1,document:doc})).status(),200);
   await owner.locator('#reload').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('STALE'));
   assert.equal((await get(owner,pp)).execution_ready,false);
+  assert.equal((await get(owner,pp)).analysis,null);
+  assert.equal((await get(owner,pp)).wbs.dependency_graph,null);
+  await owner.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('STALE'));
+  assert.equal(await owner.locator('#graph-nodes tr').count(),0);
   assert.equal((await get(owner,pp)).wbs.stale,true);
   assert.equal((await get(owner,pp)).wbs.decomposition_ready,false);
   assert.equal(await owner.locator('#wbs-save').isDisabled(),true);
