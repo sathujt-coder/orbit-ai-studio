@@ -178,6 +178,25 @@ function render(holder,stages,tasks,selected,onSelect,handoff,activity,quality){
  }
  if(hadFocus&&focusId){const target=Array.from(holder.querySelectorAll('[data-role-id]')).find(n=>n.dataset.roleId===focusId);target?.querySelector('button')?.focus({preventScroll:true})}
 }
-root.StudioLine={model,render,workspaceModel,renderWorkspace};
+function renderWorkflow(holder,state){
+ holder.replaceChildren();delete holder.dataset.projectId;
+ const w=state.workflow;
+ if(!w||w.project_id!==state.project?.id){holder.append(el('p','line-notice','Unified workflow chưa xác minh'));return}
+ holder.dataset.projectId=w.project_id;
+ holder.append(el('h2','','Unified Workflow · Artifact Contracts'));
+ const panel=(title,status,lines,href)=>{const p=el('section','role-workspace-panel');p.append(el('h3','',title),el('p','line-notice',status));for(const line of lines)p.append(el('p','role-evidence-item',line));if(href){const a=el('a','line-link','Mở workflow ↗');a.href=href;p.append(a)}holder.append(p);return p};
+ const revision=w.requirements.revision;
+ const p=panel('Product Requirements',w.requirements.state,revision?['PRD v'+revision.version+' · '+revision.digest]:[], '/requirements.html');p.dataset.workflowStage='requirements';
+ const a=w.planning.adoption;
+ const lines=a?['Adoption v'+a.version+' · '+a.digest,'Bundle '+a.bundle_digest,'Review '+a.review_id+' · '+a.evidence_digest]:[];
+ if(w.planning.wbs)lines.push('WBS v'+w.planning.wbs.version+' · '+w.planning.wbs.digest);
+ if(w.planning.reason)lines.push(w.planning.reason);
+ panel('Planning Adoption',w.planning.state,lines,'/planning.html').dataset.workflowStage='planning';
+ const jobs=w.coding_jobs.flatMap(j=>['Job '+j.job_id+' · '+j.status+' · '+j.planning_binding,'Queue '+(j.queue?.id||'unlinked')+' · '+(j.queue?.status||'unknown'), 'Manifest '+(j.manifest_digest||'unknown'), 'Verification '+(j.verification?j.verification.id+' · '+j.verification.state+' · '+j.verification.digest:'NOT_RECORDED')]);
+ panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection').dataset.workflowStage='coding';
+ panel('Agent Queue',w.queue.truncated?'Recent 100 · truncated':'Recent jobs',w.queue.tasks.map(q=>q.kind+' · '+q.id+' · '+q.status+' · dependency '+(q.dependency_id||'none'))).dataset.workflowStage='queue';
+ holder.append(el('p','line-notice','Next checkpoint: '+w.next_checkpoint+' · Execution NOT AUTHORIZED. Không tự dispatch hoặc release.'));
+}
+root.StudioLine={model,render,workspaceModel,renderWorkspace,renderWorkflow};
 if(typeof module!=='undefined')module.exports={model,workspaceModel};
 })(typeof window!=='undefined'?window:globalThis);

@@ -223,6 +223,12 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
    assert.fail('Stage did not complete: '+stage);
   }
   const first=await step('po');
+  assert.equal(first.workflow.project_id,pid);
+  assert.equal(first.workflow.requirements.state,'MISSING');
+  assert.equal(first.workflow.next_checkpoint,'APPROVE_PRD');
+  assert.equal(first.workflow.execution_authorized,false);
+  assert.ok(first.workflow.queue.tasks.some(q=>q.kind==='pipeline'&&q.status==='succeeded'));
+  await page.locator('#studioWorkflow[data-project-id="'+pid+'"] [data-workflow-stage="requirements"]').waitFor();
   const source=first.handoff.roles[0].output;
   assert.equal(source.status,'reviewed_output');
   assert.match(source.content_digest,/^[a-f0-9]{64}$/);
