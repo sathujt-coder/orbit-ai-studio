@@ -77,3 +77,33 @@ class WbsBenchmarkTests(unittest.TestCase):
         self.assertIsNone(b.percentile([], .95))
         self.assertTrue(b.pinned_image('ollama/ollama@sha256:'+'a'*64,'ollama/ollama'))
         self.assertFalse(b.pinned_image('ollama/ollama:latest','ollama/ollama'))
+
+    def test_diagnostics_do_not_relax_resource_gate(self):
+        r=dict(memory_limit=b.LIMIT,swap_limit=b.LIMIT,cgroup_limit_bytes=b.LIMIT,
+            cpu_limit=b.CPU,network='none',running=True,oom_killed=False,restart_count=0,
+            peak_bytes=b.LIMIT,events={'oom':0,'oom_kill':0})
+        self.assertEqual(b.resource_diagnostics(r)['reasons'],[])
+        over=dict(r,peak_bytes=b.LIMIT+65536)
+        diag=b.resource_diagnostics(over)
+        self.assertFalse(diag['passed'])
+        self.assertEqual(diag['peak_over_limit_bytes'],65536)
+        self.assertIn('peak_over_limit',diag['reasons'])
+        oom=dict(r,oom_killed=True,events={'oom':1,'oom_kill':1})
+        self.assertIn('oom_kill_event',b.resource_diagnostics(oom)['reasons'])
+        self.assertFalse(b.resource_diagnostics({})['passed'])
+
+    def test_diagnostics_preserve_independent_failure_axes(self):
+        row=dict(case='A',repeat=1,status='RESOURCE_UNVERIFIED',
+            resources={'peak_bytes':b.LIMIT+1},
+            worker=dict(status='QUALITY_BLOCK',metrics=dict(quality_pass=False,
+                gates={'ready':False,'exact_trace':True},issues_by_code={'verification_action_required':1},
+                repair_calls=1,successful_repairs=0)))
+        diag=b.trial_diagnostics(row,False)
+        self.assertFalse(diag['replay_pass'])
+        self.assertIn('peak_over_limit',diag['resource']['reasons'])
+        self.assertEqual(diag['reported_failed_gates'],['ready'])
+        self.assertEqual(diag['reported_issues_by_code'],{'verification_action_required':1})
+        missing=b.trial_diagnostics(dict(case='B',repeat=2,status='INFRA_ERROR'),False)
+        self.assertFalse(missing['quality_metrics_available'])
+        self.assertIsNone(missing['reported_quality_pass'])
+        self.assertIsNone(missing['reported_repair_calls'])
