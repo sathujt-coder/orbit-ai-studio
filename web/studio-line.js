@@ -84,7 +84,14 @@ function renderWorkspace(holder,stages,state,id,actions){
   handoff.append(el('p','line-notice',record.stage_id+' → '+m.short+': '+describe(record)));
   sourceButton(record,'Xem nguồn '+record.stage_id);
  }
- handoff.append(el('p','line-notice','Chưa có biên nhận sử dụng đầu vào (NOT_RECORDED). Phiên bản là thứ tự final hiện có; digest tính từ nội dung hiện tại, không phải chứng nhận bất biến lịch sử. Không cấp quyền thực thi.'));
+ const receipt=m.handoff?.receipt;
+ handoff.dataset.consumptionStatus=m.handoff?.consumption_status||'NOT_RECORDED';
+ handoff.append(el('p','line-notice','Biên nhận đầu vào: '+handoff.dataset.consumptionStatus));
+ if(receipt){
+  handoff.append(el('p','role-evidence-item','Run '+receipt.run_id+' · '+receipt.mode+' · lanes '+receipt.lanes.join(', ')+' · Context SHA256 '+(receipt.context_digest||'INVALID')));
+  for(const source of receipt.sources)handoff.append(el('p','role-evidence-item','Nguồn đã ghi nhận: '+source.stage_id+' · '+source.artifact_id+' · v'+source.version+' · '+source.content_digest));
+ }
+ handoff.append(el('p','line-notice','Biên nhận ghi nhận context đã chuẩn bị và draft trả về; DEMO không phải inference thật. STALE hoặc INVALID không chứng minh bàn giao hiện hành. Không cấp quyền thực thi hoặc release.'));
  holder.append(handoff);
  const evidence=el('div','role-workspace-grid');
  const docs=el('section','role-workspace-panel');docs.append(el('h3','','Tài liệu gần đây · '+m.artifacts.length));

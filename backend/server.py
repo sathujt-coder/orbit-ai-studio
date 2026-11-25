@@ -129,6 +129,7 @@ def init_db():
         decomposition_jobs.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
+        studio_handoff.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -311,7 +312,10 @@ def run_stage(pid, sid, lanes=None):
     run_id=uid()
     with LOCK,db() as c:
         project=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
-    context=get_preceding(pid,sid)
+    # Persist the exact context before any inference. Route selection still uses
+    # the original context length and the same model/prompt/budget policy.
+    with LOCK,db() as c:
+        context=studio_handoff.prepare(c,pid,STAGES,sid,run_id,model_provider.mode(lanes),now())
     lanes=route_pair(lanes,pid,run_id,sid,'stage',len(project['idea'])+len(context))
     mode=model_provider.mode(lanes)
     llm=snapshot_call(lanes,project_id=pid,department=sid,run_id=run_id,purpose='stage')
@@ -334,7 +338,10 @@ def run_stage(pid, sid, lanes=None):
                +f'\nBối cảnh các giai đoạn trước (chỉ để tham khảo):\n{context}')
             draft=llm(system,user,lane,phase='stage_draft')
         drafts[lane]=draft
-        save_artifact(pid,sid,aid,'draft',draft,run_id)
+        with LOCK,db() as c:
+            c.execute('INSERT INTO artifacts(id,project_id,stage_id,agent_id,kind,content,created_at,run_id) VALUES(?,?,?,?,?,?,?,?)',
+                (uid(),pid,sid,aid,'draft',draft,now(),run_id))
+            studio_handoff.record_draft(c,pid,sid,run_id,lane,now())
         set_status(pid,sid,'drafting',f'{aid} hoàn thành bản đề xuất độc lập.',aid)
     set_status(pid,sid,'reviewing',f'{s["name"]}: hai agent review chéo, không tự chấm bài của mình.')
     votes=[]

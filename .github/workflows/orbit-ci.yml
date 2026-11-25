@@ -153,7 +153,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: SG.3 — Studio Generator system acceptance
+    name: SG.3.1 — Studio Generator system acceptance
     needs: [validate, web-e2e, requirements-browser]
     if: always()
     runs-on: ubuntu-24.04
@@ -172,7 +172,7 @@ jobs:
                         planning_browser=os.environ['PLANNING_BROWSER_RESULT'])
           passed = all(value == 'success' for value in checks.values())
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='SG.3', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='SG.3.1', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
                         development_next_phase='SG.4' if passed else None,
                         real_ai_acceptance='NOT_ASSESSED', model_qualification='NOT_ASSESSED',
