@@ -244,7 +244,8 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   await panel.locator('[data-focus-key="handoff-'+source.artifact_id+'"]').click();
   await page.locator('#artifactModal:not(.hidden)').waitFor();
   assert.match(await page.locator('#artifactBody').textContent(),/DEMO/);
-  await page.locator('#artifactModal [data-close="artifactModal"]').click();
+  await page.locator('#artifactModal').getByRole('button',{name:'Đóng',exact:true}).click();
+  await page.locator('#artifactModal').waitFor({state:'hidden'});
   await page.reload();
   await page.locator('#studioLine[data-ready="true"]').waitFor({timeout:15000});
   await page.locator('[data-role-id="research"] .line-select').click();
