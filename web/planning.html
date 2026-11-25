@@ -18,5 +18,12 @@
 <label>WBS JSON<textarea id="wbs-document" rows="18" maxlength="50000" spellcheck="false"></textarea></label>
 <details><summary>Traceability và Quality Findings</summary><pre id="wbs-findings"></pre></details>
 <h2>Kế hoạch phẳng đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
-<h2>Phân tích DAG</h2><pre id="analysis"></pre><h2>Lịch sử phiên bản</h2><pre id="history"></pre>
+<h2>Dependency Graph &amp; Critical Path</h2>
+<p>Phân tích dựa trên phiên bản đã lưu, không phải lịch cam kết. Các lớp chỉ biểu thị thứ tự phụ thuộc; số phút giả định tài nguyên song song không giới hạn.</p>
+<label>Đồ thị <select id="graph-source"><option value="plan">Kế hoạch phẳng</option><option value="wbs">WBS phân cấp</option></select></label>
+<p id="graph-status" role="status" aria-live="polite"></p><p id="graph-path"></p>
+<details open><summary>Các lớp phụ thuộc</summary><ol id="graph-layers"></ol></details>
+<div class="usage-scroll"><table><thead><tr><th>Task / Package</th><th>Phụ thuộc</th><th>Phút</th><th>ES</th><th>EF</th><th>LS</th><th>LF</th><th>Float</th><th>Găng</th></tr></thead><tbody id="graph-nodes"></tbody></table></div>
+<details><summary>Cạnh thuộc đường găng</summary><ul id="graph-edges"></ul></details>
+<details><summary>Phân tích DAG (JSON)</summary><pre id="analysis"></pre></details><h2>Lịch sử phiên bản</h2><pre id="history"></pre>
 </section><a href="/requirements.html">Product Requirements</a> · <a href="/">Về dashboard</a></section></main><script src="/planning.js"></script></body></html>
