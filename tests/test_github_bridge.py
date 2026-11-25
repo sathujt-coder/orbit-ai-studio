@@ -75,7 +75,12 @@ class GithubBridgeTests(unittest.TestCase):
             self.assertFalse(status['writes_enabled'])
 
     def test_manual_gate_required(self):
-        server.run_stage(self.pid,'security')
+        with self.assertRaisesRegex(ValueError,'Handoff source quality gate blocked'):
+            server.run_stage(self.pid,'security')
+        with patch.object(server.time,'sleep',return_value=None):
+            for sid in server.STAGE_IDS[:server.STAGE_IDS.index('security')]:
+                self.assertEqual(server.run_stage(self.pid,sid),'done')
+            self.assertEqual(server.run_stage(self.pid,'security'),'awaiting_approval')
         aid=self.artifact('security')
         with server.db() as conn, self.assertRaisesRegex(ValueError,'human approval'):
             bridge.preview(conn,self.pid,aid)

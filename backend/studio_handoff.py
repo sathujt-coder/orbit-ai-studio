@@ -39,7 +39,7 @@ def prepare(c,pid,stages,sid,run_id,mode,stamp):
         if not row or digest(row['content'])!=source['content_digest']:
             raise ValueError('Handoff source changed')
         chunks.append('['+source['stage_id']+'] '+row['content'][:1200])
-    context='\\n\\n'.join(chunks)[-7500:]
+    context='\n\n'.join(chunks)[-7500:]
     snapshot=dict(schema='orbit.studio-handoff-receipt.v1',project_id=pid,stage_id=sid,run_id=run_id,
                   mode=mode,sources=sources,context=context,context_digest=digest(context))
     payload=canonical(snapshot)

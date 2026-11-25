@@ -195,3 +195,61 @@ test('Quality dashboard shows unverified state for a real demo coding job', asyn
   assert.match(await page.locator('#codingQuality').textContent(),/CHƯA NGHIỆM THU/);
  }finally{await browser.close()}
 });
+
+test('Studio handoff shows actual queued demo source and durable downstream receipt',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:1365,height:850}});
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const csrf=await login(page);
+  const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'Handoff E2E '+Date.now(),idea:'Verify real queued demo handoff and durable source binding',platform:'Web app'}});
+  assert.equal(created.status(),201);
+  const pid=(await created.json()).project_id;
+  await page.goto(ORIGIN+'/');
+  await page.locator('#projectSide [data-pid="'+pid+'"]').click();
+  await page.waitForFunction(id=>document.querySelector('#studioLine').dataset.projectId===id&&document.querySelector('#studioLine').dataset.ready==='true',pid,{timeout:15000});
+  const path=ORIGIN+'/api/projects/'+pid;
+  async function step(stage){
+   const started=await page.request.post(path+'/run',{headers:headers(csrf),data:{mode:'next'}});
+   assert.ok([200,202].includes(started.status()),await started.text());
+   const deadline=Date.now()+20000;
+   while(Date.now()<deadline){
+    const response=await page.request.get(path+'/state');
+    assert.equal(response.status(),200);
+    const data=await response.json();
+    if(!data.running&&data.tasks.find(t=>t.stage_id===stage).status==='done')return data;
+    await new Promise(resolve=>setTimeout(resolve,150));
+   }
+   assert.fail('Stage did not complete: '+stage);
+  }
+  const first=await step('po');
+  const source=first.handoff.roles[0].output;
+  assert.equal(source.status,'reviewed_output');
+  assert.match(source.content_digest,/^[a-f0-9]{64}$/);
+  const second=await step('research');
+  const target=second.handoff.roles[1];
+  assert.equal(target.input_status,'reviewed_sources_available');
+  assert.equal(target.output.status,'reviewed_output');
+  assert.equal(target.consumption_status,'DEMO_DRAFTS');
+  assert.equal(target.receipt.mode,'demo');
+  assert.deepEqual(target.receipt.lanes,['A','B']);
+  assert.deepEqual(target.receipt.sources,[source]);
+  assert.match(target.receipt.context_digest,/^[a-f0-9]{64}$/);
+  assert.equal(second.handoff.production_release_authorized,false);
+  await page.locator('[data-role-id="research"] .line-select').click();
+  await page.locator('#roleWorkspace .role-handoff[data-consumption-status="DEMO_DRAFTS"][data-output-status="reviewed_output"]').waitFor({timeout:15000});
+  const panel=page.locator('#roleWorkspace .role-handoff');
+  assert.match(await panel.textContent(),new RegExp(source.content_digest));
+  assert.match(await panel.textContent(),new RegExp(target.receipt.context_digest));
+  await panel.locator('[data-focus-key="handoff-'+source.artifact_id+'"]').click();
+  await page.locator('#artifactModal:not(.hidden)').waitFor();
+  assert.match(await page.locator('#artifactBody').textContent(),/DEMO/);
+  await page.locator('#artifactModal [data-close="artifactModal"]').click();
+  await page.reload();
+  await page.locator('#studioLine[data-ready="true"]').waitFor({timeout:15000});
+  await page.locator('[data-role-id="research"] .line-select').click();
+  await page.locator('#roleWorkspace .role-handoff[data-consumption-status="DEMO_DRAFTS"]').waitFor({timeout:15000});
+  assert.match(await page.locator('#roleWorkspace .role-handoff').textContent(),new RegExp(target.receipt.context_digest));
+  assert.deepEqual(errors,[]);
+ }finally{await browser.close()}
+});
