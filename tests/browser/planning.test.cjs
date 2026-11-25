@@ -55,6 +55,20 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(wbs.analysis.deliverable_count,2);assert.equal(wbs.analysis.package_count,4);
   assert.equal(wbs.decomposition_ready,false);
   assert.equal(await owner.locator('#wbs-tree details').count(),2);
+  // P6.2d: exercise real HTTP/queue with isolated synthetic provider only.
+  const decomposition={wbs_version:wbs.current.version,wbs_digest:wbs.current.digest,confirmation:'RUN AI DECOMPOSITION'};
+  assert.equal((await post(viewer,vc,pp+'/wbs/decompose',decomposition)).status(),403);
+  assert.equal((await post(reviewer,rc,pp+'/wbs/decompose',decomposition)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/wbs/decompose',decomposition)).status(),403);
+  assert.equal((await post(owner,csrf,pp+'/wbs/decompose',{...decomposition,wbs_digest:'wrong'})).status(),400);
+  await owner.locator('#wbs-decompose').click();
+  await owner.waitForFunction(()=>document.querySelector('#decomposition-status').textContent.includes('READY FOR REVIEW'),null,{timeout:30000});
+  const generated=await get(owner,pp);
+  assert.equal(generated.decomposition.ready,true);
+  assert.equal(generated.decomposition.evidence.call_count,2);
+  assert.equal(generated.wbs.current.digest,wbs.current.digest);
+  assert.equal(generated.wbs.decomposition_ready,false);
+  assert.equal(generated.current,null);
   const details=[
     ['Persist URL with the authorized project identifier','Project scoped URL write handler','Database write test record'],
     ['Test saved URL retrieval in the project list','URL retrieval integration test','Returned list includes saved URL'],
@@ -67,6 +81,8 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   await owner.locator('#wbs-save').click();
   await owner.waitForFunction(()=>document.querySelector('#wbs-status').textContent.includes('DETAIL READY · WBS v2'));
   assert.equal((await get(owner,pp)).wbs.decomposition_ready,true);
+  assert.equal((await get(owner,pp)).decomposition.stale,true);
+  assert.equal((await get(owner,pp)).decomposition.ready,false);
   assert.equal((await get(owner,pp)).current,null);
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);

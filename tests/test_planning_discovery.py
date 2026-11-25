@@ -105,7 +105,7 @@ class PlanningQueueTests(unittest.TestCase):
         q.ensure_schema(c)
         sql=c.execute("SELECT sql FROM sqlite_master WHERE name='agent_queue'").fetchone()[0]
         c.commit();c.execute('PRAGMA foreign_keys=OFF');c.execute('DROP TABLE agent_queue')
-        c.execute(sql.replace(",'planning'",""));c.commit();c.execute('PRAGMA foreign_keys=ON')
+        c.execute(sql.replace(",'planning','decomposition'",""));c.commit();c.execute('PRAGMA foreign_keys=ON')
         i=q.enqueue(c,'p','requirements','owner',0,self.lanes,now=100)
         c.execute('CREATE TABLE old_child(id TEXT REFERENCES agent_queue(id))');c.execute('INSERT INTO old_child VALUES(?)',(i,));c.commit()
         q.ensure_schema(c)

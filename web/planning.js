@@ -21,6 +21,8 @@ function buttons(){
  $('wbs-save').disabled=busy||!d?.can_write||!w?.current||w.stale||w.current.version!==wbsEditVersion||!w.sources?.[w.current.lane];
  $('wbs-document').readOnly=$('wbs-save').disabled;
  $('wbs-lane').disabled=busy;
+ const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
+ $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
 function render(d){
  current=d;$('panel').hidden=false;
@@ -38,7 +40,7 @@ function render(d){
  $('analysis').textContent=d.analysis?JSON.stringify(d.analysis,null,2):'Chưa có phân tích cho PRD hiện tại';
  $('history').textContent=d.history.map(v=>'v'+v.version+' · PRD v'+v.requirements_version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');
  $('scope-contract').value='';
- renderDiscovery(d);renderWbs(d.wbs,true);
+ renderDiscovery(d);renderWbs(d.wbs,true);renderDecomposition(d.decomposition);
  $('status').textContent='Đã tải kế hoạch';buttons();
 }
 function renderDiscovery(d){
@@ -71,10 +73,25 @@ async function mutateWbs(seed){
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
+function renderDecomposition(x){
+ $('decomposition-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.ready?' · READY FOR REVIEW':''):'Chưa có đề xuất decomposition';
+ $('decomposition-evidence').textContent=x?.evidence?JSON.stringify({model:x.model,...x.evidence},null,2):'';
+}
+async function decompose(){
+ if(busy||!current||$('wbs-decompose').disabled)return;
+ const d=current,p=d.wbs.current;
+ if(!confirm('Chạy model Ollama local để phân rã WBS? Không tự ghi đè WBS.'))return;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  await api(base(d.project_id)+'/wbs/decompose',{wbs_version:p.version,wbs_digest:p.digest,confirmation:'RUN AI DECOMPOSITION'});
+  const fresh=await api(base(d.project_id));d.decomposition=fresh.decomposition;renderDecomposition(d.decomposition);
+ }catch(e){$('status').textContent=e.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 async function refreshDiscovery(){
  if(busy||!current||document.hidden)return;
  const d=current;
- try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;renderDiscovery(d);renderWbs(d.wbs);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
+ try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;d.decomposition=fresh.decomposition;renderDiscovery(d);renderWbs(d.wbs);renderDecomposition(d.decomposition);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
 }
 async function discover(){
  if(busy||!current?.input_ready||!current.can_write)return;
@@ -115,7 +132,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
   $('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
-  $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));
+  $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();
  }catch(e){$('status').textContent=e.message}
 });

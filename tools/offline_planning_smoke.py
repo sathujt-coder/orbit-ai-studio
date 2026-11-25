@@ -8,36 +8,49 @@ def require(ok,message):
     if not ok:raise RuntimeError(message)
 
 def wbs_acceptance(server,pid,report):
-    """Exercise actual PM proposals with separately authored fixture detail.
-    No extra inference, automatic adoption or executed acceptance tests.
-    """
-    import work_breakdown as w,project_planning as pp
-    details=[
-        ('Save URL with the authenticated project identifier','Project scoped URL storage handler','Database write integration test record'),
-        ('Test saved URL persistence after reconnecting to storage','Persistence test with a fresh storage connection','Stored URL and project identifier assertion'),
-        ('List saved links filtered by authenticated project identifier','Project filtered saved URL query','Query implementation review record'),
-        ('Verify the saved URL appears in the current project list','List retrieval integration test case','Expected URL compared with returned list'),
-        ('Apply project isolation to link reads using authorized membership','Project membership authorization guard','Authorization implementation review checklist'),
-        ('Test unauthorized read of another project URL and assert denial','Cross project negative access test','Denied response and absence of foreign URL')]
-    report['wbs']=dict(detail_origin='human_authored_test_fixture',lanes={})
-    gates={}
-    with server.db() as c:
-        for lane in 'AB':
+    """Use actual local AI detail outputs only; preserve P6.2c checks."""
+    import work_breakdown as w,project_planning as pp,decomposition_jobs as dj,wbs_decomposition as d,usage_store,cost_store
+    report['wbs']=dict(detail_origin='model_generated',lanes={},gates={})
+    gates=report['wbs']['gates'];report['wbs']['gate']='BLOCK'
+    for lane in 'AB':
+        with server.db() as c:
             view=w.view(c,pid);source=view['sources'][lane]
             version=view['current']['version'] if view['current'] else 0
             seed=w.save(c,pid,'fixture-author',dict(source,expected_version=version,confirmation='CREATE WBS DRAFT'),server.now(),seed=True)
-            doc=seed['current']['document']
-            packages=[p for d in doc['deliverables'] for p in d['packages']]
-            gates['wbs_'+lane+'_structure']=seed['analysis']['deliverable_count']==3 and len(packages)==6 and seed['analysis']['criterion_count']==3
+            base=seed['current'];gates['wbs_'+lane+'_structure']=seed['analysis']['deliverable_count']==3 and seed['analysis']['package_count']==6 and seed['analysis']['criterion_count']==3
             gates['wbs_'+lane+'_draft_blocked']=seed['analysis']['structure_ready'] and not seed['decomposition_ready']
-            for p,values in zip(packages,details):p.update(zip(w.DETAIL_FIELDS,values))
-            saved=w.save(c,pid,'fixture-author',dict(source,expected_version=version+1,document=doc),server.now())
-            a=saved['analysis']
-            gates['wbs_'+lane+'_details']=saved['decomposition_ready'] and not a['semantic_reviewed'] and not a['issues'] and all(len(t['implement'])==len(t['verify'])==1 for t in a['traceability'].values())
-            report['wbs']['lanes'][lane]=dict(current=saved['current'],analysis=a,draft_blocked=gates['wbs_'+lane+'_draft_blocked'])
+        run=server.enqueue_decomposition(pid,'fixture-author',dict(wbs_version=base['version'],wbs_digest=base['digest'],confirmation='RUN AI DECOMPOSITION'))['queue_id']
+        require(server.dispatch_one(),'Decomposition queue did not dispatch')
+        with server.db() as c:
+            state=dj.latest(c,pid)
+            calls=[dict(x) for x in c.execute('SELECT agent_id,lane,provider,model,purpose,status,coverage,total_tokens FROM ai_usage WHERE project_id=? AND run_id=? ORDER BY rowid',(pid,run))]
+            entry=dict(discovery=state,calls=calls,draft_blocked=gates['wbs_'+lane+'_draft_blocked'])
+            report['wbs']['lanes'][lane]=entry
+            e=state['evidence'] if state else None
+            gates['wbs_'+lane+'_ai_ready']=bool(state and state['ready'] and state['status']=='succeeded' and not state['stale'] and e and e['origin']=='model_generated')
+            gates['wbs_'+lane+'_no_auto_write']=w.latest(c,pid)['version']==base['version'] and w.latest(c,pid)['digest']==base['digest']
+            gates['wbs_'+lane+'_calls']=bool(e and 2<=len(calls)<=4 and len(calls)==e['call_count'] and e['ledger_valid'] and
+                [(x['lane'],x['purpose']) for x in calls]==[(lane,a['phase']) for b in e['history'] for a in b['attempts']] and all(
+                x['provider']=='ollama' and x['model']==state['model']['model'] and x['agent_id']=='wbs-'+lane and x['status']=='ok' and x['coverage']=='complete' and x['total_tokens']>0 for x in calls))
+            gates['wbs_'+lane+'_audit']=bool(e and e['repair_audit_valid'] and e['wbs_version']==base['version'] and e['wbs_digest']==base['digest'] and e['source']==source)
+            gates['wbs_'+lane+'_details']=False
+            if gates['wbs_'+lane+'_ai_ready']:
+                # Explicit fixture actor save of the exact AI candidate tests the
+                # unchanged P6.2c save gate; not automatic adoption by the worker.
+                saved=w.save(c,pid,'fixture-author',dict(source,expected_version=base['version'],document=e['candidate']),server.now())
+                a=saved['analysis']
+                gates['wbs_'+lane+'_details']=saved['decomposition_ready'] and not a['semantic_reviewed'] and not a['issues'] and saved['current']['digest']==e['candidate_digest'] and all(len(t['implement'])==len(t['verify'])==1 for t in a['traceability'].values())
+                entry.update(current=saved['current'],analysis=a,explicit_fixture_save=True)
+    with server.db() as c:
         gates['wbs_no_adoption']=pp.latest(c,pid) is None and not pp.view(c,pid)['execution_ready']
         gates['wbs_database_integrity']=c.execute('PRAGMA integrity_check').fetchone()[0]=='ok' and not list(c.execute('PRAGMA foreign_key_check'))
-    report['wbs']['gates']=gates
+        usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
+        count=len(report['calls'])+sum(len(v['calls']) for v in report['wbs']['lanes'].values())
+        gates['wbs_token_ledger']=usage['requests']==usage['complete_calls']==count
+        gates['wbs_local_cost']=cost['local_assumed_zero_calls']==count
+        gates['wbs_no_budget_leak']=server.BUDGET_GUARD.view(c,all_projects=True)['totals']['held_calls']==0
+        gates['wbs_no_active_inference']=server.CONCURRENCY.snapshot()['active']==0
+        report['wbs'].update(token_usage=usage,cost=cost)
     report['wbs']['gate']='PASS' if all(gates.values()) else 'BLOCK'
     return all(gates.values())
 

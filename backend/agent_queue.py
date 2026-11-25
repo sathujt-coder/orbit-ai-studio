@@ -15,13 +15,18 @@ MAX_QUEUED=200
 
 def migrate_requirements_kind(c):
     old=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_queue'").fetchone()
-    if not old or "'planning'" in old[0]:return
+    if not old or "'decomposition'" in old[0]:return
     # SQLite cannot alter CHECK constraints. Startup-only atomic rebuild with original IDs,
     # row order and dependent event/queue links preserved. Never disable FK inside a transaction.
     if c.in_transaction:raise RuntimeError('Queue migration requires an idle connection')
     enabled=c.execute('PRAGMA foreign_keys').fetchone()[0]
-    sql=old[0].replace("CHECK(kind IN ('pipeline','coding'))","CHECK(kind IN ('pipeline','coding','requirements','planning'))").replace("CHECK(kind IN ('pipeline','coding','requirements'))","CHECK(kind IN ('pipeline','coding','requirements','planning'))")
+    sql=old[0]
+    for kinds in ("'pipeline','coding'","'pipeline','coding','requirements'","'pipeline','coding','requirements','planning'"):
+        sql=sql.replace("CHECK(kind IN ("+kinds+"))","CHECK(kind IN ('pipeline','coding','requirements','planning','decomposition'))")
     if sql==old[0]:raise RuntimeError('Unknown queue schema; migration blocked')
+    # SQLite quotes the table name after ALTER TABLE RENAME; support databases
+    # already migrated by P6.1/P6.2b as well as freshly created schemas.
+    sql=sql.replace('CREATE TABLE "agent_queue"(','CREATE TABLE agent_queue_new(',1)
     sql=sql.replace('CREATE TABLE agent_queue(','CREATE TABLE agent_queue_new(',1)
     if 'CREATE TABLE agent_queue_new(' not in sql:
         raise RuntimeError('Unknown queue table declaration')
@@ -46,7 +51,7 @@ def ensure_schema(c):
     migrate_requirements_kind(c)
     c.execute("""CREATE TABLE IF NOT EXISTS agent_queue(
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-        kind TEXT NOT NULL CHECK(kind IN ('pipeline','coding','requirements','planning')), mode TEXT,
+        kind TEXT NOT NULL CHECK(kind IN ('pipeline','coding','requirements','planning','decomposition')), mode TEXT,
         coding_job_id TEXT UNIQUE, actor TEXT NOT NULL,
         priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 9),
         dependency_id TEXT REFERENCES agent_queue(id), retry_of TEXT REFERENCES agent_queue(id),
@@ -90,10 +95,10 @@ def get(c,pid,identifier):
 def enqueue(c,pid,kind,actor,revision,lanes,*,mode=None,coding_job_id=None,priority=5,dependency_id=None,retry_of=None,now=None,routing=None):
     now=int(time.time()) if now is None else now
     if not permitted(c,actor,pid):raise PermissionError('Project write permission required')
-    if kind not in ('pipeline','coding','requirements','planning') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
+    if kind not in ('pipeline','coding','requirements','planning','decomposition') or type(priority) is not int or not 0<=priority<=9:raise ValueError('Priority must be 0–9')
     if kind=='pipeline' and (mode not in ('next','all') or coding_job_id is not None):raise ValueError('Invalid pipeline task')
     if kind=='coding' and (not coding_job_id or mode is not None):raise ValueError('Invalid coding task')
-    if kind in ('requirements','planning') and (mode is not None or coding_job_id is not None):raise ValueError('Invalid discovery task')
+    if kind in ('requirements','planning','decomposition') and (mode is not None or coding_job_id is not None):raise ValueError('Invalid discovery task')
     if active(c,pid,kind):raise ValueError('Project already has an active task of this kind')
     if c.execute("SELECT COUNT(*) FROM agent_queue WHERE status IN ('queued','running','paused','waiting_approval')").fetchone()[0]>=MAX_QUEUED:
         raise ValueError('Queue capacity reached')
@@ -162,6 +167,11 @@ def boundary(c,row,result,now,stamp,stage=None):
         fail(c,row,'execution_failed',now,stamp);return
     if result=='needs_revision':
         fail(c,row,'quality_gate',now,stamp);return
+    if row['kind']=='decomposition':
+        persisted=c.execute('SELECT ready FROM decomposition_runs WHERE queue_id=? AND project_id=?',(row['id'],row['project_id'])).fetchone()
+        if result!='ready' or not persisted or not persisted[0]:
+            fail(c,row,'decomposition_completion_mismatch',now,stamp);return
+        change(c,row,'succeeded','decomposition_ready_for_review',now,control='');return
     if row['kind']=='planning':
         persisted=c.execute('SELECT ready FROM planning_runs WHERE queue_id=? AND project_id=?',(row['id'],row['project_id'])).fetchone()
         if result!='ready' or not persisted or not persisted[0]:

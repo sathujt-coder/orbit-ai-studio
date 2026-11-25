@@ -19,6 +19,8 @@ import project_planning
 import planning_discovery
 import planning_jobs
 import work_breakdown
+import wbs_decomposition
+import decomposition_jobs
 import requirements_discovery
 import requirements_jobs
 import model_provider
@@ -123,6 +125,7 @@ def init_db():
         requirements_jobs.ensure_schema(c)
         planning_jobs.ensure_schema(c)
         work_breakdown.ensure_schema(c)
+        decomposition_jobs.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
@@ -457,6 +460,29 @@ def run_planning(pid,identifier,lanes):
         result=planning_jobs.persist(c,pid,identifier,evidence,lanes,now())
         agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
 
+def enqueue_decomposition(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=decomposition_jobs.enqueue(c,pid,actor,revision,lanes,body,
+            priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_decomposition(pid,identifier,lanes):
+    with LOCK,db() as c:snap=decomposition_jobs.checked_input(c,pid,identifier)
+    lane=snap['source']['lane']
+    # Pin the configured local lane; never route/fallback to a remote model.
+    model=decomposition_jobs.local_lane(lanes,lane)
+    def call(phase,system,user,schema):
+        with LOCK,db() as c:decomposition_jobs.checked_input(c,pid,identifier)
+        return usage_store.tracked_chat(db,LOCK,model,system,user,project_id=pid,agent_id='wbs-'+lane,
+            purpose=phase,run_id=identifier,runtime_settings=True,max_tokens=wbs_decomposition.MAX_OUTPUT,
+            schema=schema,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+    evidence=wbs_decomposition.run(call,snap['source'],snap['document'])
+    with LOCK,db() as c:
+        result=decomposition_jobs.persist(c,pid,identifier,evidence,model,now())
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
 def dispatch_one():
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
@@ -495,6 +521,9 @@ def dispatch_one():
                 if target['status']!='queued':
                     agent_queue.fail(c,row,'stage_not_eligible',int(time.time()),now());return True
                 stage=target['stage_id']
+        if row['kind']=='decomposition':
+            run_decomposition(pid,identifier,lanes)
+            return True
         if row['kind']=='planning':
             run_planning(pid,identifier,lanes)
             return True
@@ -552,6 +581,10 @@ def retry_queue(pid,identifier,actor,confirmation):
             if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
             spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
         if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
+        if old['kind']=='decomposition':
+            with db() as c:snapshot=decomposition_jobs.input_for(c,pid,identifier)
+            return enqueue_decomposition(pid,actor,dict(wbs_version=snapshot['wbs_version'],
+                wbs_digest=snapshot['wbs_digest'],confirmation='RUN AI DECOMPOSITION'),old['priority'],dep,identifier)
         if old['kind']=='planning':
             with db() as c:snapshot=planning_jobs.input_for(c,pid,identifier)
             return enqueue_planning(pid,actor,dict(requirements_version=snapshot['requirements_version'],
@@ -680,6 +713,7 @@ class Handler(SimpleHTTPRequestHandler):
                     data=project_planning.view(c,pid)
                     data['discovery']=planning_jobs.latest(c,pid)
                     data['wbs']=work_breakdown.view(c,pid,data['discovery'])
+                    data['decomposition']=decomposition_jobs.latest(c,pid)
                     data['can_write']=auth_store.authorize(c,actor,pid,'write')
                     data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
                 self.send_json(200,data);return
@@ -827,6 +861,9 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/discover',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_planning(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_decomposition(pid,actor,body));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs(?:/seed)?',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:
