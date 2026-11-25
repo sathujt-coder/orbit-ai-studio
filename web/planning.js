@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null;
+let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null;
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/planning';
 async function api(path,body){
  const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});
@@ -24,8 +24,29 @@ function buttons(){
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
+function renderGraph(){
+ const d=graphSnapshot,kind=$('graph-source').value;
+ const g=kind==='wbs'?d?.wbs?.dependency_graph:d?.analysis?.dependency_graph;
+ const rev=kind==='wbs'?d?.wbs?.current:d?.current;
+ const stale=kind==='wbs'?d?.wbs?.stale:d?.stale;
+ const label=kind==='wbs'?'WBS':'Plan';
+ const status=!g?(stale?'STALE · Nguồn không còn hợp lệ':'Chưa có đồ thị đã lưu'):
+   label+' v'+rev.version+' · '+g.node_count+' nodes · '+g.edge_count+' edges · '+(g.timing_ready?'CPM READY · '+g.critical_path_minutes+' phút':'STRUCTURE ONLY · '+g.unestimated_nodes.length+' chưa ước tính');
+ $('graph-status').textContent=status;
+ $('graph-path').textContent=g?.timing_ready?'Đường găng đại diện: '+g.critical_path.join(' → ')+' · '+g.critical_nodes.length+' task găng (gồm các nhánh đồng hạng)':'Chưa tính đường găng khi thiếu thời lượng.';
+ const item=text=>{const li=document.createElement('li');li.textContent=text;return li};
+ $('graph-layers').replaceChildren(...(g?.layers||[]).map(ids=>item(ids.join(' · '))));
+ $('graph-edges').replaceChildren(...(g?.critical_edges||[]).map(e=>item(e.source+' → '+e.target)));
+ $('graph-nodes').replaceChildren(...(g?.nodes||[]).map(n=>{
+  const tr=document.createElement('tr');
+  for(const v of [n.id,n.depends_on.join(', ')||'—',n.effort_minutes,n.earliest_start_minutes,n.earliest_finish_minutes,
+    n.latest_start_minutes,n.latest_finish_minutes,n.total_float_minutes,n.critical===null?null:n.critical?'Có':'Không']){
+   const td=document.createElement('td');td.textContent=String(v??'—');tr.append(td)
+  }return tr
+ }));
+}
 function render(d){
- current=d;$('panel').hidden=false;
+ current=d;graphSnapshot=d;$('panel').hidden=false;
  const src=d.requirements_input,plan=d.current;
  $('input-state').textContent=src?'PRD đã duyệt · v'+src.version+' · '+src.digest:'BLOCKED · Cần PRD hiện tại được phê duyệt';
  $('source').textContent=src?JSON.stringify(src.document,null,2):'Chưa có PRD đầu vào hợp lệ';
@@ -40,7 +61,7 @@ function render(d){
  $('analysis').textContent=d.analysis?JSON.stringify(d.analysis,null,2):'Chưa có phân tích cho PRD hiện tại';
  $('history').textContent=d.history.map(v=>'v'+v.version+' · PRD v'+v.requirements_version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');
  $('scope-contract').value='';
- renderDiscovery(d);renderWbs(d.wbs,true);renderDecomposition(d.decomposition);
+ renderDiscovery(d);renderWbs(d.wbs,true);renderDecomposition(d.decomposition);renderGraph();
  $('status').textContent='Đã tải kế hoạch';buttons();
 }
 function renderDiscovery(d){
@@ -69,7 +90,7 @@ async function mutateWbs(seed){
  busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   const body={...source,expected_version:w.current?.version||0,...(seed?{confirmation:'CREATE WBS DRAFT'}:{document:JSON.parse($('wbs-document').value)})};
-  d.wbs=await api(base(d.project_id)+'/wbs'+(seed?'/seed':''),body);renderWbs(d.wbs,true);
+  d.wbs=await api(base(d.project_id)+'/wbs'+(seed?'/seed':''),body);renderWbs(d.wbs,true);if(graphSnapshot){graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph()}
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
@@ -94,7 +115,7 @@ async function decompose(){
 async function refreshDiscovery(){
  if(busy||!current||document.hidden)return;
  const d=current;
- try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;d.decomposition=fresh.decomposition;renderDiscovery(d);renderWbs(d.wbs);renderDecomposition(d.decomposition);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
+ try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;d.decomposition=fresh.decomposition;graphSnapshot=fresh;renderGraph();renderDiscovery(d);renderWbs(d.wbs);renderDecomposition(d.decomposition);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
 }
 async function discover(){
  if(busy||!current?.input_ready||!current.can_write)return;
@@ -108,7 +129,7 @@ async function discover(){
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
 async function reload(){
- const seq=++sequence,pid=$('project').value;current=null;$('panel').hidden=true;buttons();
+ const seq=++sequence,pid=$('project').value;current=null;graphSnapshot=null;renderGraph();$('panel').hidden=true;buttons();
  if(!pid)return;
  try{const d=await api(base(pid));if(seq===sequence)render(d)}catch(e){if(seq===sequence)$('status').textContent=e.message}
 }
@@ -134,7 +155,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const d=await api('/api/bootstrap');$('project').replaceChildren(...d.projects.map(p=>new Option(p.name,p.id)));
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
-  $('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
+  $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();
  }catch(e){$('status').textContent=e.message}
