@@ -7,6 +7,40 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 def require(ok,message):
     if not ok:raise RuntimeError(message)
 
+def wbs_acceptance(server,pid,report):
+    """Exercise actual PM proposals with separately authored fixture detail.
+    No extra inference, automatic adoption or executed acceptance tests.
+    """
+    import work_breakdown as w,project_planning as pp
+    details=[
+        ('Save URL with the authenticated project identifier','Project scoped URL storage handler','Database write integration test record'),
+        ('Test saved URL persistence after reconnecting to storage','Persistence test with a fresh storage connection','Stored URL and project identifier assertion'),
+        ('List saved links filtered by authenticated project identifier','Project filtered saved URL query','Query implementation review record'),
+        ('Verify the saved URL appears in the current project list','List retrieval integration test case','Expected URL compared with returned list'),
+        ('Apply project isolation to link reads using authorized membership','Project membership authorization guard','Authorization implementation review checklist'),
+        ('Test unauthorized read of another project URL and assert denial','Cross project negative access test','Denied response and absence of foreign URL')]
+    report['wbs']=dict(detail_origin='human_authored_test_fixture',lanes={})
+    gates={}
+    with server.db() as c:
+        for lane in 'AB':
+            view=w.view(c,pid);source=view['sources'][lane]
+            version=view['current']['version'] if view['current'] else 0
+            seed=w.save(c,pid,'fixture-author',dict(source,expected_version=version,confirmation='CREATE WBS DRAFT'),server.now(),seed=True)
+            doc=seed['current']['document']
+            packages=[p for d in doc['deliverables'] for p in d['packages']]
+            gates['wbs_'+lane+'_structure']=seed['analysis']['deliverable_count']==3 and len(packages)==6 and seed['analysis']['criterion_count']==3
+            gates['wbs_'+lane+'_draft_blocked']=seed['analysis']['structure_ready'] and not seed['decomposition_ready']
+            for p,values in zip(packages,details):p.update(zip(w.DETAIL_FIELDS,values))
+            saved=w.save(c,pid,'fixture-author',dict(source,expected_version=version+1,document=doc),server.now())
+            a=saved['analysis']
+            gates['wbs_'+lane+'_details']=saved['decomposition_ready'] and not a['semantic_reviewed'] and not a['issues'] and all(len(t['implement'])==len(t['verify'])==1 for t in a['traceability'].values())
+            report['wbs']['lanes'][lane]=dict(current=saved['current'],analysis=a,draft_blocked=gates['wbs_'+lane+'_draft_blocked'])
+        gates['wbs_no_adoption']=pp.latest(c,pid) is None and not pp.view(c,pid)['execution_ready']
+        gates['wbs_database_integrity']=c.execute('PRAGMA integrity_check').fetchone()[0]=='ok' and not list(c.execute('PRAGMA foreign_key_check'))
+    report['wbs']['gates']=gates
+    report['wbs']['gate']='PASS' if all(gates.values()) else 'BLOCK'
+    return all(gates.values())
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--report',type=Path,required=True);p.add_argument('--confirm',required=True)
     a=p.parse_args()
@@ -83,7 +117,10 @@ def main():
             gates['no_budget_leak']=guard['totals']['held_calls']==0
             gates['no_active_inference']=server.CONCURRENCY.snapshot()['active']==0
             gates['no_auto_adoption']=untouched;gates['database_integrity']=integrity
-            report['gates']=gates;require(all(gates.values()),'PM acceptance gate failed')
+            report['gates']=gates
+            require(all(gates.values()),'PM acceptance gate failed')
+            gates['wbs_acceptance']=wbs_acceptance(server,pid,report)
+            require(gates['wbs_acceptance'],'WBS acceptance gate failed')
             report['gate']='PASS'
     except Exception as e:
         report['error_type']=type(e).__name__;report['error']=str(e) if isinstance(e,(ValueError,RuntimeError)) else 'See test output'

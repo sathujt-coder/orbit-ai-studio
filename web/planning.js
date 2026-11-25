@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',current=null,busy=false,sequence=0,baseline='';
+let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null;
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/planning';
 async function api(path,body){
  const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});
@@ -16,6 +16,11 @@ function buttons(){
  $('approve').disabled=busy||!d?.input_ready||!d?.can_approve||!d?.current||d.stale||!!d.current.approved_at||!d.analysis||d.analysis.unestimated_tasks.length>0;
  $('document').readOnly=busy||!canEdit||!d?.current;
  $('scope-contract').readOnly=busy||!d?.input_ready||!d?.can_write;
+ const w=d?.wbs, lane=$('wbs-lane').value;
+ $('wbs-seed').disabled=busy||!d?.can_write||!w?.sources?.[lane];
+ $('wbs-save').disabled=busy||!d?.can_write||!w?.current||w.stale||w.current.version!==wbsEditVersion||!w.sources?.[w.current.lane];
+ $('wbs-document').readOnly=$('wbs-save').disabled;
+ $('wbs-lane').disabled=busy;
 }
 function render(d){
  current=d;$('panel').hidden=false;
@@ -33,7 +38,7 @@ function render(d){
  $('analysis').textContent=d.analysis?JSON.stringify(d.analysis,null,2):'Chưa có phân tích cho PRD hiện tại';
  $('history').textContent=d.history.map(v=>'v'+v.version+' · PRD v'+v.requirements_version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');
  $('scope-contract').value='';
- renderDiscovery(d);
+ renderDiscovery(d);renderWbs(d.wbs,true);
  $('status').textContent='Đã tải kế hoạch';buttons();
 }
 function renderDiscovery(d){
@@ -41,10 +46,35 @@ function renderDiscovery(d){
  $('discovery-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.status==='succeeded'&&!x.ready?' · QUALITY BLOCKED':''):'Chưa có đề xuất AI';
  $('discovery-evidence').textContent=x?.evidence?JSON.stringify({models:x.models,...x.evidence},null,2):'';
 }
+function renderWbs(w,reset=false){
+ if(reset){wbsEditVersion=w?.current?.version??null;$('wbs-document').value=w?.current?JSON.stringify(w.current.document,null,2):''}
+ const a=w?.analysis;
+ $('wbs-status').textContent=!w?.current?'Chưa có WBS phân cấp':w.stale?'STALE · WBS v'+w.current.version :w.current.version!==wbsEditVersion?'VERSION CHANGED · Tải lại trước khi sửa':(w.decomposition_ready?'DETAIL READY · ':'DRAFT · Cần chi tiết · ')+'WBS v'+w.current.version;
+ $('wbs-findings').textContent=a?JSON.stringify(a,null,2):'';
+ $('wbs-tree').replaceChildren(...(w?.current?.document.deliverables||[]).map(d=>{
+   const box=document.createElement('details');box.open=true;const summary=document.createElement('summary');
+   summary.textContent=d.id+' · '+d.requirement+' · '+d.outcome;box.append(summary);
+   const list=document.createElement('ul');
+   for(const p of d.packages){const li=document.createElement('li');li.textContent=p.id+' · '+p.kind+' · '+(p.action||'Chưa có action')+' · '+p.criteria.join(', ');list.append(li)}
+   box.append(list);return box
+ }));
+}
+async function mutateWbs(seed){
+ if(busy||!current?.can_write)return;
+ const d=current,w=d.wbs,lane=seed?$('wbs-lane').value:w.current?.lane,source=w?.sources?.[lane];
+ if(!source||(!seed&&w.current.version!==wbsEditVersion))return;
+ if(seed&&!confirm('Tạo WBS nháp mới từ PM-'+lane+'?'))return;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  const body={...source,expected_version:w.current?.version||0,...(seed?{confirmation:'CREATE WBS DRAFT'}:{document:JSON.parse($('wbs-document').value)})};
+  d.wbs=await api(base(d.project_id)+'/wbs'+(seed?'/seed':''),body);renderWbs(d.wbs,true);
+ }catch(e){$('status').textContent=e.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 async function refreshDiscovery(){
  if(busy||!current||document.hidden)return;
  const d=current;
- try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;renderDiscovery(d);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
+ try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;renderDiscovery(d);renderWbs(d.wbs);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
 }
 async function discover(){
  if(busy||!current?.input_ready||!current.can_write)return;
@@ -53,7 +83,7 @@ async function discover(){
  busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{const raw=$('scope-contract').value.trim();const scope=raw?JSON.parse(raw):null;
   await api(base(d.project_id)+'/discover',{requirements_version:src.version,requirements_digest:src.digest,confirmation:'RUN AI PLANNING',...(raw?{scope_contract:scope}:{})});
-  const fresh=await api(base(d.project_id));d.discovery=fresh.discovery;renderDiscovery(d);
+  const fresh=await api(base(d.project_id));d.discovery=fresh.discovery;d.wbs=fresh.wbs;renderDiscovery(d);renderWbs(d.wbs);
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
@@ -85,6 +115,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
   $('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
+  $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();
  }catch(e){$('status').textContent=e.message}
 });

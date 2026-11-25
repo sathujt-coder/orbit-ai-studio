@@ -18,6 +18,7 @@ import product_requirements
 import project_planning
 import planning_discovery
 import planning_jobs
+import work_breakdown
 import requirements_discovery
 import requirements_jobs
 import model_provider
@@ -121,6 +122,7 @@ def init_db():
         agent_queue.ensure_schema(c)
         requirements_jobs.ensure_schema(c)
         planning_jobs.ensure_schema(c)
+        work_breakdown.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
@@ -677,6 +679,7 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c:
                     data=project_planning.view(c,pid)
                     data['discovery']=planning_jobs.latest(c,pid)
+                    data['wbs']=work_breakdown.view(c,pid,data['discovery'])
                     data['can_write']=auth_store.authorize(c,actor,pid,'write')
                     data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
                 self.send_json(200,data);return
@@ -824,6 +827,11 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/discover',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_planning(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs(?:/seed)?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=work_breakdown.save(c,pid,actor,body,now(),seed=path.endswith('/seed'))
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning(?:/(?:seed|approve))?',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:

@@ -11,6 +11,12 @@
 <div><button id="seed" type="button" class="btn primary">Tạo WBS nháp</button> <button id="save" type="button" class="btn outline">Lưu phiên bản mới</button> <button id="approve" type="button" class="btn outline">Phê duyệt kế hoạch</button></div>
 <p>Nhập effort_minutes bằng số phút ước tính; null nghĩa là chưa ước tính. Không coi tổng effort hay thời gian phụ thuộc là lịch thực thi cam kết.</p>
 <label>Plan JSON<textarea id="document" rows="20" maxlength="50000" spellcheck="false"></textarea></label>
-<h2>WBS đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
+<h2>WBS phân cấp từ PM-A/B</h2><p>Chọn đề xuất đã qua kiểm tra, tạo bản nháp phân cấp theo requirement và từng acceptance criterion. Điền action, output và evidence cụ thể trong JSON. Chưa phải phê duyệt hay thực thi.</p>
+<label>PM lane <select id="wbs-lane"><option>A</option><option>B</option></select></label>
+<button id="wbs-seed" type="button" class="btn outline">Tạo WBS phân cấp</button> <button id="wbs-save" type="button" class="btn outline">Lưu chi tiết WBS</button>
+<p id="wbs-status" role="status"></p><div id="wbs-tree"></div>
+<label>WBS JSON<textarea id="wbs-document" rows="18" maxlength="50000" spellcheck="false"></textarea></label>
+<details><summary>Traceability và Quality Findings</summary><pre id="wbs-findings"></pre></details>
+<h2>Kế hoạch phẳng đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
 <h2>Phân tích DAG</h2><pre id="analysis"></pre><h2>Lịch sử phiên bản</h2><pre id="history"></pre>
 </section><a href="/requirements.html">Product Requirements</a> · <a href="/">Về dashboard</a></section></main><script src="/planning.js"></script></body></html>

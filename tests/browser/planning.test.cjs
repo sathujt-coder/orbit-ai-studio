@@ -43,6 +43,31 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const proposed=await get(owner,pp);assert.equal(proposed.discovery.ready,true);
   assert.deepEqual(Object.keys(proposed.discovery.evidence.proposals).sort(),['A','B']);
   assert.equal(proposed.current,null);assert.equal(proposed.execution_ready,false);
+  // P6.2c: exact-source WBS drafts, partial detail and explicit save.
+  const wb={...proposed.wbs.sources.A,expected_version:0,confirmation:'CREATE WBS DRAFT'};
+  assert.equal((await post(viewer,vc,pp+'/wbs/seed',wb)).status(),403);
+  assert.equal((await post(reviewer,rc,pp+'/wbs/seed',wb)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/wbs/seed',wb)).status(),403);
+  assert.equal((await post(owner,csrf,pp+'/wbs/seed',{...wb,proposal_digest:'wrong'})).status(),400);
+  await owner.locator('#wbs-seed').click();
+  await owner.waitForFunction(()=>document.querySelector('#wbs-status').textContent.includes('WBS v1'));
+  let wbs=(await get(owner,pp)).wbs;
+  assert.equal(wbs.analysis.deliverable_count,2);assert.equal(wbs.analysis.package_count,4);
+  assert.equal(wbs.decomposition_ready,false);
+  assert.equal(await owner.locator('#wbs-tree details').count(),2);
+  const details=[
+    ['Persist URL with the authorized project identifier','Project scoped URL write handler','Database write test record'],
+    ['Test saved URL retrieval in the project list','URL retrieval integration test','Returned list includes saved URL'],
+    ['Filter link reads by authenticated project membership','Membership access guard for link queries','Authorization code review checklist'],
+    ['Test another project member requesting a foreign URL','Cross project denial integration test','Denied response without link payload']
+  ];
+  let wd=wbs.current.document;
+  wd.deliverables.flatMap(d=>d.packages).forEach((p,i)=>{[p.action,p.output,p.evidence]=details[i]});
+  await owner.locator('#wbs-document').fill(JSON.stringify(wd));
+  await owner.locator('#wbs-save').click();
+  await owner.waitForFunction(()=>document.querySelector('#wbs-status').textContent.includes('DETAIL READY · WBS v2'));
+  assert.equal((await get(owner,pp)).wbs.decomposition_ready,true);
+  assert.equal((await get(owner,pp)).current,null);
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);
@@ -63,6 +88,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,rp,{expected_version:1,document:doc})).status(),200);
   await owner.locator('#reload').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('STALE'));
   assert.equal((await get(owner,pp)).execution_ready,false);
+  assert.equal((await get(owner,pp)).wbs.stale,true);
+  assert.equal((await get(owner,pp)).wbs.decomposition_ready,false);
+  assert.equal(await owner.locator('#wbs-save').isDisabled(),true);
   assert.equal(await owner.locator('#seed').isDisabled(),true);
   assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
  }finally{await browser.close()}
