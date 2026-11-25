@@ -8,6 +8,7 @@ import json
 import re
 import product_requirements as pr
 import auth_store
+import dependency_graph
 
 MAX_BYTES=26000
 MAX_TASKS=150
@@ -99,22 +100,16 @@ def validate(document,requirements):
 def analyze(document,requirements):
     doc=validate(document,requirements)
     tasks={t['id']:t for t in doc['tasks']}
-    pending=set(tasks);order=[];finish={}
-    while pending:
-        runnable=sorted(tid for tid in pending if set(tasks[tid]['depends_on'])<=finish.keys())
-        for tid in runnable:
-            t=tasks[tid];effort=t['effort_minutes']
-            deps=[finish[d] for d in t['depends_on']]
-            finish[tid]=None if effort is None or any(v is None for v in deps) else effort+max(deps,default=0)
-            order.append(tid);pending.remove(tid)
-    missing=[tid for tid in order if tasks[tid]['effort_minutes'] is None]
+    graph=dependency_graph.analyze(doc['tasks'])
+    order=graph['execution_order']
+    missing=graph['unestimated_nodes']
     trace={}
     for rid in sorted(r['id'] for r in requirements['requirements']):
         trace[rid]={kind:[tid for tid in order if tasks[tid]['kind']==kind and rid in tasks[tid]['requirements']]
             for kind in ('implement','verify')}
     return dict(task_count=len(tasks),execution_order=order,traceability=trace,unestimated_tasks=missing,
         total_effort_minutes=None if missing else sum(t['effort_minutes'] for t in tasks.values()),
-        dependency_lower_bound_minutes=None if missing else max(finish.values()))
+        dependency_lower_bound_minutes=graph['critical_path_minutes'],dependency_graph=graph)
 
 def seed_document(requirements):
     req=pr.validate(requirements)
@@ -135,7 +130,10 @@ def view(c,pid):
         current=dict(row);current['document']=json.loads(current['document'])
         stale=not source or (source['version'],source['digest'])!=(row['requirements_version'],row['requirements_digest'])
         if not stale:
-            analysis=analyze(current['document'],source['document'])
+            try:
+                if digest(current['document'])!=row['digest']:raise ValueError('Plan digest mismatch')
+                analysis=analyze(current['document'],source['document'])
+            except (ValueError,KeyError,TypeError):stale=True
     history=[dict(r) for r in c.execute("""SELECT version,requirements_version,requirements_digest,digest,author,created_at,approved_by,approved_at
         FROM project_plans WHERE project_id=? ORDER BY version DESC LIMIT 100""",(pid,))]
     return dict(project_id=pid,requirements_input=source,current=current,history=history,
