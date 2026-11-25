@@ -145,14 +145,14 @@ third=server.enqueue_pipeline(b,'fixture','next',7)
 original=server.run_stage
 barrier=threading.Barrier(2)
 observed=[]
-def stage(pid,sid,lanes):
+def stage(pid,sid,lanes,*,queue_id=None):
     with server.LOCK,server.db() as c:
         active=c.execute("SELECT project_id FROM agent_queue WHERE status='running'").fetchall()
         assert len({r[0] for r in active})==len(active)
     barrier.wait(5)
     with server.LOCK,server.db() as c:
         observed.append(c.execute("SELECT count(*) FROM agent_queue WHERE status='running'").fetchone()[0])
-    return original(pid,sid,lanes)
+    return original(pid,sid,lanes,queue_id=queue_id)
 server.run_stage=stage
 workers=[threading.Thread(target=server.queue_worker) for _ in range(2)]
 for t in workers:t.start()
