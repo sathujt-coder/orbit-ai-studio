@@ -192,6 +192,8 @@ function renderWorkflow(holder,state){
  if(w.planning.wbs)lines.push('WBS v'+w.planning.wbs.version+' · '+w.planning.wbs.digest);
  if(w.planning.reason)lines.push(w.planning.reason);
  panel('Planning Adoption',w.planning.state,lines,'/planning.html').dataset.workflowStage='planning';
+ const packages=w.work_packages;
+ panel('Work Package Contracts',packages?packages.bindings.length+' recorded bindings':'NOT_RECORDED',packages?[...packages.available.map(p=>p.id+' · '+p.kind),...packages.bindings.map(b=>b.package_id+' · '+b.state+' · '+b.digest)]:[]).dataset.workflowStage='work-packages';
  const jobs=w.coding_jobs.flatMap(j=>['Job '+j.job_id+' · '+j.status+' · '+j.planning_binding,'Queue '+(j.queue?.id||'unlinked')+' · '+(j.queue?.status||'unknown'), 'Manifest '+(j.manifest_digest||'unknown'), 'Verification '+(j.verification?j.verification.id+' · '+j.verification.state+' · '+j.verification.digest:'NOT_RECORDED')]);
  panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection').dataset.workflowStage='coding';
  panel('Agent Queue',w.queue.truncated?'Recent 100 · truncated':'Recent jobs',w.queue.tasks.map(q=>q.kind+' · '+q.id+' · '+q.status+' · dependency '+(q.dependency_id||'none'))).dataset.workflowStage='queue';

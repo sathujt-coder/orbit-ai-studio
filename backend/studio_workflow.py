@@ -6,12 +6,14 @@ import coding_factory
 import product_requirements
 import project_planning
 import work_breakdown
+import work_package_binding
 from web_candidate_selection import compare
 
 def contract(row,keys):
     return {k:row.get(k) for k in keys} if row else None
 
 def view(c,pid):
+    w=None
     prd=product_requirements.view(c,pid)
     current=prd['current']
     try:approved=project_planning.current_input(c,pid)
@@ -29,6 +31,7 @@ def view(c,pid):
     except (ValueError,TypeError,KeyError):
         planning=dict(state='invalid_evidence',stale=True,reason='Planning evidence could not be validated',
             wbs=None,adoption=None,binding=None,execution_authorized=False)
+    packages=work_package_binding.view(c,pid,w) if c is not None else dict(bindings=[],available=[],execution_authorized=False)
     queue=agent_queue.view(c,pid)
     jobs=[]
     for item in coding_factory.list_jobs(c,pid):
@@ -53,6 +56,6 @@ def view(c,pid):
             if rec['verification']:rec['verification']['state']='BLOCK'
         jobs.append(rec)
     return dict(schema='orbit.studio-workflow.v1',project_id=pid,requirements=requirements,planning=planning,
-        coding_jobs=jobs,queue=queue,next_checkpoint='APPROVE_PRD' if not approved else 'ADOPT_PLANNING' if planning['state']!='adopted' else 'WORK_PACKAGE_BINDING_REQUIRED',
+        coding_jobs=jobs,queue=queue,work_packages=packages,next_checkpoint='APPROVE_PRD' if not approved else 'ADOPT_PLANNING' if planning['state']!='adopted' else 'CODING_QUEUE_BINDING_REQUIRED' if any(x['state']=='BOUND' for x in packages['bindings']) else 'WORK_PACKAGE_BINDING_REQUIRED',
         execution_authorized=False,automatic_dispatch=False,production_release_authorized=False,
         note='Existing coding jobs are not bound to adopted work packages. Verification is not release approval.')

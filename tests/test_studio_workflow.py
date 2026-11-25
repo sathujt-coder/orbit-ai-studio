@@ -11,6 +11,7 @@ class StudioWorkflowTests(unittest.TestCase):
         c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row;self.addCleanup(c.close)
         c.executescript("""CREATE TABLE agent_queue(id,project_id,coding_job_id,kind,status,dependency_id,retry_of);
         CREATE TABLE coding_verifications(id,project_id,job_id,verdict,report_json,created_at);
+        CREATE TABLE studio_work_packages(project_id,adoption_version,package_id,snapshot,digest,actor,created_at);
         INSERT INTO agent_queue VALUES('foreign','q','j','coding','succeeded',NULL,NULL);
         INSERT INTO coding_verifications VALUES('foreign','q','j','passed','{}','t');""")
         with patch.object(sw.product_requirements,'view',return_value={'current':None}),patch.object(sw.project_planning,'current_input',return_value=None),patch.object(sw.work_breakdown,'view',return_value={'current':None,'adoption':{'current':None,'status':'blocked','stale':False,'reason':'missing','binding':None}}),patch.object(sw.agent_queue,'view',return_value={'tasks':[]}),patch.object(sw.coding_factory,'list_jobs',return_value=[{'id':'j','status':'ready'}]),patch.object(sw.coding_factory,'detail',return_value={'project_id':'p','manifest':{'mode':'demo'}}):
