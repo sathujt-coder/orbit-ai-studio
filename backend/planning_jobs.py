@@ -86,6 +86,7 @@ def latest(c,pid):
             if 'scope_contract' in saved:source['scope_contract']=saved['scope_contract']
             gate=pd.quality_gate(data['evidence'],source)
             data['ready']=bool(gate['scope_ready'] and data['evidence'].get('scope_contract_digest')==gate['scope_contract_digest']
-                and data['evidence'].get('scope_ready') is True and pr.canonical(source)==pr.canonical(saved))
+                and data['evidence'].get('scope_ready') is True and data['evidence'].get('content_policy')==ps.CONTENT_POLICY
+                and gate['content_ready'] and pr.canonical(source)==pr.canonical(saved))
         except (KeyError,ValueError,TypeError):data['ready']=False
     return data

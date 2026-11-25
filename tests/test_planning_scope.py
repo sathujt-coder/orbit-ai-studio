@@ -44,9 +44,11 @@ def raw_b():
 def replacements():
     return [dict(target='TASK-1',title='Save URL in existing project storage'),
         dict(target='TASK-3',title='Display saved URLs for the existing project')]
+def patch_reply(patches):
+    return json.dumps({p['target']:p['title'] for p in patches})
 def discover(patches=None):
     def call(lane,phase,*args):
-        if phase=='planning_scope_repair':return json.dumps(dict(patches=replacements() if patches is None else patches))
+        if phase=='planning_scope_repair':return patch_reply(replacements() if patches is None else patches)
         return json.dumps(raw_a() if lane=='A' else raw_b())
     return pd.discover(call,source())
 
@@ -60,7 +62,7 @@ class ScopeTests(unittest.TestCase):
         calls=[]
         def call(lane,phase,system,user,schema):
             calls.append((lane,phase,json.loads(user)))
-            return json.dumps(dict(patches=replacements())) if phase=='planning_scope_repair' else json.dumps(raw_a() if lane=='A' else raw_b())
+            return patch_reply(replacements()) if phase=='planning_scope_repair' else json.dumps(raw_a() if lane=='A' else raw_b())
         e=pd.discover(call,src)
         self.assertEqual([(x[0],x[1]) for x in calls],[('A','planning_proposal'),('A','planning_scope_repair'),('B','planning_proposal')])
         self.assertEqual(calls[0][2],calls[2][2]);self.assertNotIn('candidate',calls[2][2])

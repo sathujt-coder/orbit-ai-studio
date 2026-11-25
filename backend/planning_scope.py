@@ -1,5 +1,7 @@
 """P6.2b.2: literal PRD-bound scope and acceptance evidence, not a semantic oracle."""
 import copy
+import re
+import unicodedata
 import product_requirements as pr
 import project_planning as pp
 import requirements_scope as rs
@@ -39,6 +41,38 @@ def contract(document,extra=None):
     if len(pr.canonical(result).encode())>10000:raise ValueError('Planning scope exceeds 10 KB')
     return result
 
+CONTENT_POLICY='orbit.planning-quality.v2'
+TEXT_LIMIT=160
+
+def content_codes(value):
+    """Conservative text-integrity signals, not a grammatical/semantic proof."""
+    text=unicodedata.normalize('NFKC',value).strip()
+    result=[]
+    if (text.startswith(('{','[')) or chr(96)*3 in text or
+            re.search(r'"[^"\n]{1,80}"\s*:',text) or
+            any(unicodedata.category(ch) in ('Cc','Cf') for ch in value)):
+        result.append('structured_text_contamination')
+    # A schema-capped string can end in a seemingly valid word.
+    # Never silently trim; require a shorter fresh title at the boundary.
+    if len(value)>=TEXT_LIMIT:result.append('text_at_length_boundary')
+    words=rs.norm(text).split()
+    if (text.endswith(('…','...',',',':',';','-','/')) or
+            (words and words[-1] in ('a','an','the','and','or','because','while','that','with','to')) or
+            text.count('(')!=text.count(')') or text.count('{')!=text.count('}') or text.count('[')!=text.count(']')):
+        result.append('suspected_incomplete_text')
+    if not words or rs.norm(text) in ('implement','verify','test','task','implementation','verification','objective','plan'):
+        result.append('generic_or_empty_text')
+    return result
+
+def content_findings(plan):
+    fields=[('objective',plan['objective'])]+[(t['id'],t['title']) for t in plan['tasks']]
+    issues=[dict(target=target,code=code) for target,value in fields for code in content_codes(value)]
+    builds={rid:t for t in plan['tasks'] if t['kind']=='implement' for rid in t['requirements']}
+    for task in plan['tasks']:
+        if task['kind']=='verify' and any(rid in builds and rs.norm(task['title'])==rs.norm(builds[rid]['title']) for rid in task['requirements']):
+            issues.append(dict(target=task['id'],code='duplicate_verification_title'))
+    return dict(passed=not issues,issues=issues)
+
 def assess(plan,document,policy):
     doc=pp.validate(plan,document)
     issues=[]
@@ -54,6 +88,7 @@ def assess(plan,document,policy):
                 missing=[group for group in rule['matches'] if not any(rs.contains(title,phrase) for phrase in group)]
                 if missing:issues.append(dict(target=tid,code='missing_acceptance_evidence',
                     requirement=rule['requirement'],evidence=rule['evidence'],missing=missing))
+    issues.extend(content_findings(doc)['issues'])
     return dict(passed=not issues,issues=issues,contract_digest=pp.digest(policy))
 
 def targets(findings):
