@@ -55,11 +55,60 @@ def wbs_acceptance(server,pid,report):
     report['wbs']['gate']='PASS' if all(gates.values()) else 'BLOCK'
     return all(gates.values())
 
+def final_acceptance(server,pid,report):
+    """Only reached after both real WBS lanes pass. Human fixture supplies estimates."""
+    import work_breakdown as w, project_planning as pp, agent_queue as q, usage_store, cost_store
+    result=report['final_planning'];gates=result['checks']
+    with server.db() as c:
+        v=w.view(c,pid);base=v['current']
+        estimates=v['resource_estimates']['draft']
+        for item in estimates['packages']:item.update(effort_minutes=30,role='Fixture engineering')
+        w.resource_estimates.save(c,pid,'fixture-author',dict(expected_version=0,wbs_version=base['version'],
+            wbs_digest=base['digest'],document=estimates,confirmation='SAVE RESOURCE ESTIMATES'),server.now(),v)
+        v=w.view(c,pid);s=v['sprint_schedule']['draft']
+        s['sprints']=[dict(id='S1',start='2026-12-01',end='2026-12-07',capacity={'Fixture engineering':180})]
+        for item in s['assignments']:item['sprint']='S1'
+        s['milestones']=[dict(id='M1',title='Fixture deliverables',sprint='S1',packages=[x['id'] for x in s['assignments']])]
+        w.sprint_schedule.save(c,pid,'fixture-author',dict(v['sprint_schedule']['source'],expected_version=0,
+            document=s,confirmation='SAVE SPRINT SCHEDULE'),server.now(),v)
+        v=w.view(c,pid)
+        gates['manual_estimates_and_schedule']=bool(v['resource_estimates']['analysis']['ready'] and v['sprint_schedule']['analysis']['ready'])
+        gates['no_auto_adoption_before_review']=w.planning_adoption.latest(c,pid) is None
+        digest=v['cross_review']['bundle_digest']
+    require(bool(digest),'Cross-review prerequisites blocked')
+    identifier=server.enqueue_cross_review(pid,'fixture-author',dict(bundle_digest=digest,confirmation='RUN PM CROSS REVIEW'))['queue_id']
+    require(server.dispatch_one(),'Cross-review queue did not dispatch')
+    with server.db() as c:
+        v=w.view(c,pid);state=v['cross_review'];result['cross_review']=state
+        job=q.get(c,pid,identifier);gates['review_dependency']=job['dependency_id']==v['current']['queue_id']
+        calls=[dict(x) for x in c.execute('SELECT lane,provider,model,purpose,status,coverage,total_tokens FROM ai_usage WHERE project_id=? AND run_id=? ORDER BY rowid',(pid,identifier))]
+        result['review_calls']=calls
+        gates['real_dual_review']=bool(state['quality_ready'] and state['latest']['queue_id']==identifier and job['status']=='succeeded')
+        gates['review_ledger']=len(calls)==2 and all(x['provider']=='ollama' and x['status']=='ok' and x['coverage']=='complete' and (x['total_tokens'] or 0)>0 for x in calls)
+        gates['no_auto_adoption_after_review']=w.planning_adoption.latest(c,pid) is None
+        require(all(gates.values()),'Final cross-review gate failed')
+        # Explicit authorized fixture action, not a model decision or production signoff.
+        adopted=w.planning_adoption.adopt(c,pid,'fixture-author',dict(v['adoption']['binding'],expected_version=0,
+            confirmation='APPROVE AND ADOPT PLANNING BUNDLE'),server.now(),v)
+        row=adopted['current'];result['adoption']=row
+        gates['explicit_adoption_integrity']=bool(adopted['status']=='adopted' and row['digest']==pp.digest(row['snapshot']) and not adopted['execution_authorized'])
+        gates['approval_audit']=c.execute("SELECT COUNT(*) FROM auth_audit WHERE actor=? AND project_id=? AND action='planning_adopt:1' AND outcome='allowed'",('fixture-author',pid)).fetchone()[0]==1
+        gates['database_integrity']=c.execute('PRAGMA integrity_check').fetchone()[0]=='ok' and not list(c.execute('PRAGMA foreign_key_check'))
+        gates['no_budget_leak']=server.BUDGET_GUARD.view(c,all_projects=True)['totals']['held_calls']==0
+        gates['no_active_inference']=server.CONCURRENCY.snapshot()['active']==0
+        usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
+        result.update(token_usage=usage,cost=cost)
+        gates['complete_local_usage']=usage['requests']==usage['complete_calls']==cost['local_assumed_zero_calls']
+    require(all(gates.values()),'Final planning adoption gate failed')
+    result['real_ai_acceptance']='PASS'
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--report',type=Path,required=True);p.add_argument('--confirm',required=True)
     a=p.parse_args()
     if a.confirm!='RUN LOCAL PLANNING' or a.report.exists():p.error('Explicit confirmation and new report required')
-    report=dict(schema='orbit.offline-planning.v1',gate='BLOCK',source_commit=os.getenv('STRESS_SOURCE_COMMIT','unknown'))
+    report=dict(schema='orbit.offline-planning.v1',gate='BLOCK',source_commit=os.getenv('STRESS_SOURCE_COMMIT','unknown'),
+        final_planning=dict(schema='orbit.final-planning-real.v1',real_ai_acceptance='BLOCK',system_acceptance='NOT_ASSESSED',
+            model_qualification='NOT_ASSESSED',production_release_authorized=False,checks={},transport='actual_local_ollama'))
     try:
         with tempfile.TemporaryDirectory() as d:
             os.environ.update(AI_COMPANY_DB=str(Path(d)/'planning.sqlite'),AI_PROVIDER='ollama',
@@ -122,9 +171,11 @@ def main():
             require(all(gates.values()),'PM acceptance gate failed')
             gates['wbs_acceptance']=wbs_acceptance(server,pid,report)
             require(gates['wbs_acceptance'],'WBS acceptance gate failed')
+            final_acceptance(server,pid,report)
             report['gate']='PASS'
     except Exception as e:
         report['error_type']=type(e).__name__;report['error']=str(e) if isinstance(e,(ValueError,RuntimeError)) else 'See test output'
+        report['final_planning']['blocked_reason']=report['error']
     finally:
         with a.report.open('x',encoding='utf-8') as f:json.dump(report,f,indent=2)
         print(json.dumps(report,indent=2))

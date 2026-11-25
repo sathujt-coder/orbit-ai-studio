@@ -152,7 +152,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   planning-system-acceptance:
-    name: P6.2d.10 — system acceptance (not model qualification)
+    name: P6.2j — final system acceptance (not model qualification)
     needs: [validate, requirements-browser]
     if: always()
     runs-on: ubuntu-24.04
@@ -170,7 +170,7 @@ jobs:
           passed = all(value == 'success' for value in checks.values())
           report = dict(schema='orbit.planning-system-acceptance.v1',
                         source_commit=os.environ['GITHUB_SHA'],
-                        transport='isolated_synthetic_fixture',
+                        milestone='P6.2j', transport='isolated_synthetic_fixture',
                         checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
                         model_qualification='NOT_ASSESSED',
                         real_ai_acceptance='NOT_ASSESSED',
