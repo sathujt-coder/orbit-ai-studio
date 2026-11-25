@@ -170,17 +170,35 @@ class Artifact14990478494Tests(unittest.TestCase):
         self.src['proposal']=pd.parse(json.dumps(raw),dict(document=self.src['document']))
         return w.skeleton(self.src)
     def test_exact_historical_missing_groups_still_block(self):
+        # Artifact 14990478494, SHA256 d4d93e556ab460afa3d1bf193b8add9bbcea206aa9c63aa24819d4a90e64e424.
+        # A uses "persistence", which satisfies neither verification group.
+        # B uses "persisted" and "persists", satisfying only the wider group.
+        expected={
+            'A':[
+                dict(package='D-1.1',field='details',code='missing_scope_evidence',
+                    requirement='REQ-1',criterion='Save URL in own project',
+                    missing_groups=[['save','store','persist','saving','storing','persisting','insert']]),
+                dict(package='D-1.2',field='details',code='missing_scope_evidence',
+                    requirement='REQ-1',criterion='A saved URL is persisted',
+                    missing_groups=[['save','saved','persist','persisted','saving','persists','storage'],
+                                    ['save','saved','persist','saving','storage']])],
+            'B':[
+                dict(package='D-1.1',field='details',code='missing_scope_evidence',
+                    requirement='REQ-1',criterion='Save URL in own project',
+                    missing_groups=[['save','store','persist','saving','storing','persisting','insert']]),
+                dict(package='D-1.2',field='details',code='missing_scope_evidence',
+                    requirement='REQ-1',criterion='A saved URL is persisted',
+                    missing_groups=[['save','saved','persist','saving','storage']])]}
         for lane in 'AB':
-            doc=self.base(lane)
-            before=d.apply(doc,ARTIFACT_PATCHES[lane][0],self.src)
-            after=d.apply(before,ARTIFACT_PATCHES[lane][1],self.src)
-            issues=d.local_issues(after,self.src,self.ids)
-            missing=[x for x in issues if x['code']=='missing_scope_evidence']
-            self.assertEqual([x['package'] for x in missing],['D-1.1','D-1.2'])
-            self.assertEqual(missing[0]['missing_groups'],[['save','store','persist','saving','storing','persisting','insert']])
-            self.assertEqual(missing[1]['missing_groups'],[['save','saved','persist','saving','storage']])
-            self.assertFalse(w.assess(after,self.src)['detail_ready'])
-            self.assertTrue(any(x['code']=='action_lacks_specificity' or x['code']=='action_missing_technical_anchor' for x in d.local_issues(before,self.src,self.ids)))
+            with self.subTest(lane=lane):
+                doc=self.base(lane)
+                before=d.apply(doc,ARTIFACT_PATCHES[lane][0],self.src)
+                after=d.apply(before,ARTIFACT_PATCHES[lane][1],self.src)
+                issues=d.local_issues(after,self.src,self.ids)
+                missing=[x for x in issues if x['code']=='missing_scope_evidence']
+                self.assertEqual(missing,expected[lane])
+                self.assertFalse(w.assess(after,self.src)['detail_ready'])
+                self.assertTrue(any(x['code']=='action_lacks_specificity' or x['code']=='action_missing_technical_anchor' for x in d.local_issues(before,self.src,self.ids)))
     def test_exact_terms_and_field_level_repair_of_both_artifact_lanes(self):
         for lane in 'AB':
             doc=self.base(lane);record=[]
