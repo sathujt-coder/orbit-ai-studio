@@ -216,7 +216,8 @@ class Artifact14990478494Tests(unittest.TestCase):
             payload=d.context(self.src,before,list(fields),issues,fields)
             self.assertEqual(fields['D-1.1'],['action','evidence'])
             self.assertNotIn('output',fields['D-1.1'])
-            self.assertEqual(payload['targets'][0]['retained']['output'],initial['D-1.1']['output'])
+            self.assertEqual(payload['targets'][0]['retained_fields'],['output'])
+            self.assertNotIn(initial['D-1.1']['output'],json.dumps(payload))
             self.assertIn('save',payload['targets'][0]['required_exact_terms'])
             def call(phase,system,user,schema):
                 record.append((phase,schema))
@@ -321,7 +322,8 @@ class FlatTechnicalProtocolTests(unittest.TestCase):
         self.assertIn('verification artifact',shape['properties']['D-1.2.output']['description'])
         self.assertIn('expected observable',shape['properties']['D-1.2.evidence']['description'])
         ctx=json.loads(body);self.assertEqual(ctx['wire'],d.WIRE)
-        self.assertIn(ARTIFACT_PM['A'][1][0][0],ctx['targets'][0]['avoid_exact'])
+        self.assertNotIn(ARTIFACT_PM['A'][1][0][0],body)
+        self.assertEqual(ctx['targets'][0]['description'],src['document']['requirements'][0]['description'])
         self.assertEqual(ctx['targets'][0]['required_exact_terms'],['save','url'])
         self.assertEqual(meta['prompt_digest'],pp.digest(d.RULES))
         self.assertLessEqual(meta['context_bytes'],d.MAX_CONTEXT_BYTES)
@@ -366,9 +368,10 @@ class FlatTechnicalProtocolTests(unittest.TestCase):
         ctx=json.loads(body);target=next(x for x in ctx['targets'] if x['id']=='D-1.2')
         entry=target['field_contracts']['D-1.2.output']
         self.assertEqual(entry['conflicts_with'],[dict(key='D-1.1.output')])
-        self.assertTrue(entry['fix']);self.assertIn('verification artifact',entry['instruction'])
-        self.assertEqual(target['retained']['action'],ARTIFACT_14998801172['B'][0]['D-1.2']['action'])
-        self.assertIn('Persisted URL in own project',ctx['used_details'])
+        self.assertIn('duplicate_detail',entry['fix']);self.assertIn('verification artifact',shape['properties']['D-1.2.output']['description'])
+        self.assertIn('action',target['retained_fields'])
+        self.assertNotIn('Persisted URL in own project',body)
+        self.assertNotIn('used_details',ctx)
     def test_synthetic_exact_field_repairs_preserve_retained_model_text(self):
         for lane in 'AB':
             with self.subTest(lane=lane):
@@ -441,9 +444,9 @@ class ContaminationCompletenessTests(unittest.TestCase):
         for phrase in w.RETIRED_EXAMPLES:
             self.assertNotIn(phrase.casefold(),(d.RULES+body+json.dumps(shape)).casefold())
         for target in json.loads(body)['targets']:
-            self.assertEqual(target['retained'],{})
+            self.assertEqual(target['retained_fields'],[])
             for k,entry in target['field_contracts'].items():
-                self.assertTrue(any('Discard the copied text' in x for x in entry['fix']))
+                self.assertIn('example_contamination',entry['fix'])
                 self.assertEqual(entry['min_words'],w.MIN_DETAIL_WORDS[k.rsplit('.',1)[1]])
                 self.assertEqual(entry['max_chars'],159)
     def test_normalized_embedded_example_and_narrow_nonmatch(self):
@@ -487,7 +490,7 @@ class ContaminationCompletenessTests(unittest.TestCase):
         self.assertEqual(calls[2][2]['required'],['D-3.1.action'])
         contract=calls[2][1]['targets'][0]['field_contracts']['D-3.1.action']
         self.assertEqual(contract['min_words'],5);self.assertEqual(contract['target_words'],[8,14])
-        self.assertIn('Imperative technical change',contract['instruction'])
+        self.assertIn('Imperative technical change',calls[2][2]['properties']['D-3.1.action']['description'])
         repair=e['history'][1]['attempts'][1]
         self.assertEqual((repair['convergence']['before_issues'],repair['convergence']['after_issues']),(2,1))
         self.assertEqual(repair['issues_after'],[dict(package='D-3.1',field='action',code='action_lacks_specificity')])
@@ -524,3 +527,172 @@ class ContaminationCompletenessTests(unittest.TestCase):
         with self.assertRaises(ValueError):d.request(src,candidate,['D-1.1','D-1.2'],issues,
             {'D-1.1':['action'],'D-1.2':['action']})
         with self.assertRaises(ValueError):d.request(src,candidate,['D-2.1'])
+
+
+# Exact historical v5 flat patches from artifact 15002647325,
+# SHA256 71f6f053467d6aee6480960478c4aa554daedf9dd844cdb43c4017b047acbdc6.
+# These are regression inputs only, not actual acceptance transport.
+ARTIFACT_15002647325={
+    'A':[
+        {"D-1.1.action":"Save URL in own project","D-1.1.evidence":"Review record","D-1.1.output":"Saved URL record",
+         "D-1.2.action":"Test list saved links","D-1.2.evidence":"Test report","D-1.2.output":"Test case",
+         "D-2.1.action":"List saved links","D-2.1.evidence":"State check","D-2.1.output":"Listed URLs"},
+        {"D-1.1.action":"Write new technical detail; do not repeat the approved requirement, acceptance sentence or source title.",
+         "D-1.1.evidence":"Replace the short or generic phrase with a specific subject and method or artifact.",
+         "D-1.2.action":"Write 8–14 meaningful words with operation, object and technical method; never fewer than 5.",
+         "D-1.2.evidence":"State the expected observable result or assertion tied to the criterion, with subject and condition; 4+ words. Not an executed result.",
+         "D-1.2.output":"Name the concrete implementation artifact to produce: component, handler, query, configuration or equivalent; noun phrase, 3+ words, not an action or assertion",
+         "D-2.1.action":"Write 8–14 meaningful words with operation, object and technical method; never fewer than 5.",
+         "D-2.1.evidence":"State the expected observable result or assertion tied to the criterion, with subject and condition; 4+ words. Not an executed result.",
+         "D-2.1.output":"Name the concrete implementation artifact to produce: component, handler, query, configuration or equivalent; noun phrase, 3+ words, not an action or assertion"}],
+    'B':[
+        {"D-1.1.action":"Test/Verify/Check: Execute query to check saved URL persistence",
+         "D-1.1.evidence":"Test/Verify/Check: URL persistence state record",
+         "D-1.1.output":"Test/Verify/Check: Review saved URL persistence state",
+         "D-1.2.action":"Test/Verify/Check: Execute query to verify saved URL visibility",
+         "D-1.2.evidence":"Test/Verify/Check: URL visibility test record",
+         "D-1.2.output":"Test/Verify/Check: URL visibility test result",
+         "D-2.1.action":"Test/Verify/Check: Execute query to list saved URLs",
+         "D-2.1.evidence":"Test/Verify/Check: Saved URLs list test record",
+         "D-2.1.output":"Test/Verify/Check: Saved URLs list test result"},
+        {"D-1.1.action":"Include save handler in URL persistence logic",
+         "D-2.1.action":"Implement URL retrieval function for display"},
+        {"D-2.2.action":"Test/Verify/Check: Execute query to verify saved URL visibility",
+         "D-2.2.evidence":"Test/Verify/Check: URL visibility test record",
+         "D-2.2.output":"Test/Verify/Check: URL visibility test result",
+         "D-3.1.action":"Implement URL retrieval function for display",
+         "D-3.1.evidence":"Test/Verify/Check: Saved URLs list test record",
+         "D-3.1.output":"Test/Verify/Check: Saved URLs list test result",
+         "D-3.2.action":"Test/Verify/Check: Execute query to verify saved URL visibility",
+         "D-3.2.evidence":"Test/Verify/Check: URL visibility test record",
+         "D-3.2.output":"Test/Verify/Check: URL visibility test result"},
+        {"D-2.2.action":"Test/Verify/Check: Execute query to verify saved URL visibility",
+         "D-2.2.evidence":"Test/Verify/Check: URL persistence state record",
+         "D-2.2.output":"Test/Verify/Check: URL visibility test result",
+         "D-3.1.action":"Implement URL retrieval function for display",
+         "D-3.1.evidence":"Test/Verify/Check: Saved URLs list test record",
+         "D-3.1.output":"Test/Verify/Check: Saved URLs list test result",
+         "D-3.2.action":"Test/Verify/Check: Execute query to verify saved URL visibility",
+         "D-3.2.evidence":"Test/Verify/Check: URL persistence state record",
+         "D-3.2.output":"Test/Verify/Check: URL visibility test result"}]}
+
+class IsolatedContextTests(unittest.TestCase):
+    def artifact(self,lane):
+        return FlatTechnicalProtocolTests().artifact(lane)
+    def test_exact_historical_instruction_echo_a_is_blocked(self):
+        src,doc=self.artifact('A');calls=[]
+        def call(phase,system,user,schema):
+            patch=ARTIFACT_15002647325['A'][len(calls)]
+            calls.append((phase,user,schema))
+            self.assertEqual(set(patch),set(schema['required']))
+            return json.dumps(patch)
+        e=d.run(call,src,doc)
+        self.assertFalse(e['ready']);self.assertEqual(len(calls),2)
+        self.assertEqual(len(e['history']),1)
+        first,repair=e['history'][0]['attempts']
+        self.assertEqual(len(first['issues_after']),11)
+        self.assertEqual(len(repair['issues_after']),17)
+        self.assertEqual({x['package']+'.'+x['field'] for x in repair['issues_after']
+            if x['code']=='instruction_contamination'},set(ARTIFACT_15002647325['A'][1]))
+        self.assertFalse(repair['convergence']['passed'])
+        self.assertTrue(repair['convergence']['lost_scope_groups'])
+        self.assertNotIn('Write new technical detail',calls[1][1])
+    def test_exact_b_prefix_expands_all_nine_fields_and_rejects_old_repair(self):
+        src,doc=self.artifact('B');calls=[]
+        def call(phase,system,user,schema):
+            calls.append((phase,user,schema))
+            return json.dumps(ARTIFACT_15002647325['B'][len(calls)-1])
+        e=d.run(call,src,doc)
+        first,repair=e['history'][0]['attempts']
+        self.assertEqual(len(first['issues_after']),12)
+        self.assertEqual(len([x for x in first['issues_after'] if x['code']=='instruction_contamination']),9)
+        self.assertEqual(set(calls[1][2]['required']),set(ARTIFACT_15002647325['B'][0]))
+        self.assertFalse(repair['valid']);self.assertEqual(repair['diagnostic']['code'],'detail_target_mismatch')
+        self.assertEqual(len(repair['diagnostic']['missing']),7)
+        self.assertNotIn('Test/Verify/Check',calls[1][1])
+        self.assertFalse(e['ready']);self.assertEqual(len(calls),2)
+    def test_cross_batch_duplicate_gate_replays_exact_historical_b(self):
+        src,doc=self.artifact('B')
+        batches=d.batches(doc);candidate=doc
+        for i,flat in enumerate(ARTIFACT_15002647325['B']):
+            ids=list(dict.fromkeys(k.rsplit('.',1)[0] for k in flat))
+            fields={pid:[k for k in w.DETAIL_FIELDS if pid+'.'+k in flat] for pid in ids}
+            candidate=d.apply(candidate,d.decode(json.dumps(flat),ids,fields),src)
+            if i>=2:
+                issues=d.local_issues(candidate,src,batches[1])
+                self.assertEqual(len([x for x in issues if x['code']=='duplicate_detail']),9)
+                self.assertEqual(len([x for x in issues if x['code']=='missing_scope_evidence']),3)
+                self.assertEqual(len([x for x in issues if x['code']=='instruction_contamination']),8)
+                self.assertFalse(w.assess(candidate,src)['detail_ready'])
+        # Never feed this contaminated historical first batch into a new call.
+        with self.assertRaises(ValueError):d.request(src,candidate,batches[1])
+    def test_isolation_retained_coverage_and_compact_diagnostics(self):
+        src,doc=self.artifact('B');ids=d.batches(doc)[0]
+        initial=d.apply(doc,d.decode(json.dumps(ARTIFACT_15002647325['B'][0]),ids),src)
+        issues=d.local_issues(initial,src,ids);fields=d.repair_fields(ids,issues)
+        body,shape,meta=d.request(src,initial,ids,issues,fields)
+        ctx=json.loads(body)
+        self.assertEqual(ctx['protocol'],d.CONTEXT_POLICY)
+        self.assertNotIn('used_details',ctx)
+        self.assertLess(meta['context_bytes'],3121)  # v5 B repair, only two targets
+        for val in ARTIFACT_15002647325['B'][0].values():self.assertNotIn(val,body)
+        for target in ctx['targets']:
+            self.assertEqual(target['retained_fields'],[])
+            self.assertEqual(target['retained_coverage'],[])
+            for contract in target['field_contracts'].values():
+                self.assertIn('instruction_contamination',contract['fix'])
+                self.assertNotIn('instruction',contract)
+        # Scope covered by retained fields is counted, without repeating their text.
+        good=d.apply(doc,output(doc,ids),src)
+        fields={'D-1.1':['action']}
+        ctx=d.context(src,good,['D-1.1'],[],fields)
+        target=ctx['targets'][0]
+        self.assertEqual(target['retained_fields'],['output','evidence'])
+        self.assertEqual(target['retained_coverage'],[1])
+        self.assertEqual(target['required_exact_terms'],['save'])
+        for k in ('output','evidence'):
+            self.assertNotIn(d.packages(good)['D-1.1'][k],json.dumps(ctx))
+    def test_second_batch_body_independent_of_prior_generated_text(self):
+        src,doc=self.artifact('A');first,second=d.batches(doc)
+        good=d.apply(doc,output(doc,first),src)
+        changed=copy.deepcopy(good)
+        d.packages(changed)['D-1.1']['output']='Alternative project URL database handler'
+        body,shape,meta=d.request(src,good,second)
+        other,other_shape,other_meta=d.request(src,changed,second)
+        self.assertEqual((body,shape,meta),(other,other_shape,other_meta))
+        self.assertLess(meta['context_bytes'],4733)  # historical v5 second generation
+        for pkg in d.packages(good).values():
+            for k in w.DETAIL_FIELDS:
+                if pkg[k] is not None:self.assertNotIn(pkg[k],body)
+        ctx=json.loads(body)
+        self.assertEqual([t['id'] for t in ctx['targets']],second)
+        self.assertEqual([t['requirement'] for t in ctx['targets']],['REQ-2','REQ-3','REQ-3'])
+    def test_synthetic_bounded_repair_and_policy_replay(self):
+        for lane in 'AB':
+            with self.subTest(lane=lane):
+                src,doc=self.artifact(lane);calls=[]
+                def call(phase,system,user,schema):
+                    calls.append((phase,user,schema))
+                    if len(calls)==1:return json.dumps(ARTIFACT_15002647325[lane][0])
+                    return json.dumps(wire_output(doc,schema))
+                e=d.run(call,src,doc)
+                self.assertTrue(e['ready'],e['analysis']['issues'])
+                self.assertEqual(e['call_count'],3);self.assertEqual(e['max_calls'],4)
+                self.assertTrue(e['history'][0]['attempts'][1]['convergence']['passed'])
+                self.assertTrue(d.gate(e,src,doc)['ready'])
+                for key in ('instruction_policy','context_policy'):
+                    bad=copy.deepcopy(e);bad[key]='legacy'
+                    with self.assertRaises(ValueError):d.gate(bad,src,doc)
+                    bad=copy.deepcopy(e);bad['history'][0]['attempts'][0]['request'][key]='forged'
+                    with self.assertRaises(ValueError):d.gate(bad,src,doc)
+    def test_instruction_signatures_are_narrow_normalized_and_field_independent(self):
+        for flat in ARTIFACT_15002647325['A'][1],ARTIFACT_15002647325['B'][0]:
+            for text in flat.values():
+                self.assertTrue(w.instruction_contaminated(text))
+                self.assertTrue(w.instruction_contaminated(text.upper().replace(' ','-')))
+        for text in ('Test saved URL retrieval in the project list',
+                     'Implement a handler to check authorized project membership',
+                     'Expected URL compared with returned list',
+                     'Add a save handler using the authenticated project identifier'):
+            self.assertFalse(w.instruction_contaminated(text))
+        self.assertFalse(w.instruction_contaminated(None))

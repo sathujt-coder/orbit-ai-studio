@@ -30,6 +30,66 @@ def example_contaminated(value):
     return value is not None and any(rs.contains(value,phrase) for phrase in RETIRED_EXAMPLES)
 
 
+# Narrow, versioned signatures of observed instruction copying and the
+# current protocol's own instructions. Do not use general imperative verbs
+# as a blacklist: legitimate engineering actions are imperative.
+INSTRUCTION_POLICY='orbit.wbs-instruction-contamination.v1'
+INSTRUCTION_SIGNATURES=(
+    'write new technical detail',
+    'do not repeat the approved requirement',
+    'replace the short or generic phrase',
+    'write 8 14 meaningful words',
+    'aim for 8 14 meaningful words',
+    'state the expected observable result or assertion tied to the criterion',
+    'name the concrete implementation artifact to produce',
+    'name the expected observable implementation proof',
+    'name the verification artifact',
+    'name a planned artifact noun phrase',
+    'write complete concrete text',
+    'name the mechanism or artifact used to perform the change',
+    'write at least four words naming an expected observable result',
+    'use different content from the conflicting field',
+    'start with test verify or check',
+    'begin test verify or check',
+    'test verify check',
+    'test verify or check',
+    'describe the implementation change not the test procedure',
+    'discard the copied text entirely',
+    'include the required exact terms without losing',
+    'supply the missing field using its role contract',
+    'remove excluded scope stay within the approved requirement',
+    'remove review commentary return only technical detail',
+    'use plain text no json markup or control characters',
+    'write a complete phrase not a truncated fragment',
+    'write a shorter complete phrase under 159 characters',
+    'return one flat json object',
+    'return only the requested keys',
+    'use field contracts for every editable field',
+    'follow every field contract',
+    'satisfy all match groups',
+    'use required exact terms',
+    'only replace requested keys',
+    'keep retained fields unchanged',
+    'imperative technical change verb specific object',
+    'imperative technical change object and mechanism',
+    'concrete operation and test condition',
+    'planned implementation artifact noun phrase',
+    'planned verification artifact noun phrase',
+    'expected observable implementation proof',
+    'expected observable verification result',
+    'no copied instruction',
+    'never copy instructions or approved titles',
+    'resolve every listed issue code',
+    'do not copy instructions',
+    'no additional features estimates wrappers or commentary',
+)
+def instruction_contaminated(value):
+    return value is not None and any(rs.contains(value,x) for x in INSTRUCTION_SIGNATURES)
+
+def detail_contaminated(value):
+    return example_contaminated(value) or instruction_contaminated(value)
+
+
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS work_breakdowns(
         project_id TEXT NOT NULL REFERENCES projects(id),version INTEGER NOT NULL,
@@ -147,6 +207,7 @@ def assess(document,source):
                 if value is None:issue('missing_detail');continue
                 normalized=rs.norm(value)
                 if example_contaminated(value):issue('example_contamination')
+                if instruction_contaminated(value):issue('instruction_contamination')
                 if normalized in exact or normalized==rs.norm(p['source_title']):
                     issue('requirement_or_proposal_restatement')
                 if len(normalized.split())<3 or normalized in ('to be determined','not yet decided','not applicable','test the requirement','implement the requirement','verify the requirement','write some code','test the feature'):

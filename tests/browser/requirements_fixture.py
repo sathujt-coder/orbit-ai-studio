@@ -26,7 +26,7 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
         result=dict(blocking=['Missing scope'] if 'BLOCK_FIXTURE' in idea and 'synthesized document' in system else [],feedback=['Synthetic browser fixture review'])
     elif schema is planning.SCHEMA:
         result=dict(objective='Fixture plan',work=[dict(requirement=r['id'],implement='Implement '+r['description'],verify='Verify '+r['acceptance'][0]) for r in data['document']['requirements']])
-    elif isinstance(schema,dict) and data.get('targets') and 'used_details' in data:
+    elif isinstance(schema,dict) and data.get('targets') and data.get('protocol')=='orbit.wbs-isolated-context.v1':
         # Synthetic browser-only responses. Real offline acceptance uses native Ollama.
         details={
             'D-1.1':dict(action='Persist URL with the authorized project identifier',output='Project scoped URL write handler',evidence='Database write test record'),
