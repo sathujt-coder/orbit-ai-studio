@@ -74,7 +74,10 @@ async function mutateWbs(seed){
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
 function renderDecomposition(x){
- $('decomposition-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.ready?' · READY FOR REVIEW':''):'Chưa có đề xuất decomposition';
+ const guidance=x?.workflow;
+ const messages={refresh_source:'Nguồn đã thay đổi; tạo WBS mới từ nguồn hiện tại.',human_review:'Cần người có thẩm quyền review; chưa phê duyệt hay thực thi.',operator_review:'Cần người vận hành kiểm tra lỗi. '+(guidance?.operator_retry_available?'Có thể cấu hình model local khác và Retry trong Agent Queue.':'Không thể Retry trạng thái này.'),wait_for_queue:''};
+ const hint=messages[guidance?.next_action]||'';
+ $('decomposition-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.ready?' · READY FOR REVIEW':'')+(hint?' · '+hint:''):'Chưa có đề xuất decomposition';
  $('decomposition-evidence').textContent=x?.evidence?JSON.stringify({model:x.model,...x.evidence},null,2):'';
 }
 async function decompose(){
