@@ -6,6 +6,8 @@ on:
       - backend/product_requirements.py
       - backend/project_planning.py
       - backend/planning_discovery.py
+      - backend/planning_scope.py
+      - tests/test_planning_scope.py
       - backend/planning_jobs.py
       - tools/offline_planning_smoke.py
       - tests/test_planning_discovery.py

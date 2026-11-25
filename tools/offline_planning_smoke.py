@@ -36,7 +36,15 @@ def main():
                 row=pr.approve(c,pid,'fixture-author',dict(version=row['version'],digest=row['digest'],confirmation='APPROVE PRODUCT REQUIREMENTS'),server.now())['current']
             lanes=mp.require_distinct_real(server.provider_snapshot()[1])
             require(all(v.provider=='ollama' and v.base_url=='http://127.0.0.1:11434/v1' for v in lanes.values()),'Nonlocal provider forbidden')
-            run=server.enqueue_planning(pid,'fixture-author',dict(requirements_version=row['version'],requirements_digest=row['digest'],confirmation='RUN AI PLANNING'))['queue_id']
+            # Explicit fixture-author decisions: exact approved evidence and literal action/object groups.
+            policy=dict(forbidden=['register','sign up','create projects'],rules=[
+                dict(requirement='REQ-1',kind='implement',evidence=doc['requirements'][0]['description'],matches=[['save','store','persist','saving','storing','persisting','insert'],['url','urls','link','links']]),
+                dict(requirement='REQ-1',kind='verify',evidence=doc['requirements'][0]['acceptance'][0],matches=[['save','saved','persist','persisted','saving','persists','storage'],['url','urls','link','links']]),
+                dict(requirement='REQ-2',kind='implement',evidence=doc['requirements'][1]['description'],matches=[['list','display','retrieve','view','listing','retrieval','show','fetch'],['url','urls','link','links']]),
+                dict(requirement='REQ-2',kind='verify',evidence=doc['requirements'][1]['acceptance'][0],matches=[['list','listed','listing','display','displayed','retrieve','view','fetch'],['url','urls','link','links']]),
+                dict(requirement='REQ-3',kind='implement',evidence=doc['requirements'][2]['description'],matches=[['isolation','isolate','authorization','unauthorized','access','deny','restrict','security'],['project','projects']]),
+                dict(requirement='REQ-3',kind='verify',evidence=doc['requirements'][2]['acceptance'][0],matches=[['isolation','unauthorized','denied','deny','cannot','restrict','access'],['project','projects']])])
+            run=server.enqueue_planning(pid,'fixture-author',dict(requirements_version=row['version'],requirements_digest=row['digest'],confirmation='RUN AI PLANNING',scope_contract=policy))['queue_id']
             require(server.dispatch_one(),'Queue did not dispatch')
             with server.db() as c:
                 state=pj.latest(c,pid);report['discovery']=state
@@ -48,10 +56,11 @@ def main():
                 integrity=c.execute('PRAGMA integrity_check').fetchone()[0]=='ok' and not list(c.execute('PRAGMA foreign_key_check'))
                 untouched=pp.latest(c,pid) is None and not pp.view(c,pid)['execution_ready']
                 snapshot=pj.input_for(c,pid,run)
-            require(state['ready'] and state['status']=='succeeded','Planning queue did not pass: '+state['reason'])
+            require(state['evidence'] is not None,'Planning evidence missing: '+state['reason'])
             e=state['evidence'];gates={}
-            gates['source_binding']=e['source_digest']==row['digest'] and e['source_version']==row['version'] and json.loads(snapshot['snapshot'])['document']==doc
+            gates['source_binding']=e['source_digest']==row['digest'] and e['source_version']==row['version'] and json.loads(snapshot['snapshot'])['document']==doc and json.loads(snapshot['snapshot'])['scope_contract']==policy
             # Canonical PRD validator may preserve list order; all references are checked again.
+            gates['scope_repair_audit']=bool(state['ready'] and state['status']=='succeeded' and e['scope_ready'] and e['repair_audit_valid'] and all(x['passed'] for x in e['scope_findings'].values()) and all(x['passed'] for x in e['scope_convergence'].values()))
             gates['two_proposals']=set(e['proposals'])=={'A','B'} and e['structurally_ready'] and not e['semantic_reviewed']
             gates['coverage_and_graph']=all(len(pp.analyze(v,doc)['traceability'])==3 and len(v['tasks'])==6 for v in e['proposals'].values())
             gates['no_estimates']=all(t['effort_minutes'] is None for v in e['proposals'].values() for t in v['tasks'])

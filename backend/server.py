@@ -431,12 +431,13 @@ def run_requirements(pid,identifier,lanes):
         agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
 
 def enqueue_planning(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
-    product_requirements.fields(body,('requirements_version','requirements_digest','confirmation'))
+    required={'requirements_version','requirements_digest','confirmation'}
+    if not required<=set(body) or set(body)-required-{'scope_contract'}:raise ValueError('Invalid planning request fields')
     if body['confirmation']!='RUN AI PLANNING':raise ValueError('Explicit RUN AI PLANNING required')
     with LOCK,db() as c:
         revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
         identifier=planning_jobs.enqueue(c,pid,actor,revision,lanes,now(),version=body['requirements_version'],
-            digest=body['requirements_digest'],priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+            digest=body['requirements_digest'],priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'],scope_contract=body.get('scope_contract'))
     QUEUE_WAKE.set()
     return {'queue_id':identifier,'status':'queued'}
 

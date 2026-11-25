@@ -7,7 +7,7 @@
 <p id="status" role="status" aria-live="polite">Đang tải…</p>
 <section id="panel" hidden>
 <p id="input-state"></p><details><summary>PRD nguồn và acceptance criteria</summary><pre id="source"></pre></details>
-<p id="plan-state"></p><button id="discover" type="button" class="btn outline">Chạy PM-A/B</button><p id="discovery-status" role="status"></p><details><summary>Hai đề xuất AI (chưa review ngữ nghĩa, chưa tiếp nhận)</summary><pre id="discovery-evidence"></pre></details>
+<p id="plan-state"></p><details><summary>Planning Scope Contract (tùy chọn bổ sung)</summary><p>Backend luôn chặn cụm từ out_of_scope của PRD. Thêm forbidden và rules theo requirement, kind (implement/verify), evidence (nguyên văn description hoặc acceptance), matches (nhóm cụm từ thay thế). Đây là kiểm tra từ khóa, không thay thế review nghiệp vụ.</p><textarea id="scope-contract" rows="8" maxlength="10000" spellcheck="false" placeholder='{"forbidden":[],"rules":[]}'></textarea></details><button id="discover" type="button" class="btn outline">Chạy PM-A/B</button><p id="discovery-status" role="status"></p><details><summary>Hai đề xuất AI (kiểm tra phạm vi theo quy tắc; chưa cross-review, chưa tiếp nhận)</summary><pre id="discovery-evidence"></pre></details>
 <div><button id="seed" type="button" class="btn primary">Tạo WBS nháp</button> <button id="save" type="button" class="btn outline">Lưu phiên bản mới</button> <button id="approve" type="button" class="btn outline">Phê duyệt kế hoạch</button></div>
 <p>Nhập effort_minutes bằng số phút ước tính; null nghĩa là chưa ước tính. Không coi tổng effort hay thời gian phụ thuộc là lịch thực thi cam kết.</p>
 <label>Plan JSON<textarea id="document" rows="20" maxlength="50000" spellcheck="false"></textarea></label>

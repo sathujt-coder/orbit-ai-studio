@@ -15,6 +15,7 @@ function buttons(){
  $('save').disabled=busy||!canEdit||!d?.current;
  $('approve').disabled=busy||!d?.input_ready||!d?.can_approve||!d?.current||d.stale||!!d.current.approved_at||!d.analysis||d.analysis.unestimated_tasks.length>0;
  $('document').readOnly=busy||!canEdit||!d?.current;
+ $('scope-contract').readOnly=busy||!d?.input_ready||!d?.can_write;
 }
 function render(d){
  current=d;$('panel').hidden=false;
@@ -31,12 +32,13 @@ function render(d){
  }));
  $('analysis').textContent=d.analysis?JSON.stringify(d.analysis,null,2):'Chưa có phân tích cho PRD hiện tại';
  $('history').textContent=d.history.map(v=>'v'+v.version+' · PRD v'+v.requirements_version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');
+ $('scope-contract').value='';
  renderDiscovery(d);
  $('status').textContent='Đã tải kế hoạch';buttons();
 }
 function renderDiscovery(d){
  const x=d.discovery;
- $('discovery-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':''):'Chưa có đề xuất AI';
+ $('discovery-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':x.status==='succeeded'&&!x.ready?' · QUALITY BLOCKED':''):'Chưa có đề xuất AI';
  $('discovery-evidence').textContent=x?.evidence?JSON.stringify({models:x.models,...x.evidence},null,2):'';
 }
 async function refreshDiscovery(){
@@ -49,7 +51,8 @@ async function discover(){
  const d=current,src=d.requirements_input;
  if(!confirm('Chạy hai model AI độc lập? Có thể phát sinh chi phí theo cấu hình provider.'))return;
  busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
- try{await api(base(d.project_id)+'/discover',{requirements_version:src.version,requirements_digest:src.digest,confirmation:'RUN AI PLANNING'});
+ try{const raw=$('scope-contract').value.trim();const scope=raw?JSON.parse(raw):null;
+  await api(base(d.project_id)+'/discover',{requirements_version:src.version,requirements_digest:src.digest,confirmation:'RUN AI PLANNING',...(raw?{scope_contract:scope}:{})});
   const fresh=await api(base(d.project_id));d.discovery=fresh.discovery;renderDiscovery(d);
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
