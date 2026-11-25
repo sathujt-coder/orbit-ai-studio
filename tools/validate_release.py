@@ -12,6 +12,8 @@ REQUIRED = (
     'tests/test_verification_factory.py', 'tests/test_verified_pr.py',
     'tools/verify_coding_job.py', 'tools/publish_verified_code.py',
     'tools/planning_fixture.py', 'tools/wbs_benchmark.py', 'tests/test_wbs_benchmark.py',
+    'docs/planning-readiness-baseline.json',
+    'tests/test_planning_readiness_baseline.py',
     '.github/workflows/wbs-model-benchmark.yml',
     '.github/workflows/orbit-ci.yml',
 )
