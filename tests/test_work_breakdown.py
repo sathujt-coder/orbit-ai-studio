@@ -139,6 +139,16 @@ class WbsTests(unittest.TestCase):
         self.assertFalse(v['cross_review']['execution_authorized'])
         self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/review'),('p','write'))
 
+    def test_adoption_blocked_without_current_review_and_project_approval(self):
+        self.run_pm();v=self.seed();a=w.planning_adoption
+        self.assertFalse(v['adoption']['can_adopt'])
+        body=dict(expected_version=0,bundle_digest='bad',review_id='bad',evidence_digest='bad',confirmation='APPROVE AND ADOPT PLANNING BUNDLE')
+        with self.assertRaises(PermissionError):a.adopt(self.c,'p','developer',body,'t',v)
+        with self.assertRaises(ValueError):a.adopt(self.c,'p','reviewer',body,'t',v)
+        self.assertIsNone(a.latest(self.c,'p'))
+        self.assertIsNone(a.latest(self.c,'q'))
+        self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/adopt'),('p','approve'))
+
     def test_no_pm_no_wbs_and_separate_plan(self):
         self.assertEqual(w.view(self.c,'p')['sources'],{})
         with self.assertRaises(ValueError):w.current_source(self.c,'p','A')

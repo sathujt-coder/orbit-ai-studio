@@ -48,7 +48,10 @@ def enqueue(c,pid,actor,revision,lanes,body,*,priority=5,dependency_id=None,retr
     if retry_of:
         old=input_for(c,pid,retry_of)
         if old['snapshot']!=pr.canonical(snap):raise ValueError('Stale decomposition retry; submit a new task')
-    identifier=q.enqueue(c,pid,'decomposition',actor,revision,lanes,priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=routing)
+    # The decomposition job is bound to the proposal run that generated the WBS.
+    source_id=snap['source']['queue_id']
+    if dependency_id is not None and dependency_id!=source_id:raise ValueError('Decomposition dependency must be the source proposal run')
+    identifier=q.enqueue(c,pid,'decomposition',actor,revision,lanes,priority=priority,dependency_id=source_id,retry_of=retry_of,routing=routing)
     c.execute('INSERT INTO decomposition_inputs VALUES(?,?,?,?,?)',(identifier,pid,snap['wbs_version'],snap['wbs_digest'],pr.canonical(snap)))
     return identifier
 

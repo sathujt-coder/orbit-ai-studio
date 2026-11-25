@@ -27,6 +27,7 @@ function buttons(){
  $('schedule-save').disabled=busy||!d?.can_write||!w?.sprint_schedule?.draft||scheduleBinding!==scheduleKey(w);
  $('schedule-document').readOnly=$('schedule-save').disabled;
  $('review-run').disabled=busy||!d?.can_write||!w?.cross_review?.input_ready||['queued','running','paused','waiting_approval'].includes(w?.cross_review?.latest?.status);
+ $('adopt-bundle').disabled=busy||!d?.can_approve||!w?.adoption?.can_adopt;
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
@@ -125,7 +126,24 @@ async function runReview(){
  }catch(err){$('status').textContent=err.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
+function renderAdoption(w){
+ const a=w?.adoption;
+ $('adoption-state').textContent=a?.status==='adopted'?'ADOPTED · v'+a.current.version:a?.stale?'STALE · Snapshot lịch sử':a?.can_adopt?'READY FOR HUMAN APPROVAL':'BLOCKED · Chưa đủ điều kiện';
+ $('adoption-evidence').textContent=a?JSON.stringify(a,null,2):'';
+}
+async function adoptBundle(){
+ if(busy||$('adopt-bundle').disabled||!current)return;
+ if(!confirm('Phê duyệt và tiếp nhận đúng bundle hiện tại? Không tự thực thi.'))return;
+ const d=current,a=d.wbs.adoption;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  d.wbs=await api(base(d.project_id)+'/wbs/adopt',{...a.binding,expected_version:a.current?.version||0,confirmation:'APPROVE AND ADOPT PLANNING BUNDLE'});
+  renderWbs(d.wbs,true);
+ }catch(err){$('status').textContent=err.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 function renderWbs(w,reset=false){
+ renderAdoption(w);
  renderReview(w);
  renderSchedule(w,reset);
  renderEstimates(w,reset);
@@ -217,6 +235,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   $('estimate-save').addEventListener('click',saveEstimates);
   $('schedule-save').addEventListener('click',saveSchedule);
   $('review-run').addEventListener('click',runReview);
+  $('adopt-bundle').addEventListener('click',adoptBundle);
  $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();

@@ -100,7 +100,9 @@ def enqueue(c,pid,actor,revision,lanes,body,w,*,priority=5,dependency_id=None,re
     snap=snapshot(c,pid,w);digest=pp.digest(snap)
     if body['bundle_digest']!=digest:raise ValueError('Current planning bundle digest required')
     if retry_of and input_for(c,pid,retry_of)['digest']!=digest:raise ValueError('Stale review retry')
-    identifier=q.enqueue(c,pid,'planning_review',actor,revision,lanes,priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=routing)
+    # Bind the durable review job to the successful original PM proposal run.
+    if dependency_id is not None and dependency_id!=snap['proposal_run']:raise ValueError('Review dependency must be the source proposal run')
+    identifier=q.enqueue(c,pid,'planning_review',actor,revision,lanes,priority=priority,dependency_id=snap['proposal_run'],retry_of=retry_of,routing=routing)
     c.execute('INSERT INTO planning_review_inputs VALUES(?,?,?,?)',(identifier,pid,pr.canonical(snap),digest))
     return identifier
 

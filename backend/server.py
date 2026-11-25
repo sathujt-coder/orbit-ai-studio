@@ -892,6 +892,12 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/adopt',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    work_breakdown.planning_adoption.adopt(c,pid,actor,body,now(),work_breakdown.view(c,pid))
+                    data=work_breakdown.view(c,pid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/review',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_cross_review(pid,actor,body));return
