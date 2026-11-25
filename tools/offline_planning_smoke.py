@@ -33,6 +33,7 @@ def wbs_acceptance(server,pid,report):
                 [(x['lane'],x['purpose']) for x in calls]==[(lane,a['phase']) for b in e['history'] for a in b['attempts']] and all(
                 x['provider']=='ollama' and x['model']==state['model']['model'] and x['agent_id']=='wbs-'+lane and x['status']=='ok' and x['coverage']=='complete' and x['total_tokens']>0 for x in calls))
             gates['wbs_'+lane+'_audit']=bool(e and e['repair_audit_valid'] and e['wbs_version']==base['version'] and e['wbs_digest']==base['digest'] and e['source']==source)
+            gates['wbs_'+lane+'_convergence']=bool(e and e['repair_audit_valid'] and all(a['valid'] and a.get('convergence',{}).get('passed') is True for b in e['history'] for a in b['attempts'] if a['phase']=='wbs_decompose_repair'))
             gates['wbs_'+lane+'_details']=False
             if gates['wbs_'+lane+'_ai_ready']:
                 # Explicit fixture actor save of the exact AI candidate tests the

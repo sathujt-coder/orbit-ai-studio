@@ -84,6 +84,32 @@ def validate(document,source):
     if len(pr.canonical(out).encode())>MAX_BYTES:raise ValueError('WBS exceeds 24 KB')
     return out
 
+def match_rules(deliverable,package,policy):
+    relevant={ac['text'] for ac in deliverable['acceptance'] if ac['id'] in package['criteria']}|{deliverable['outcome']}
+    return [rule for rule in policy['rules'] if rule['requirement']==deliverable['requirement']
+        and rule['kind']==package['kind'] and rule['evidence'] in relevant]
+
+def missing_groups(text,rule):
+    return [group for group in rule['matches'] if not any(rs.contains(text,phrase) for phrase in group)]
+
+def technical_codes(field,value):
+    # Conservative, language-neutral minimum plus a narrow English generic-verb
+    # heuristic. This is not proof of technical feasibility or actual execution.
+    words=rs.norm(value).split()
+    if field=='action':
+        result=[]
+        if len(words)<5:result.append('action_lacks_specificity')
+        generic={'implement','develop','create','build','add','make','ensure'}
+        anchors={'handler','endpoint','function','query','table','database','input','form','button','route',
+            'middleware','guard','validation','check','checks','filter','using','by','via','with','component',
+            'schema','service','request','response','test','assertion','policy','constraint','index','repository',
+            'transaction','storage','interface','model','module','script','configuration','document','record'}
+        if words and words[0] in generic and not anchors.intersection(words[1:]):
+            result.append('action_missing_technical_anchor')
+        return result
+    if field=='evidence' and len(words)<4:return ['evidence_lacks_specificity']
+    return []
+
 def assess(document,source):
     doc=validate(document,source);issues=[];trace={};seen={}
     for d in doc['deliverables']:
@@ -103,6 +129,7 @@ def assess(document,source):
                 if len(normalized.split())<3 or normalized in ('to be determined','not yet decided','not applicable','test the requirement','implement the requirement','verify the requirement','write some code','test the feature'):
                     issue('generic_detail')
                 for code in ps.content_codes(value):issue(code)
+                for code in technical_codes(field,value):issue(code)
                 if rs.review_text(value):issue('review_contamination')
                 if any(rs.contains(value,x) for x in forbidden):issue('forbidden_scope')
                 if normalized in seen:issue('duplicate_detail')
@@ -110,11 +137,11 @@ def assess(document,source):
             # All additional human-confirmed literal rules still apply. For
             # verification, require the rule for this criterion (or description).
             text=' '.join(p[k] or '' for k in DETAIL_FIELDS)
-            relevant={ac['text'] for ac in d['acceptance'] if ac['id'] in p['criteria']}|{d['outcome']}
-            for rule in source['policy']['rules']:
-                if rule['requirement']==d['requirement'] and rule['kind']==p['kind'] and rule['evidence'] in relevant:
-                    if any(not any(rs.contains(text,phrase) for phrase in group) for group in rule['matches']):
-                        issues.append(dict(package=p['id'],field='details',code='missing_scope_evidence'))
+            for rule in match_rules(d,p,source['policy']):
+                missing=missing_groups(text,rule)
+                if missing:
+                    issues.append(dict(package=p['id'],field='details',code='missing_scope_evidence',
+                        requirement=d['requirement'],criterion=rule['evidence'],missing_groups=missing))
             if p['kind']=='verify' and p['action'] is not None:
                 # Verification is an explicit check, not an implementation instruction.
                 action=rs.norm(p['action'])

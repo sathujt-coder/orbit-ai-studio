@@ -26,7 +26,7 @@ def output(doc,ids):
 def synthetic(doc,record,broken=False):
     def call(phase,system,user,schema):
         ids=schema['required'];record.append((phase,ids,json.loads(user)))
-        patch=output(doc,ids)
+        patch={pid:{k:v for k,v in values.items() if k in schema['properties'][pid]['required']} for pid,values in output(doc,ids).items()}
         if broken and len(record)==1:patch[ids[0]]['action']='Create project management interface'
         return json.dumps(patch)
     return call
@@ -56,7 +56,7 @@ class DecompositionTests(unittest.TestCase):
     def test_noop_scope_failure_and_no_third_call(self):
         record=[]
         def call(phase,system,user,schema):
-            record.append(phase);patch=output(self.doc,schema['required'])
+            record.append(phase);patch={pid:{k:v for k,v in values.items() if k in schema['properties'][pid]['required']} for pid,values in output(self.doc,schema['required']).items()}
             for p in patch.values():p['action']='Create project management interface'
             return json.dumps(patch)
         e=d.run(call,self.src,self.doc)
@@ -135,3 +135,94 @@ class QueueMigrationTests(unittest.TestCase):
         self.assertEqual(q.get(c,'p',i)['kind'],'planning');self.assertEqual(c.execute('SELECT id FROM old_child').fetchone()[0],i)
         self.assertEqual(list(c.execute('PRAGMA foreign_key_check')),[])
         q.enqueue(c,'p','decomposition','owner',0,lanes,now=101);c.close()
+
+
+# Original model text from artifact 14990478494, not a provider substitute in CI.
+ARTIFACT_PATCHES={
+    'A':[
+        {'D-1.1':dict(action='Implement URL saving',evidence='Database records',output='Persisted URL in own project'),
+         'D-1.2':dict(action='Verify URL persistence',evidence='Database records',output='Persisted URL appears in list'),
+         'D-2.1':dict(action='Implement URL listing',evidence='Database records',output='Saved URL appears in list')},
+        {'D-1.1':dict(action='Implement URL persistence',evidence='URL stored in project database',output='Persisted URL in own project'),
+         'D-1.2':dict(action='Verify URL persistence',evidence='URL listed in project view',output='URL appears in project list'),
+         'D-2.1':dict(action='Implement URL listing',evidence='URLs displayed in project view',output='List saved URLs in project')}],
+    'B':[
+        {'D-1.1':dict(action='implement',evidence='URL persistence record',output='URL saved in project'),
+         'D-1.2':dict(action='verify',evidence='URL persistence verification report',output='URL persistence confirmed'),
+         'D-2.1':dict(action='implement',evidence='List of saved links',output='Saved links displayed')},
+        {'D-1.1':dict(action='Implement URL persistence in own project',evidence='Saved URL appears in project list',output='Persisted URL saved in project'),
+         'D-1.2':dict(action='Verify URL persistence in own project',evidence='URL is persisted in project',output='URL persists in project'),
+         'D-2.1':dict(action='Implement saved URL list display',evidence='Saved URLs appear in project list',output='Saved URLs displayed in project list')}]
+}
+
+class Artifact14990478494Tests(unittest.TestCase):
+    def setUp(self):
+        import planning_scope as ps
+        from test_planning_repair import fixture_source
+        src=fixture_source();self.src=source()
+        self.src['policy']=ps.contract(self.src['document'],src['scope_contract'])
+        self.ids=['D-1.1','D-1.2','D-2.1']
+    def base(self,lane):
+        self.src['lane']=lane
+        reqs=self.src['document']['requirements']
+        raw=dict(objective='Implement URL saving and listing features in existing projects' if lane=='A' else 'Implement URL storage and project isolation',
+            work=[dict(requirement=r['id'],implement=r['description'],verify=r['acceptance'][0]) for r in reqs])
+        self.src['proposal']=pd.parse(json.dumps(raw),dict(document=self.src['document']))
+        return w.skeleton(self.src)
+    def test_exact_historical_missing_groups_still_block(self):
+        for lane in 'AB':
+            doc=self.base(lane)
+            before=d.apply(doc,ARTIFACT_PATCHES[lane][0],self.src)
+            after=d.apply(before,ARTIFACT_PATCHES[lane][1],self.src)
+            issues=d.local_issues(after,self.src,self.ids)
+            missing=[x for x in issues if x['code']=='missing_scope_evidence']
+            self.assertEqual([x['package'] for x in missing],['D-1.1','D-1.2'])
+            self.assertEqual(missing[0]['missing_groups'],[['save','store','persist','saving','storing','persisting','insert']])
+            self.assertEqual(missing[1]['missing_groups'],[['save','saved','persist','saving','storage']])
+            self.assertFalse(w.assess(after,self.src)['detail_ready'])
+            self.assertTrue(any(x['code']=='action_lacks_specificity' or x['code']=='action_missing_technical_anchor' for x in d.local_issues(before,self.src,self.ids)))
+    def test_exact_terms_and_field_level_repair_of_both_artifact_lanes(self):
+        for lane in 'AB':
+            doc=self.base(lane);record=[]
+            initial=ARTIFACT_PATCHES[lane][0]
+            before=d.apply(doc,initial,self.src)
+            issues=d.local_issues(before,self.src,self.ids)
+            fields=d.repair_fields(self.ids,issues)
+            payload=d.context(self.src,before,list(fields),issues,fields)
+            self.assertEqual(fields['D-1.1'],['action','evidence'])
+            self.assertNotIn('output',fields['D-1.1'])
+            self.assertEqual(payload['targets'][0]['retained']['output'],initial['D-1.1']['output'])
+            self.assertIn('save',payload['targets'][0]['required_exact_terms'])
+            def call(phase,system,user,schema):
+                record.append((phase,schema))
+                if len(record)==1:return json.dumps(initial)
+                full=output(doc,schema['required'])
+                # Repair test outputs are synthetic and only use schema-authorized fields.
+                return json.dumps({pid:{k:values[k] for k in schema['properties'][pid]['required']} for pid,values in full.items()})
+            e=d.run(call,self.src,doc)
+            self.assertTrue(e['ready'],e['analysis']['issues'])
+            self.assertEqual(e['call_count'],3)
+            self.assertEqual(e['history'][0]['attempts'][1]['request']['fields'],fields)
+            self.assertTrue(e['history'][0]['attempts'][1]['convergence']['passed'])
+            for pid in fields:
+                for k in w.DETAIL_FIELDS:
+                    if k not in fields[pid]:self.assertEqual(d.packages(e['candidate'])[pid][k],initial[pid][k])
+    def test_unflagged_field_and_forged_convergence_blocked(self):
+        doc=self.base('A')
+        before=d.apply(doc,ARTIFACT_PATCHES['A'][0],self.src)
+        issues=d.local_issues(before,self.src,self.ids);fields=d.repair_fields(self.ids,issues)
+        with self.assertRaises(ValueError):d.decode(json.dumps(ARTIFACT_PATCHES['A'][1]),list(fields),fields)
+        complete=d.apply(doc,output(doc,self.ids),self.src)
+        audit=d.convergence(before,complete,self.src,self.ids,fields)
+        self.assertFalse(audit['unchanged_unflagged']);self.assertFalse(audit['passed'])
+        src=source();blank=w.skeleton(src)
+        e=d.run(synthetic(blank,[],True),src,blank)
+        e['history'][0]['attempts'][1]['convergence']['after_issues']=42
+        with self.assertRaises(ValueError):d.gate(e,src,blank)
+    def test_technical_specificity_and_exact_word_matching(self):
+        self.assertIn('action_missing_technical_anchor',w.technical_codes('action','Implement URL persistence in own project'))
+        self.assertIn('action_lacks_specificity',w.technical_codes('action','Verify URL persistence'))
+        self.assertIn('evidence_lacks_specificity',w.technical_codes('evidence','Database records'))
+        self.assertEqual(w.technical_codes('action','Add a save handler using authenticated project identifiers'),[])
+        self.assertEqual(w.technical_codes('evidence','Stored URL and project identifier assertion'),[])
+        self.assertEqual(w.missing_groups('URL persisted and stored',dict(matches=[['persist','store']])),[['persist','store']])
