@@ -125,6 +125,20 @@ class WbsTests(unittest.TestCase):
         self.assertIsNone(w.view(self.c,'q')['sprint_schedule']['current'])
         self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/schedule'),('p','write'))
 
+    def test_cross_review_strict_dual_gate(self):
+        review=w.planning_review
+        good=dict(verdict='APPROVE',score=80,feedback='Concrete review evidence',checks={k:True for k in review.DIMENSIONS})
+        self.assertTrue(review.gate({'A':good,'B':good}))
+        for change in [dict(score=79),dict(score=True),dict(verdict='REQUEST_CHANGES'),dict(checks={**good['checks'],'schedule':False}),dict(feedback='')]:
+            self.assertFalse(review.gate({'A':good,'B':{**good,**change}}))
+        self.assertFalse(review.gate({'A':good}))
+        with self.assertRaises(ValueError):review.parse('{"score":80,"score":100}')
+        self.run_pm();v=self.seed()
+        self.assertFalse(v['cross_review']['input_ready'])
+        self.assertFalse(v['cross_review']['quality_ready'])
+        self.assertFalse(v['cross_review']['execution_authorized'])
+        self.assertEqual(auth_policy.scope(self.c,'POST','/api/projects/p/planning/wbs/review'),('p','write'))
+
     def test_no_pm_no_wbs_and_separate_plan(self):
         self.assertEqual(w.view(self.c,'p')['sources'],{})
         with self.assertRaises(ValueError):w.current_source(self.c,'p','A')

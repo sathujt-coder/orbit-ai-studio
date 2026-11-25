@@ -10,6 +10,7 @@ import planning_constraints as pc
 import dependency_graph
 import resource_estimates
 import sprint_schedule
+import planning_review
 
 POLICY='orbit.wbs.v1'
 MAX_BYTES=24000
@@ -105,6 +106,7 @@ def ensure_schema(c):
 
     resource_estimates.ensure_schema(c)
     sprint_schedule.ensure_schema(c)
+    planning_review.ensure_schema(c)
 
 def latest(c,pid):
     return c.execute('SELECT * FROM work_breakdowns WHERE project_id=? ORDER BY version DESC LIMIT 1',(pid,)).fetchone()
@@ -288,6 +290,7 @@ def view(c,pid,discovery=None):
         history=[dict(x) for x in c.execute("""SELECT version,requirements_version,requirements_digest,queue_id,lane,proposal_digest,digest,author,created_at
             FROM work_breakdowns WHERE project_id=? ORDER BY version DESC LIMIT 50""",(pid,))])
     result['sprint_schedule']=sprint_schedule.view(c,pid,result)
+    result['cross_review']=planning_review.view(c,pid,result,run)
     return result
 
 def save(c,pid,actor,body,stamp,*,seed=False):

@@ -14,6 +14,7 @@ from test_requirements_discovery import model_document
 import model_provider as mp
 import requirements_discovery as discovery
 import planning_discovery as planning
+import planning_review as review
 
 def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
     data=json.loads(user)
@@ -24,6 +25,9 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
         result=dict(workflows=['Save and list'],business_rules=['Project access'],edge_cases=['Denied read'],unknowns=[])
     elif schema in (discovery.REVIEW_SCHEMA,discovery.BRIEF_REVIEW_SCHEMA):
         result=dict(blocking=['Missing scope'] if 'BLOCK_FIXTURE' in idea and 'synthesized document' in system else [],feedback=['Synthetic browser fixture review'])
+    elif schema is review.SCHEMA:
+        assert data['reviewer']=='PM-'+lane.lane and data['author']!=data['reviewer'] and 'proposals' not in data
+        result=dict(verdict='APPROVE',score=90,feedback='Synthetic fixture reviewed five dimensions',checks={k:True for k in review.DIMENSIONS})
     elif schema is planning.SCHEMA:
         result=dict(objective='Fixture plan',work=[dict(requirement=r['id'],implement='Implement '+r['description'],verify='Verify '+r['acceptance'][0]) for r in data['document']['requirements']])
     elif isinstance(schema,dict) and data.get('targets') and data.get('protocol')=='orbit.wbs-isolated-context.v1':

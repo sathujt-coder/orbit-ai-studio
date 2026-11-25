@@ -483,6 +483,28 @@ def run_decomposition(pid,identifier,lanes):
         result=decomposition_jobs.persist(c,pid,identifier,evidence,model,now())
         agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
 
+def enqueue_cross_review(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=work_breakdown.planning_review.enqueue(c,pid,actor,revision,lanes,body,work_breakdown.view(c,pid),
+            priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_cross_review(pid,identifier,lanes):
+    review=work_breakdown.planning_review
+    review.local_pair(lanes)
+    with LOCK,db() as c:snap=review.checked(c,pid,identifier,work_breakdown.view(c,pid))
+    def call(lane,system,user,schema):
+        with LOCK,db() as c:review.checked(c,pid,identifier,work_breakdown.view(c,pid))
+        return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,agent_id='pm-'+lane,
+            purpose='planning_cross_review',run_id=identifier,runtime_settings=True,max_tokens=review.MAX_OUTPUT,
+            schema=schema,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+    evidence=review.run(call,snap)
+    with LOCK,db() as c:
+        result=review.persist(c,pid,identifier,evidence,lanes,now(),work_breakdown.view(c,pid))
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
 def dispatch_one():
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
@@ -521,6 +543,9 @@ def dispatch_one():
                 if target['status']!='queued':
                     agent_queue.fail(c,row,'stage_not_eligible',int(time.time()),now());return True
                 stage=target['stage_id']
+        if row['kind']=='planning_review':
+            run_cross_review(pid,identifier,lanes)
+            return True
         if row['kind']=='decomposition':
             run_decomposition(pid,identifier,lanes)
             return True
@@ -581,6 +606,9 @@ def retry_queue(pid,identifier,actor,confirmation):
             if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
             spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
         if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
+        if old['kind']=='planning_review':
+            with db() as c:snapshot=work_breakdown.planning_review.input_for(c,pid,identifier)
+            return enqueue_cross_review(pid,actor,dict(bundle_digest=snapshot['digest'],confirmation='RUN PM CROSS REVIEW'),old['priority'],dep,identifier)
         if old['kind']=='decomposition':
             with db() as c:snapshot=decomposition_jobs.input_for(c,pid,identifier)
             return enqueue_decomposition(pid,actor,dict(wbs_version=snapshot['wbs_version'],
@@ -864,6 +892,9 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/review',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_cross_review(pid,actor,body));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/schedule',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:

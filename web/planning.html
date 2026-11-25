@@ -23,6 +23,7 @@
 <h2>Milestones &amp; Sprint Scheduling</h2><p>Lịch nháp: sprints gồm id, start/end YYYY-MM-DD, capacity (phút theo role); assignments gán package vào sprint; milestones gồm id, title, sprint, packages. Không tự phân bổ agent hoặc cam kết ngày giao.</p>
 <p id="schedule-state" role="status"></p><label>Schedule JSON<textarea id="schedule-document" rows="14" maxlength="50000" spellcheck="false"></textarea></label>
 <button id="schedule-save" type="button" class="btn outline">Lưu lịch nháp</button><details><summary>Capacity, dependency và milestone findings</summary><pre id="schedule-analysis"></pre></details>
+<h2>PM Cross-review &amp; Quality Gate</h2><p>PM-A/B review đề xuất đối diện và bộ kế hoạch chung đã lưu. Cả hai phải APPROVE, điểm ≥80 và đủ năm kiểm tra. Không tự tiếp nhận hay thực thi.</p><button id="review-run" type="button" class="btn outline">Chạy PM Cross-review (local)</button><p id="review-state" role="status"></p><details><summary>Review evidence</summary><pre id="review-evidence"></pre></details>
 <h2>Kế hoạch phẳng đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
 <h2>Dependency Graph &amp; Critical Path</h2>
 <p>Phân tích dựa trên phiên bản đã lưu, không phải lịch cam kết. Các lớp chỉ biểu thị thứ tự phụ thuộc; số phút giả định tài nguyên song song không giới hạn.</p>

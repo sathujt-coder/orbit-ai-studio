@@ -26,6 +26,7 @@ function buttons(){
  $('estimate-document').readOnly=$('estimate-save').disabled;
  $('schedule-save').disabled=busy||!d?.can_write||!w?.sprint_schedule?.draft||scheduleBinding!==scheduleKey(w);
  $('schedule-document').readOnly=$('schedule-save').disabled;
+ $('review-run').disabled=busy||!d?.can_write||!w?.cross_review?.input_ready||['queued','running','paused','waiting_approval'].includes(w?.cross_review?.latest?.status);
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
 }
@@ -108,7 +109,24 @@ async function saveSchedule(){
  }catch(err){$('status').textContent=err.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
+function renderReview(w){
+ const r=w?.cross_review,x=r?.latest;
+ $('review-state').textContent=x?.stale?'STALE · Review lại nguồn mới':!r?.input_ready?'BLOCKED · Cần WBS, estimates và schedule hợp lệ':r.quality_ready?'CROSS REVIEW PASS · Chưa tiếp nhận':x?x.status+' · '+x.reason:'Chưa review';
+ $('review-evidence').textContent=x?.evidence?JSON.stringify(x.evidence,null,2):'';
+}
+async function runReview(){
+ if(busy||$('review-run').disabled||!current)return;
+ if(!confirm('Chạy hai lượt review Ollama local?'))return;
+ const d=current;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{
+  await api(base(d.project_id)+'/wbs/review',{bundle_digest:d.wbs.cross_review.bundle_digest,confirmation:'RUN PM CROSS REVIEW'});
+  const fresh=await api(base(d.project_id));d.wbs=fresh.wbs;renderReview(d.wbs);
+ }catch(err){$('status').textContent=err.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
+}
 function renderWbs(w,reset=false){
+ renderReview(w);
  renderSchedule(w,reset);
  renderEstimates(w,reset);
  if(reset){wbsEditVersion=w?.current?.version??null;$('wbs-document').value=w?.current?JSON.stringify(w.current.document,null,2):''}
@@ -198,6 +216,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
   $('estimate-save').addEventListener('click',saveEstimates);
   $('schedule-save').addEventListener('click',saveSchedule);
+  $('review-run').addEventListener('click',runReview);
  $('graph-source').addEventListener('change',renderGraph);$('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   $('wbs-lane').addEventListener('change',buttons);$('wbs-seed').addEventListener('click',()=>mutateWbs(true));$('wbs-save').addEventListener('click',()=>mutateWbs(false));$('wbs-decompose').addEventListener('click',decompose);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();

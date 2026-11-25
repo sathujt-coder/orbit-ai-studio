@@ -122,6 +122,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   await owner.locator('#reload').click();
   await owner.waitForFunction(()=>document.querySelector('#schedule-state').textContent.includes('SCHEDULE CHECKS PASS'));
   assert.deepEqual(JSON.parse(await owner.locator('#schedule-document').inputValue()),wbs.sprint_schedule.current.document);
+  const rb={bundle_digest:wbs.cross_review.bundle_digest,confirmation:'RUN PM CROSS REVIEW'};
+  assert.equal(wbs.cross_review.input_ready,true);
+  assert.equal((await post(viewer,vc,pp+'/wbs/review',rb)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/wbs/review',rb)).status(),403);
+  assert.equal((await post(owner,csrf,pp+'/wbs/review',{...rb,bundle_digest:'bad'})).status(),400);
+  await owner.locator('#review-run').click();
+  await owner.waitForFunction(()=>document.querySelector('#review-state').textContent.includes('CROSS REVIEW PASS'),null,{timeout:30000});
+  const reviewed=(await get(owner,pp)).wbs.cross_review;
+  assert.equal(reviewed.quality_ready,true);assert.equal(reviewed.execution_authorized,false);
+  assert.deepEqual(Object.keys(reviewed.latest.evidence.reviews).sort(),['A','B']);
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);
@@ -157,6 +167,8 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(await owner.locator('#wbs-save').isDisabled(),true);
   assert.equal(await owner.locator('#estimate-save').isDisabled(),true);
   assert.equal(await owner.locator('#schedule-save').isDisabled(),true);
+  assert.equal(await owner.locator('#review-run').isDisabled(),true);
+  assert.equal((await get(owner,pp)).wbs.cross_review.quality_ready,false);
   assert.equal((await get(owner,pp)).wbs.sprint_schedule.analysis,null);
   assert.equal(await owner.locator('#seed').isDisabled(),true);
   assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
