@@ -12,6 +12,23 @@ POLICY='orbit.wbs.v1'
 MAX_BYTES=24000
 MAX_PACKAGES=64
 DETAIL_FIELDS=('action','output','evidence')
+MIN_DETAIL_WORDS={'action':5,'output':3,'evidence':4}
+EXAMPLE_POLICY='orbit.wbs-retired-example.v1'
+# Exact retired v4 demonstration phrases, never passed to an inference prompt.
+# Check any field, including a normalized whole phrase embedded in longer text.
+# These signatures are deliberately narrow, not a general semantic scope oracle.
+RETIRED_EXAMPLES=(
+    'Validate file size using the upload handler',
+    'Upload size validation function',
+    'Oversized file rejection test record',
+    'Test upload with an oversized file',
+    'Upload boundary integration test',
+    'Expected rejection without stored file',
+)
+
+def example_contaminated(value):
+    return value is not None and any(rs.contains(value,phrase) for phrase in RETIRED_EXAMPLES)
+
 
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS work_breakdowns(
@@ -98,7 +115,7 @@ def technical_codes(field,value):
     words=rs.norm(value).split()
     if field=='action':
         result=[]
-        if len(words)<5:result.append('action_lacks_specificity')
+        if len(words)<MIN_DETAIL_WORDS['action']:result.append('action_lacks_specificity')
         generic={'implement','develop','create','build','add','make','ensure'}
         anchors={'handler','endpoint','function','query','table','database','input','form','button','route',
             'middleware','guard','validation','check','checks','filter','using','by','via','with','component',
@@ -107,7 +124,7 @@ def technical_codes(field,value):
         if words and words[0] in generic and not anchors.intersection(words[1:]):
             result.append('action_missing_technical_anchor')
         return result
-    if field=='evidence' and len(words)<4:return ['evidence_lacks_specificity']
+    if field=='evidence' and len(words)<MIN_DETAIL_WORDS['evidence']:return ['evidence_lacks_specificity']
     if field=='output' and words:
         # A narrow additional check for action/assertion text in the artifact
         # slot. Do not require English artifact nouns for other languages.
@@ -129,6 +146,7 @@ def assess(document,source):
                 def issue(code):issues.append(dict(package=p['id'],field=field,code=code))
                 if value is None:issue('missing_detail');continue
                 normalized=rs.norm(value)
+                if example_contaminated(value):issue('example_contamination')
                 if normalized in exact or normalized==rs.norm(p['source_title']):
                     issue('requirement_or_proposal_restatement')
                 if len(normalized.split())<3 or normalized in ('to be determined','not yet decided','not applicable','test the requirement','implement the requirement','verify the requirement','write some code','test the feature'):

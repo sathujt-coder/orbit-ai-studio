@@ -32,7 +32,7 @@ def wbs_acceptance(server,pid,report):
             gates['wbs_'+lane+'_calls']=bool(e and 2<=len(calls)<=4 and len(calls)==e['call_count'] and e['ledger_valid'] and
                 [(x['lane'],x['purpose']) for x in calls]==[(lane,a['phase']) for b in e['history'] for a in b['attempts']] and all(
                 x['provider']=='ollama' and x['model']==state['model']['model'] and x['agent_id']=='wbs-'+lane and x['status']=='ok' and x['coverage']=='complete' and x['total_tokens']>0 for x in calls))
-            gates['wbs_'+lane+'_audit']=bool(e and e.get('wire')==d.WIRE and e['repair_audit_valid'] and e['wbs_version']==base['version'] and e['wbs_digest']==base['digest'] and e['source']==source)
+            gates['wbs_'+lane+'_audit']=bool(e and e.get('wire')==d.WIRE and e.get('example_policy')==w.EXAMPLE_POLICY and e['repair_audit_valid'] and e['wbs_version']==base['version'] and e['wbs_digest']==base['digest'] and e['source']==source)
             gates['wbs_'+lane+'_convergence']=bool(e and e['repair_audit_valid'] and all(a['valid'] and a.get('convergence',{}).get('passed') is True and a['convergence'].get('lost_scope_groups')==[] for b in e['history'] for a in b['attempts'] if a['phase']=='wbs_decompose_repair'))
             gates['wbs_'+lane+'_details']=False
             if gates['wbs_'+lane+'_ai_ready']:
@@ -40,7 +40,7 @@ def wbs_acceptance(server,pid,report):
                 # unchanged P6.2c save gate; not automatic adoption by the worker.
                 saved=w.save(c,pid,'fixture-author',dict(source,expected_version=base['version'],document=e['candidate']),server.now())
                 a=saved['analysis']
-                gates['wbs_'+lane+'_details']=saved['decomposition_ready'] and not a['semantic_reviewed'] and not a['issues'] and saved['current']['digest']==e['candidate_digest'] and all(len(t['implement'])==len(t['verify'])==1 for t in a['traceability'].values())
+                gates['wbs_'+lane+'_details']=saved['decomposition_ready'] and not a['semantic_reviewed'] and not a['issues'] and not any(w.example_contaminated(pkg[k]) for pkg in d.packages(saved['current']['document']).values() for k in w.DETAIL_FIELDS) and saved['current']['digest']==e['candidate_digest'] and all(len(t['implement'])==len(t['verify'])==1 for t in a['traceability'].values())
                 entry.update(current=saved['current'],analysis=a,explicit_fixture_save=True)
     with server.db() as c:
         gates['wbs_no_adoption']=pp.latest(c,pid) is None and not pp.view(c,pid)['execution_ready']

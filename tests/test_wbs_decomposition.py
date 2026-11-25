@@ -403,3 +403,124 @@ class FlatTechnicalProtocolTests(unittest.TestCase):
                        lambda x:x['history'][0]['attempts'][0]['patch'].update({'D-99.1.action':'forged'})):
             bad=copy.deepcopy(e);change(bad)
             with self.assertRaises(ValueError):d.gate(bad,src,doc)
+
+
+# Exact flat patches from artifact 15001222052 (SHA256
+# 0eae6d5f900f548b406e288d3718a759e7feb6730ca65b1c73510d4d3d47d7ea).
+# Historical output only; never supply these as real provider responses.
+ARTIFACT_15001222052={
+    'A':[
+        {"D-1.1.action":"Validate URL and save it to the user's project","D-1.1.evidence":"URL validation test record","D-1.1.output":"URL validation function","D-1.2.action":"Test saving URL in the user's project","D-1.2.evidence":"Expected URL saving without errors","D-1.2.output":"Save URL integration test","D-2.1.action":"Retrieve and display saved URLs in the user's project","D-2.1.evidence":"URL retrieval test record","D-2.1.output":"URL retrieval function"},
+        {"D-2.2.action":"Test list saved links in own project","D-2.2.evidence":"Expected list saved links without errors","D-2.2.output":"List saved links integration test","D-3.1.action":"Implement project isolation to prevent unauthorized access to other projects","D-3.1.evidence":"Project isolation review record","D-3.1.output":"Project isolation implementation record","D-3.2.action":"Test unauthorized cross-project read is denied","D-3.2.evidence":"Expected unauthorized cross-project read denial","D-3.2.output":"Unauthorized cross-project read integration test"},
+        {"D-3.1.action":"Implement project isolation guard"}],
+    'B':[
+        {"D-1.1.action":"Validate file size using the upload handler","D-1.1.evidence":"Oversized file rejection test record","D-1.1.output":"Upload size validation function","D-1.2.action":"Test upload with an oversized file","D-1.2.evidence":"Expected rejection without stored file","D-1.2.output":"Upload boundary integration test","D-2.1.action":"Fetch saved URLs from storage","D-2.1.evidence":"Saved URL retrieval test result","D-2.1.output":"Saved URL retrieval function"},
+        {"D-1.1.action":"Validate file size using the upload handler","D-1.2.action":"Test upload with an oversized file"}]}
+
+class ContaminationCompletenessTests(unittest.TestCase):
+    def artifact(self,lane):
+        # Prior artifact and this artifact have identical PM titles.
+        return FlatTechnicalProtocolTests().artifact(lane)
+    def first_b(self):
+        src,doc=self.artifact('B');ids=d.batches(doc)[0]
+        initial=ARTIFACT_15001222052['B'][0]
+        candidate=d.apply(doc,d.decode(json.dumps(initial),ids),src)
+        issues=d.local_issues(candidate,src,ids);fields=d.repair_fields(ids,issues)
+        return src,doc,ids,candidate,issues,fields
+    def test_example_free_prompt_and_all_six_field_diagnostics(self):
+        src,doc,ids,candidate,issues,fields=self.first_b()
+        self.assertEqual(fields,{'D-1.1':list(w.DETAIL_FIELDS),'D-1.2':list(w.DETAIL_FIELDS)})
+        flagged=[x for x in issues if x['code']=='example_contamination']
+        self.assertEqual({(x['package'],x['field']) for x in flagged},
+            {(pid,k) for pid in ('D-1.1','D-1.2') for k in w.DETAIL_FIELDS})
+        self.assertEqual(len(issues),8)
+        self.assertFalse(w.assess(candidate,src)['detail_ready'])
+        body,shape,meta=d.request(src,candidate,list(fields),issues,fields)
+        self.assertEqual(shape['required'],[pid+'.'+k for pid in fields for k in fields[pid]])
+        self.assertEqual(meta['example_policy'],w.EXAMPLE_POLICY)
+        for phrase in w.RETIRED_EXAMPLES:
+            self.assertNotIn(phrase.casefold(),(d.RULES+body+json.dumps(shape)).casefold())
+        for target in json.loads(body)['targets']:
+            self.assertEqual(target['retained'],{})
+            for k,entry in target['field_contracts'].items():
+                self.assertTrue(any('Discard the copied text' in x for x in entry['fix']))
+                self.assertEqual(entry['min_words'],w.MIN_DETAIL_WORDS[k.rsplit('.',1)[1]])
+                self.assertEqual(entry['max_chars'],159)
+    def test_normalized_embedded_example_and_narrow_nonmatch(self):
+        for phrase in w.RETIRED_EXAMPLES:
+            with self.subTest(phrase=phrase):
+                self.assertTrue(w.example_contaminated(phrase.upper()))
+                self.assertTrue(w.example_contaminated('Planned: '+phrase.replace(' ','-')+' for review'))
+        self.assertFalse(w.example_contaminated('Validate URL using the authenticated project handler'))
+        self.assertFalse(w.example_contaminated('Upload a URL import configuration'))
+        self.assertFalse(w.example_contaminated(None))
+    def test_old_action_only_repair_is_rejected_without_third_call(self):
+        src,doc,ids,candidate,issues,fields=self.first_b();calls=[]
+        def call(phase,system,user,schema):
+            calls.append(phase);return json.dumps(ARTIFACT_15001222052['B'][len(calls)-1])
+        e=d.run(call,src,doc)
+        self.assertFalse(e['ready']);self.assertEqual(len(calls),2)
+        repair=e['history'][0]['attempts'][1]
+        self.assertFalse(repair['valid'])
+        self.assertEqual(repair['diagnostic']['code'],'detail_target_mismatch')
+        self.assertEqual(set(repair['diagnostic']['missing']),{
+            'D-1.1.output','D-1.1.evidence','D-1.2.output','D-1.2.evidence'})
+        self.assertEqual(e['candidate'],candidate)
+    def test_all_six_field_echo_repair_still_fails_noop(self):
+        src,doc,ids,candidate,issues,fields=self.first_b();calls=[]
+        def call(phase,system,user,schema):
+            calls.append(phase)
+            return json.dumps({k:ARTIFACT_15001222052['B'][0][k] for k in schema['required']})
+        e=d.run(call,src,doc);self.assertFalse(e['ready']);self.assertEqual(len(calls),2)
+        repair=e['history'][0]['attempts'][1]
+        self.assertTrue(repair['convergence']['no_op'])
+        self.assertFalse(repair['convergence']['passed'])
+        self.assertEqual(repair['convergence']['after_issues'],8)
+    def test_a_short_repair_preserves_full_constraints_and_blocks(self):
+        src,doc=self.artifact('A');calls=[]
+        def call(phase,system,user,schema):
+            calls.append((phase,json.loads(user),schema))
+            return json.dumps(ARTIFACT_15001222052['A'][len(calls)-1])
+        e=d.run(call,src,doc)
+        self.assertFalse(e['ready']);self.assertEqual(len(calls),3)
+        self.assertEqual(e['history'][0]['attempts'][0]['issues_after'],[])
+        self.assertEqual(calls[2][2]['required'],['D-3.1.action'])
+        contract=calls[2][1]['targets'][0]['field_contracts']['D-3.1.action']
+        self.assertEqual(contract['min_words'],5);self.assertEqual(contract['target_words'],[8,14])
+        self.assertIn('Imperative technical change',contract['instruction'])
+        repair=e['history'][1]['attempts'][1]
+        self.assertEqual((repair['convergence']['before_issues'],repair['convergence']['after_issues']),(2,1))
+        self.assertEqual(repair['issues_after'],[dict(package='D-3.1',field='action',code='action_lacks_specificity')])
+    def test_successful_synthetic_repairs_preserve_every_unflagged_field(self):
+        for lane in 'AB':
+            with self.subTest(lane=lane):
+                src,doc=self.artifact(lane);calls=[]
+                def call(phase,system,user,schema):
+                    calls.append(phase)
+                    if lane=='A' and len(calls)<=2:return json.dumps(ARTIFACT_15001222052['A'][len(calls)-1])
+                    if lane=='B' and len(calls)==1:return json.dumps(ARTIFACT_15001222052['B'][0])
+                    return json.dumps(wire_output(doc,schema))
+                e=d.run(call,src,doc)
+                self.assertTrue(e['ready'],e['analysis']['issues'])
+                self.assertEqual(e['call_count'],3);self.assertEqual(e['max_calls'],4)
+                self.assertEqual(e['example_policy'],w.EXAMPLE_POLICY)
+                self.assertFalse(any(w.example_contaminated(v) for v in d.flatten({
+                    pid:{k:pkg[k] for k in w.DETAIL_FIELDS} for pid,pkg in d.packages(e['candidate']).items()}).values()))
+                repair=e['history'][1 if lane=='A' else 0]['attempts'][1]
+                self.assertTrue(repair['convergence']['passed'])
+                self.assertTrue(repair['convergence']['unchanged_unflagged'])
+                self.assertEqual(repair['convergence']['lost_scope_groups'],[])
+                initial=ARTIFACT_15001222052[lane][1 if lane=='A' else 0]
+                final=d.flatten({pid:{k:pkg[k] for k in w.DETAIL_FIELDS} for pid,pkg in d.packages(e['candidate']).items()})
+                for key,value in initial.items():
+                    if key not in repair['patch']:self.assertEqual(final[key],value)
+                self.assertTrue(d.gate(e,src,doc)['ready'])
+                for change in (lambda x:x.update(example_policy='legacy'),
+                    lambda x:x['history'][0]['attempts'][0]['request'].update(example_policy='forged')):
+                    bad=copy.deepcopy(e);change(bad)
+                    with self.assertRaises(ValueError):d.gate(bad,src,doc)
+    def test_incomplete_target_mapping_cannot_leak_contaminated_context(self):
+        src,doc,ids,candidate,issues,fields=self.first_b()
+        with self.assertRaises(ValueError):d.request(src,candidate,['D-1.1','D-1.2'],issues,
+            {'D-1.1':['action'],'D-1.2':['action']})
+        with self.assertRaises(ValueError):d.request(src,candidate,['D-2.1'])
