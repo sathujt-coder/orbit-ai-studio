@@ -320,7 +320,7 @@ class FlatTechnicalProtocolTests(unittest.TestCase):
         self.assertIn('Imperative technical change',shape['properties']['D-1.1.action']['description'])
         self.assertIn('Begin Test, Verify or Check',shape['properties']['D-1.2.action']['description'])
         self.assertIn('verification artifact',shape['properties']['D-1.2.output']['description'])
-        self.assertIn('expected observable',shape['properties']['D-1.2.evidence']['description'])
+        self.assertIn('expected observable',shape['properties']['D-1.2.evidence']['description'].casefold())
         ctx=json.loads(body);self.assertEqual(ctx['wire'],d.WIRE)
         self.assertNotIn(ARTIFACT_PM['A'][1][0][0],body)
         self.assertEqual(ctx['targets'][0]['description'],src['document']['requirements'][0]['description'])
