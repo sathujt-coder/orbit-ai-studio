@@ -167,6 +167,43 @@ def resource_pass(r):
         type(r.get('peak_bytes')) is int and 0<r['peak_bytes']<=LIMIT and
         r.get('events',{}).get('oom')==0 and r.get('events',{}).get('oom_kill')==0)
 
+def resource_diagnostics(r):
+    """Explain the existing strict resource gate, without changing it."""
+    reasons=[]
+    for key,expected in (('memory_limit',LIMIT),('swap_limit',LIMIT),('cgroup_limit_bytes',LIMIT),
+                         ('cpu_limit',CPU),('network','none'),('restart_count',0)):
+        if r.get(key)!=expected:reasons.append(key+'_mismatch')
+    if r.get('running') is not True:reasons.append('runtime_not_running')
+    if r.get('oom_killed') is not False:reasons.append('oom_killed_or_unknown')
+    peak=r.get('peak_bytes')
+    if type(peak) is not int or peak<=0:reasons.append('peak_missing_or_invalid')
+    elif peak>LIMIT:reasons.append('peak_over_limit')
+    events=r.get('events',{})
+    for key in ('oom','oom_kill'):
+        if events.get(key)!=0:
+            reasons.append(key+'_event' if type(events.get(key)) is int and events[key]>0 else key+'_unverified')
+    return dict(passed=resource_pass(r),reasons=reasons,peak_bytes=peak,
+        peak_over_limit_bytes=max(0,peak-LIMIT) if type(peak) is int else None)
+
+def trial_diagnostics(row,replay_pass):
+    """Keep resource, inference and reported quality failures independent.
+
+    Diagnostics are descriptive only; replay_pass comes from trial_qualifies.
+    Never upgrade a trial or treat missing worker metrics as a quality pass.
+    """
+    worker=row.get('worker',{});metrics=worker.get('metrics',{})
+    resource=resource_diagnostics(row.get('resources',{}))
+    gates=metrics.get('gates',{})
+    return dict(case=row['case'],repeat=row['repeat'],status=row['status'],
+        replay_pass=replay_pass,resource=resource,worker_status=worker.get('status'),
+        worker_exit=row.get('worker_exit'),worker_error_type=worker.get('error_type'),
+        infra_error_type=row.get('error_type'),quality_metrics_available=bool(gates),
+        reported_quality_pass=metrics.get('quality_pass'),
+        reported_failed_gates=sorted(k for k,v in gates.items() if v is not True),
+        reported_issues_by_code=metrics.get('issues_by_code'),
+        reported_repair_calls=metrics.get('repair_calls'),
+        reported_successful_repairs=metrics.get('successful_repairs'))
+
 def write(path,data):
     with path.open('x',encoding='utf-8') as out:json.dump(data,out,indent=2,ensure_ascii=False)
 
@@ -236,7 +273,9 @@ def summarize(model,trials,commit,images):
     versions={x.get('ollama_version') for x in identities if x.get('ollama_version')}
     metrics=[x.get('worker',{}).get('metrics',{}) for x in trials]
     calls=[c for x in trials for c in x.get('worker',{}).get('calls',[])]
-    qualified=sum(trial_qualifies(x,model,commit) for x in trials)
+    replays=[trial_qualifies(x,model,commit) for x in trials]
+    qualified=sum(replays)
+    diagnostics=[trial_diagnostics(x,ok) for x,ok in zip(trials,replays)]
     complete=(len(keys)==len(expected) and set(keys)==expected and all(
         x.get('model')==model and x.get('source_commit')==commit and x.get('fixture_digest')==fixture_id(x['case'])
         and x['status'] in ('PASS','QUALITY_BLOCK','RESOURCE_BLOCK','INFERENCE_ERROR','RESOURCE_UNVERIFIED','INFRA_ERROR') for x in trials))
@@ -258,7 +297,9 @@ def summarize(model,trials,commit,images):
         total_tokens=sum(x['total_tokens'] for x in metrics) if measured else None,
         total_wall_ms=sum(x.get('wall_ms',0) for x in trials) if complete else None,
         latency_p50_ms=percentile([c['elapsed_ms'] for c in calls],.5),latency_p95_ms=percentile([c['elapsed_ms'] for c in calls],.95),
-        peak_bytes=max(peaks) if peaks else None,trials=trials,semantic_reviewed=False,production_adopted=False)
+        peak_bytes=max(peaks) if peaks else None,trials=trials,diagnostics=diagnostics,
+        diagnostic_resource_reasons=dict(collections.Counter(reason for x in diagnostics for reason in x['resource']['reasons'])),
+        semantic_reviewed=False,production_adopted=False)
 
 def run_model(model,commit,folder,ollama,python):
     folder.mkdir(parents=True,exist_ok=False)
