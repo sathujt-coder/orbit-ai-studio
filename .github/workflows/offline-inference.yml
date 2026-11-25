@@ -5,6 +5,10 @@ on:
       - backend/model_provider.py
       - backend/product_requirements.py
       - backend/project_planning.py
+      - backend/planning_discovery.py
+      - backend/planning_jobs.py
+      - tools/offline_planning_smoke.py
+      - tests/test_planning_discovery.py
       - backend/requirements_jobs.py
       - backend/requirements_discovery.py
       - backend/requirements_scope.py
@@ -40,7 +44,7 @@ permissions:
 jobs:
   local-models:
     runs-on: ubuntu-24.04
-    timeout-minutes: 85
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,6 +110,9 @@ jobs:
       - name: P6.1 — actual Research, BA, PO collaboration and approval storage
         run: |
           timeout 30m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" -e ORBIT_RESOURCE_MODE=enforce -e ORBIT_RESOURCE_MIN_FREE_MIB=64 -e ORBIT_RESOURCE_MAX_MEMORY_PERCENT=99 python:3.12-slim python /repo/tools/offline_requirements_smoke.py --report /report/requirements.json --confirm 'RUN LOCAL REQUIREMENTS'
+      - name: P6.2b — actual independent PM proposals
+        run: |
+          timeout 15m docker run --rm --user "$(id -u):$(id -g)" --network container:orbit-airgap --mount "type=bind,src=$PWD,dst=/repo,readonly" --mount "type=bind,src=$RUNNER_TEMP/offline-report,dst=/report" -e PYTHONDONTWRITEBYTECODE=1 -e STRESS_SOURCE_COMMIT="$GITHUB_SHA" -e ORBIT_RESOURCE_MODE=enforce -e ORBIT_RESOURCE_MIN_FREE_MIB=64 -e ORBIT_RESOURCE_MAX_MEMORY_PERCENT=99 python:3.12-slim python /repo/tools/offline_planning_smoke.py --report /report/planning.json --confirm 'RUN LOCAL PLANNING'
       - name: Verify actual Ollama container resource bounds
         if: always()
         run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources.json"

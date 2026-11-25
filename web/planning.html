@@ -2,12 +2,12 @@
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Project Planning · ORBIT</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/auth.css"><link rel="stylesheet" href="/usage.css"></head>
 <body><main class="auth-shell"><section class="auth-panel usage-panel">
-<h1>Project Planning</h1><p>WBS và dependency graph từ PRD đã phê duyệt. Bản nháp khởi tạo bằng quy tắc, chưa sử dụng AI hoặc tự chạy task.</p>
+<h1>Project Planning</h1><p>WBS và dependency graph từ PRD đã phê duyệt. Bản nháp quy tắc hoặc hai đề xuất AI độc lập; không tự chạy task.</p>
 <label>Dự án <select id="project"></select></label> <button type="button" id="reload" class="btn outline">Tải lại</button>
 <p id="status" role="status" aria-live="polite">Đang tải…</p>
 <section id="panel" hidden>
 <p id="input-state"></p><details><summary>PRD nguồn và acceptance criteria</summary><pre id="source"></pre></details>
-<p id="plan-state"></p>
+<p id="plan-state"></p><button id="discover" type="button" class="btn outline">Chạy PM-A/B</button><p id="discovery-status" role="status"></p><details><summary>Hai đề xuất AI (chưa review ngữ nghĩa, chưa tiếp nhận)</summary><pre id="discovery-evidence"></pre></details>
 <div><button id="seed" type="button" class="btn primary">Tạo WBS nháp</button> <button id="save" type="button" class="btn outline">Lưu phiên bản mới</button> <button id="approve" type="button" class="btn outline">Phê duyệt kế hoạch</button></div>
 <p>Nhập effort_minutes bằng số phút ước tính; null nghĩa là chưa ước tính. Không coi tổng effort hay thời gian phụ thuộc là lịch thực thi cam kết.</p>
 <label>Plan JSON<textarea id="document" rows="20" maxlength="50000" spellcheck="false"></textarea></label>

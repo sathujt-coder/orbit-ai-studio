@@ -38,7 +38,7 @@ def scope(c,method,path,query='',body=None):
         if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/planning(?:/(seed|approve))?',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/planning(?:/(seed|approve|discover))?',path)
         if m:return (m[1],'approve' if m[2]=='approve' else 'write')
         m=re.fullmatch(r'/api/projects/('+ID+r')/requirements(?:/(approve|discover|adopt))?',path)
         if m:return (m[1],'approve' if m[2]=='approve' else 'write')

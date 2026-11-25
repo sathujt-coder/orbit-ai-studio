@@ -35,6 +35,14 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   await owner.goto(ORIGIN+'/planning.html');await owner.locator('#panel').waitFor({state:'visible'});
   await owner.locator('#project').selectOption(pid);
   await owner.waitForFunction(()=>!document.querySelector('#seed').disabled);
+  const discovery={requirements_version:req.version,requirements_digest:req.digest,confirmation:'RUN AI PLANNING'};
+  assert.equal((await post(viewer,vc,pp+'/discover',discovery)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),pp+'/discover',discovery)).status(),403);
+  await owner.locator('#discover').click();
+  await owner.waitForFunction(()=>document.querySelector('#discovery-status').textContent.includes('succeeded'),null,{timeout:30000});
+  const proposed=await get(owner,pp);assert.equal(proposed.discovery.ready,true);
+  assert.deepEqual(Object.keys(proposed.discovery.evidence.proposals).sort(),['A','B']);
+  assert.equal(proposed.current,null);assert.equal(proposed.execution_ready,false);
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);

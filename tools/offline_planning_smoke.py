@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Real local PM A/B acceptance; no plan adoption or execution."""
+import argparse,json,os,sys,tempfile
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
+
+def require(ok,message):
+    if not ok:raise RuntimeError(message)
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--report',type=Path,required=True);p.add_argument('--confirm',required=True)
+    a=p.parse_args()
+    if a.confirm!='RUN LOCAL PLANNING' or a.report.exists():p.error('Explicit confirmation and new report required')
+    report=dict(schema='orbit.offline-planning.v1',gate='BLOCK',source_commit=os.getenv('STRESS_SOURCE_COMMIT','unknown'))
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.environ.update(AI_COMPANY_DB=str(Path(d)/'planning.sqlite'),AI_PROVIDER='ollama',
+                AI_PROVIDER_A='ollama',AI_PROVIDER_B='ollama',AI_MODEL_A='qwen2.5-coder:3b',AI_MODEL_B='qwen2.5:3b',
+                AI_BASE_URL='http://127.0.0.1:11434/v1',AI_BASE_URL_A='http://127.0.0.1:11434/v1',AI_BASE_URL_B='http://127.0.0.1:11434/v1',
+                AI_API_KEY='',AI_API_KEY_A='',AI_API_KEY_B='',AI_TIMEOUT='300',ORBIT_BUDGET_MODE='enforce',
+                ORBIT_MONTHLY_GLOBAL_USD='0',ORBIT_MAX_RUN_CALLS='4')
+            import server,auth_store,product_requirements as pr,project_planning as pp,planning_jobs as pj,model_provider as mp,usage_store,cost_store
+            server.init_db()
+            doc=dict(problem='Readers need to save and retrieve links securely',goals=['Save and list links'],users=['Readers'],
+                scope=['Web link storage and listing in existing projects'],out_of_scope=['Mobile','Sharing','Registration','Project management'],
+                assumptions=['Authenticated project membership is provided'],open_questions=[],
+                requirements=[
+                    dict(id='REQ-1',kind='functional',description='Save URL in own project',priority='must',acceptance=['A saved URL is persisted']),
+                    dict(id='REQ-2',kind='functional',description='List saved links in own project',priority='must',acceptance=['Saved URL appears in list']),
+                    dict(id='REQ-3',kind='nonfunctional',description='Enforce project isolation',priority='must',acceptance=['Unauthorized cross-project read is denied'])],
+                stories=[dict(id='US-1',actor='Reader',goal='Save and retrieve own links securely',benefit='Find links later',requirements=['REQ-1','REQ-2','REQ-3'])])
+            with server.db() as c:
+                pid=server.create_project('Planning fixture',doc['problem'],'Web app',c)
+                auth_store.create_user(c,'fixture-author','local-fixture-password');auth_store.grant(c,'fixture-author',pid,'owner')
+                row=pr.save(c,pid,'fixture-author',dict(expected_version=0,document=doc),server.now())['current']
+                row=pr.approve(c,pid,'fixture-author',dict(version=row['version'],digest=row['digest'],confirmation='APPROVE PRODUCT REQUIREMENTS'),server.now())['current']
+            lanes=mp.require_distinct_real(server.provider_snapshot()[1])
+            require(all(v.provider=='ollama' and v.base_url=='http://127.0.0.1:11434/v1' for v in lanes.values()),'Nonlocal provider forbidden')
+            run=server.enqueue_planning(pid,'fixture-author',dict(requirements_version=row['version'],requirements_digest=row['digest'],confirmation='RUN AI PLANNING'))['queue_id']
+            require(server.dispatch_one(),'Queue did not dispatch')
+            with server.db() as c:
+                state=pj.latest(c,pid);report['discovery']=state
+                calls=[dict(r) for r in c.execute('SELECT agent_id,lane,model,provider,purpose,status,coverage,total_tokens FROM ai_usage WHERE run_id=? ORDER BY rowid',(run,))]
+                report['calls']=calls
+                usage=usage_store.summary(c,pid,1)['totals'];cost=cost_store.summary(c,pid,1)['totals']
+                report.update(token_usage=usage,cost=cost)
+                guard=server.BUDGET_GUARD.view(c,all_projects=True)
+                integrity=c.execute('PRAGMA integrity_check').fetchone()[0]=='ok' and not list(c.execute('PRAGMA foreign_key_check'))
+                untouched=pp.latest(c,pid) is None and not pp.view(c,pid)['execution_ready']
+                snapshot=pj.input_for(c,pid,run)
+            require(state['ready'] and state['status']=='succeeded','Planning queue did not pass: '+state['reason'])
+            e=state['evidence'];gates={}
+            gates['source_binding']=e['source_digest']==row['digest'] and e['source_version']==row['version'] and json.loads(snapshot['snapshot'])['document']==doc
+            # Canonical PRD validator may preserve list order; all references are checked again.
+            gates['two_proposals']=set(e['proposals'])=={'A','B'} and e['structurally_ready'] and not e['semantic_reviewed']
+            gates['coverage_and_graph']=all(len(pp.analyze(v,doc)['traceability'])==3 and len(v['tasks'])==6 for v in e['proposals'].values())
+            gates['no_estimates']=all(t['effort_minutes'] is None for v in e['proposals'].values() for t in v['tasks'])
+            # An independent fixture check is deliberately stronger than ID coverage alone.
+            import re
+            patterns={'REQ-1':r'\b(save|store|persist|saving|storing|persisting|insert|create|saved|storage)\b',
+                'REQ-2':r'\b(list|display|retrieve|view|listing|retrieval|show|fetch|listed)\b',
+                'REQ-3':r'\b(isolation|isolat\w*|authoriz\w*|unauthoriz\w*|access|permission\w*|den\w*|restrict\w*|security)\b'}
+            gates['fixture_content']=all(re.search(patterns[t['requirements'][0]],t['title'],re.I) and
+                not re.search(r'\b(registration|register|sign up|mobile|sharing|project management|create projects)\b',t['title'],re.I)
+                for v in e['proposals'].values() for t in v['tasks'])
+            expected=[(lane,x['phase']) for lane in 'AB' for x in e['attempts'][lane]]
+            gates['real_calls']=2<=len(calls)<=4 and [(x['lane'],x['purpose']) for x in calls]==expected and all(
+                x['agent_id']=='pm-'+x['lane'] and x['provider']=='ollama' and x['model']==lanes[x['lane']].model
+                and x['status']=='ok' and x['coverage']=='complete' and x['total_tokens']>0 for x in calls)
+            gates['model_provenance']=state['models']=={k:dict(provider=v.provider,model=v.model) for k,v in lanes.items()}
+            gates['token_ledger']=usage['requests']==usage['complete_calls']==len(calls)
+            gates['local_cost']=cost['local_assumed_zero_calls']==len(calls)
+            gates['no_budget_leak']=guard['totals']['held_calls']==0
+            gates['no_active_inference']=server.CONCURRENCY.snapshot()['active']==0
+            gates['no_auto_adoption']=untouched;gates['database_integrity']=integrity
+            report['gates']=gates;require(all(gates.values()),'PM acceptance gate failed')
+            report['gate']='PASS'
+    except Exception as e:
+        report['error_type']=type(e).__name__;report['error']=str(e) if isinstance(e,(ValueError,RuntimeError)) else 'See test output'
+    finally:
+        with a.report.open('x',encoding='utf-8') as f:json.dump(report,f,indent=2)
+        print(json.dumps(report,indent=2))
+    return 0 if report['gate']=='PASS' else 2
+if __name__=='__main__':raise SystemExit(main())

@@ -11,6 +11,7 @@ async function api(path,body){
 function buttons(){
  const d=current,canEdit=!!(d?.input_ready&&d?.can_write&&!d.stale);
  $('seed').disabled=busy||!d?.input_ready||!d?.can_write;
+ $('discover').disabled=busy||!d?.input_ready||!d?.can_write||['queued','running','paused','waiting_approval'].includes(d?.discovery?.status);
  $('save').disabled=busy||!canEdit||!d?.current;
  $('approve').disabled=busy||!d?.input_ready||!d?.can_approve||!d?.current||d.stale||!!d.current.approved_at||!d.analysis||d.analysis.unestimated_tasks.length>0;
  $('document').readOnly=busy||!canEdit||!d?.current;
@@ -30,7 +31,28 @@ function render(d){
  }));
  $('analysis').textContent=d.analysis?JSON.stringify(d.analysis,null,2):'Chưa có phân tích cho PRD hiện tại';
  $('history').textContent=d.history.map(v=>'v'+v.version+' · PRD v'+v.requirements_version+' · '+v.author+' · '+(v.approved_by?'Approved: '+v.approved_by:'Draft')).join('\n');
+ renderDiscovery(d);
  $('status').textContent='Đã tải kế hoạch';buttons();
+}
+function renderDiscovery(d){
+ const x=d.discovery;
+ $('discovery-status').textContent=x?x.status+' · '+x.reason+(x.stale?' · STALE':''):'Chưa có đề xuất AI';
+ $('discovery-evidence').textContent=x?.evidence?JSON.stringify({models:x.models,...x.evidence},null,2):'';
+}
+async function refreshDiscovery(){
+ if(busy||!current||document.hidden)return;
+ const d=current;
+ try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;renderDiscovery(d);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
+}
+async function discover(){
+ if(busy||!current?.input_ready||!current.can_write)return;
+ const d=current,src=d.requirements_input;
+ if(!confirm('Chạy hai model AI độc lập? Có thể phát sinh chi phí theo cấu hình provider.'))return;
+ busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ try{await api(base(d.project_id)+'/discover',{requirements_version:src.version,requirements_digest:src.digest,confirmation:'RUN AI PLANNING'});
+  const fresh=await api(base(d.project_id));d.discovery=fresh.discovery;renderDiscovery(d);
+ }catch(e){$('status').textContent=e.message}
+ finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
 async function reload(){
  const seq=++sequence,pid=$('project').value;current=null;$('panel').hidden=true;buttons();
@@ -59,6 +81,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const d=await api('/api/bootstrap');$('project').replaceChildren(...d.projects.map(p=>new Option(p.name,p.id)));
   const saved=localStorage.getItem('orbit-project');if(d.projects.some(p=>p.id===saved))$('project').value=saved;
   $('project').addEventListener('change',reload);$('reload').addEventListener('click',reload);
+  $('discover').addEventListener('click',discover);setInterval(refreshDiscovery,2000);
   for(const kind of ['seed','save','approve'])$(kind).addEventListener('click',()=>mutate(kind));await reload();
  }catch(e){$('status').textContent=e.message}
 });

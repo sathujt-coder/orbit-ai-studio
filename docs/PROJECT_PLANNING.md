@@ -44,3 +44,6 @@ P6.2e dependency and critical path hardening; P6.2f resource estimates;
 P6.2g milestones/sprint scheduling; P6.2h cross-review/quality gate;
 P6.2i durable planning queue, API/UI and explicit adoption;
 P6.2j real local PM acceptance and browser coverage. No P6.3 until acceptance.
+
+## P6.2b — independent PM proposals (pending CI)
+P6.2a checkpoint 79f12fc passed regression and real P6.1 regression. New durable planning kind snapshots the current approved PRD/version/digest, rechecks authorization and source before calls and persistence, and uses the existing budget/resource/concurrency guards and distinct model routing. PM-A/B see identical source inputs, never the other proposal. Each returns one concrete implementation and verification title per requirement. Backend assigns IDs, required verification edges and null estimates, then independently validates the graph. One bounded invalid-output regeneration per lane; provider failures are not retried. Limits: 8 requirements, 10 KB PRD, 4 calls per discovery. No semantic cross-review, automatic adoption or execution at this stage; proposals are evidence only. UI displays status and evidence; old snapshots become stale. Real offline acceptance uses two actual local Qwen models and verifies ledger and unchanged plan state. Legacy requirements and P5.9 baseline remain unchanged.

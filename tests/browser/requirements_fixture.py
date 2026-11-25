@@ -13,6 +13,7 @@ sys.path.insert(0,str(root/'tests'))
 from test_requirements_discovery import model_document
 import model_provider as mp
 import requirements_discovery as discovery
+import planning_discovery as planning
 
 def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
     data=json.loads(user)
@@ -23,6 +24,8 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
         result=dict(workflows=['Save and list'],business_rules=['Project access'],edge_cases=['Denied read'],unknowns=[])
     elif schema in (discovery.REVIEW_SCHEMA,discovery.BRIEF_REVIEW_SCHEMA):
         result=dict(blocking=['Missing scope'] if 'BLOCK_FIXTURE' in idea and 'synthesized document' in system else [],feedback=['Synthetic browser fixture review'])
+    elif schema is planning.SCHEMA:
+        result=dict(objective='Fixture plan',work=[dict(requirement=r['id'],implement='Implement '+r['description'],verify='Verify '+r['acceptance'][0]) for r in data['document']['requirements']])
     elif schema is discovery.DOCUMENT_SCHEMA:
         result=model_document()
     else:
