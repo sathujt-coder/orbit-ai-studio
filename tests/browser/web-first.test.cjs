@@ -232,12 +232,18 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   assert.equal(target.output.status,'reviewed_output');
   assert.equal(target.consumption_status,'DEMO_DRAFTS');
   assert.equal(target.receipt.mode,'demo');
+  const observed=second.activity.roles.find(r=>r.stage_id==='research');
+  assert.equal(observed.run_id,target.receipt.run_id);
+  assert.equal(observed.queue.status,'succeeded');
+  assert.deepEqual(observed.agents.map(a=>a.state),['DEMO_DRAFT_RECORDED','DEMO_DRAFT_RECORDED']);
+  assert.ok(observed.agents.every(a=>a.stage_attempt===null));
   assert.deepEqual(target.receipt.lanes,['A','B']);
   assert.deepEqual(target.receipt.sources,[source]);
   assert.match(target.receipt.context_digest,/^[a-f0-9]{64}$/);
   assert.equal(second.handoff.production_release_authorized,false);
   await page.locator('[data-role-id="research"] .line-select').click();
   await page.locator('#roleWorkspace .role-handoff[data-consumption-status="DEMO_DRAFTS"][data-output-status="reviewed_output"]').waitFor({timeout:15000});
+  assert.equal(await page.locator('#roleWorkspace [data-activity-agent][data-activity-state="DEMO_DRAFT_RECORDED"]').count(),2);
   const panel=page.locator('#roleWorkspace .role-handoff');
   assert.match(await panel.textContent(),new RegExp(source.content_digest));
   assert.match(await panel.textContent(),new RegExp(target.receipt.context_digest));

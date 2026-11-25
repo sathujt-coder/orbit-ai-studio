@@ -9,6 +9,7 @@ from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
 import studio_handoff
+import studio_activity
 import coding_factory
 import verification_factory
 import auth_store
@@ -130,6 +131,7 @@ def init_db():
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
         studio_handoff.ensure_schema(c)
+        studio_activity.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -177,8 +179,9 @@ def project_state(pid):
         done=sum(t['status'] in ('done','approved') for t in tasks)
         working=next((t for t in tasks if t['status'] in ('drafting','reviewing','synthesizing','awaiting_approval','needs_revision')),None)
         q=agent_queue.active(c,pid,'pipeline')
+        handoff=studio_handoff.view(c,pid,STAGES,tasks)
         return dict(project=dict(p),tasks=tasks,artifacts=artifacts,reviews=reviews,events=events,
-                    handoff=studio_handoff.view(c,pid,STAGES,tasks),
+                    handoff=handoff,activity=studio_activity.view(c,pid,STAGES,handoff),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 
@@ -307,7 +310,7 @@ def parse_review(raw):
         return 'REQUEST_CHANGES',0,'Không phân tích được JSON review; yêu cầu làm lại. Raw: '+raw[:500]
 
 
-def run_stage(pid, sid, lanes=None):
+def run_stage(pid, sid, lanes=None, *, queue_id=None):
     lanes=provider_snapshot()[1] if lanes is None else lanes
     run_id=uid()
     with LOCK,db() as c:
@@ -316,6 +319,7 @@ def run_stage(pid, sid, lanes=None):
     # the original context length and the same model/prompt/budget policy.
     with LOCK,db() as c:
         context=studio_handoff.prepare(c,pid,STAGES,sid,run_id,model_provider.mode(lanes),now())
+        studio_activity.bind(c,pid,sid,run_id,queue_id,now())
     lanes=route_pair(lanes,pid,run_id,sid,'stage',len(project['idea'])+len(context))
     mode=model_provider.mode(lanes)
     llm=snapshot_call(lanes,project_id=pid,department=sid,run_id=run_id,purpose='stage')
@@ -565,7 +569,7 @@ def dispatch_one():
             run_requirements(pid,identifier,lanes)
             return True
         if row['kind']=='pipeline':
-            result=run_stage(pid,stage,lanes)
+            result=run_stage(pid,stage,lanes,queue_id=identifier)
         else:
             jid=row['coding_job_id']
             with LOCK,db() as c:

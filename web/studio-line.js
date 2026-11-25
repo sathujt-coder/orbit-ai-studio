@@ -36,6 +36,7 @@ function workspaceModel(stages,state,id){
   status:task?.status||'unknown',label:LABELS[task?.status]||'Chưa xác minh',
   approval:stage.approval===true,link:LINKS[id]||null,
   handoff:state.handoff?.project_id===state.project.id?state.handoff.roles?.find(r=>r.stage_id===id)||null:null,
+  activity:state.activity?.project_id===state.project.id?state.activity.roles?.find(r=>r.stage_id===id)||null:null,
   artifacts:(state.artifacts||[]).filter(a=>a.stage_id===id),
   reviews:(state.reviews||[]).filter(a=>a.stage_id===id),
   events:(state.events||[]).filter(a=>a.stage_id===id)};
@@ -93,6 +94,21 @@ function renderWorkspace(holder,stages,state,id,actions){
  }
  handoff.append(el('p','line-notice','Biên nhận ghi nhận context đã chuẩn bị và draft trả về; DEMO không phải inference thật. STALE hoặc INVALID không chứng minh bàn giao hiện hành. Không cấp quyền thực thi hoặc release.'));
  holder.append(handoff);
+ const activity=el('section','role-agent-activity');
+ activity.append(el('h3','','Hoạt động agent · evidence thực tế'));
+ const q=m.activity?.queue;
+ activity.append(el('p','line-notice',q?'Queue '+q.id+' · '+q.status+' · attempts '+q.attempts+' · '+q.reason:'Chưa có queue liên kết với run này'));
+ for(const a of m.activity?.agents||[]){
+  const node=el('div','role-evidence-item');node.dataset.activityAgent=a.agent_id;node.dataset.activityState=a.state;
+  node.append(el('strong','',a.agent_id+' · '+a.state));
+  const attempt=a.stage_attempt;
+  if(attempt)node.append(el('p','line-notice',attempt.purpose+' · '+attempt.provider+' / '+attempt.model+' · '+attempt.status+' · '+(attempt.elapsed_ms??'unknown')+' ms · tokens '+(attempt.total_tokens??'unknown')+' · '+attempt.coverage));
+  if(a.latest_attempt&&a.latest_attempt.id!==attempt?.id)node.append(el('p','line-notice','Lần gọi khác gần nhất: '+a.latest_attempt.purpose+' · '+a.latest_attempt.provider+' / '+a.latest_attempt.model+' · '+a.latest_attempt.status+' · run '+(a.latest_attempt.run_id||'unknown')));
+  if(a.denial)node.append(el('p','line-notice','Inference denied: '+a.denial.reason));
+  activity.append(node);
+ }
+ activity.append(el('p','line-notice','Pending không xác nhận kết nối model đang chạy; DEMO không có token ledger. Queue là trạng thái công việc, không phải trạng thái từng agent.'));
+ holder.append(activity);
  const evidence=el('div','role-workspace-grid');
  const docs=el('section','role-workspace-panel');docs.append(el('h3','','Tài liệu gần đây · '+m.artifacts.length));
  if(!m.artifacts.length)docs.append(el('p','line-notice','Chưa có tài liệu cho vai trò này.'));
@@ -122,7 +138,7 @@ function model(stages,tasks){
 function el(tag,cls,text){
  const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;
 }
-function render(holder,stages,tasks,selected,onSelect,handoff){
+function render(holder,stages,tasks,selected,onSelect,handoff,activity){
  const cards=model(stages,tasks);const active=document.activeElement;
  const focusId=holder.contains(active)?active.closest('[data-role-id]')?.dataset.roleId:null;
  const hadFocus=active?.classList.contains('line-select');
@@ -138,7 +154,7 @@ function render(holder,stages,tasks,selected,onSelect,handoff){
    button.addEventListener('click',()=>onSelect(id));article.append(button);
    article.append(el('p','line-input','← '+card.input));
    const lanes=el('div','line-lanes');
-   for(const lane of ['A','B'])lanes.append(el('span','line-lane',card.short+'-'+lane+' · Đề xuất / review'));
+   for(const lane of ['A','B']){const agent=activity?.roles?.find(r=>r.stage_id===id)?.agents?.find(a=>a.lane===lane);const node=el('span','line-lane',card.short+'-'+lane+' · '+(agent?.state||'NO_EVIDENCE'));node.dataset.agentId=id+'-'+lane;node.dataset.activityState=agent?.state||'NO_EVIDENCE';lanes.append(node)}
    article.append(lanes,el('p','line-output','Đầu ra: '+card.deliverable));
    article.append(el('p','line-evidence',card.artifacts===null?'Chưa có dữ liệu evidence':card.artifacts+' tài liệu · '+card.reviews+' review (gần đây)'));
    article.append(el('p','line-gate',card.approval?'Quality gate + người duyệt':'Quality gate nội bộ'));
