@@ -111,3 +111,64 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
  }finally{await browser.close()}
 });
+
+test('P6.2d.10 system acceptance — explicit recovery after synthetic lane failure',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const owner=await browser.newPage(),reviewer=await browser.newPage();
+  const csrf=await login(owner),rc=await login(reviewer,'ci-reviewer');
+  const post=(page,token,path,data)=>page.request.post(ORIGIN+path,{headers:headers(token),data});
+  const made=await post(owner,csrf,'/api/projects',{name:'System acceptance fixture',idea:'Save links securely in projects',platform:'Web app'});
+  assert.equal(made.status(),201);const pid=(await made.json()).project_id;
+  assert.equal((await post(owner,csrf,'/api/projects/'+pid+'/members',{user:'ci-reviewer',role:'reviewer'})).status(),200);
+  const rp='/api/projects/'+pid+'/requirements',pp='/api/projects/'+pid+'/planning',qp='/api/projects/'+pid+'/queue';
+  const doc={problem:'Save useful links',goals:['Retrieve links'],users:['Readers'],scope:['Web'],out_of_scope:['Mobile','Fixture blocked lane'],assumptions:[],open_questions:[],
+   requirements:[{id:'REQ-1',kind:'functional',description:'Save URL',priority:'must',acceptance:['Saved URL listed']},{id:'REQ-2',kind:'nonfunctional',description:'Project isolation',priority:'must',acceptance:['Other project cannot read links']}],
+   stories:[{id:'US-1',actor:'Reader',goal:'Save links securely',benefit:'Find links later',requirements:['REQ-1','REQ-2']}]};
+  const saved=await post(owner,csrf,rp,{expected_version:0,document:doc});
+  assert.equal(saved.status(),200);const req=(await saved.json()).current;
+  assert.equal((await post(reviewer,rc,rp+'/approve',{version:req.version,digest:req.digest,confirmation:'APPROVE PRODUCT REQUIREMENTS'})).status(),200);
+  const get=async()=>{const r=await owner.request.get(ORIGIN+pp);assert.equal(r.status(),200);return r.json()};
+  const wait=async(predicate)=>{
+   const until=Date.now()+30000;
+   while(Date.now()<until){const data=await get();if(predicate(data))return data;await new Promise(r=>setTimeout(r,250))}
+   assert.fail('Planning fixture did not reach expected terminal state');
+  };
+  assert.equal((await post(owner,csrf,pp+'/discover',{requirements_version:req.version,requirements_digest:req.digest,confirmation:'RUN AI PLANNING'})).status(),202);
+  let data=await wait(x=>x.discovery?.ready===true);
+  const seed=async(lane,v)=>{
+   const result=await post(owner,csrf,pp+'/wbs/seed',{...data.wbs.sources[lane],expected_version:v,confirmation:'CREATE WBS DRAFT'});
+   assert.equal(result.status(),200);return (await result.json()).current;
+  };
+  const run=async(wbs)=>{
+   const result=await post(owner,csrf,pp+'/wbs/decompose',{wbs_version:wbs.version,wbs_digest:wbs.digest,confirmation:'RUN AI DECOMPOSITION'});
+   assert.equal(result.status(),202);return (await result.json()).queue_id;
+  };
+  const blocked=await seed('B',0),first=await run(blocked);
+  data=await wait(x=>x.decomposition?.queue_id===first&&x.decomposition.status==='dead');
+  assert.equal(data.decomposition.reason,'quality_gate');
+  assert.equal(data.decomposition.ready,false);
+  assert.equal(data.decomposition.workflow.next_action,'operator_review');
+  assert.equal(data.decomposition.workflow.automatic_fallback,false);
+  assert.equal(data.decomposition.evidence.call_count,2);
+  assert.equal(data.wbs.current.digest,blocked.digest);
+  assert.equal(data.current,null);
+  assert.equal((await post(reviewer,rc,qp+'/'+first+'/retry',{confirmation:'RETRY QUEUE TASK'})).status(),403);
+  assert.equal((await post(owner,csrf,qp+'/'+first+'/retry',{confirmation:'wrong'})).status(),400);
+  const retry=await post(owner,csrf,qp+'/'+first+'/retry',{confirmation:'RETRY QUEUE TASK'});
+  assert.equal(retry.status(),200);const second=(await retry.json()).queue_id;
+  assert.notEqual(second,first);
+  data=await wait(x=>x.decomposition?.queue_id===second&&x.decomposition.status==='dead');
+  assert.equal(data.decomposition.reason,'quality_gate');
+  assert.equal(data.wbs.current.digest,blocked.digest);
+  const replacement=await seed('A',1),third=await run(replacement);
+  data=await wait(x=>x.decomposition?.queue_id===third&&x.decomposition.status==='succeeded');
+  assert.equal(data.decomposition.ready,true);
+  assert.equal(data.decomposition.workflow.next_action,'human_review');
+  assert.equal(data.decomposition.workflow.model_qualification,'not_assessed');
+  assert.equal(data.decomposition.workflow.automatic_adoption,false);
+  assert.equal(data.wbs.current.digest,replacement.digest);
+  assert.equal(data.wbs.decomposition_ready,false);
+  assert.equal(data.execution_ready,false);
+ }finally{await browser.close()}
+});
