@@ -34,6 +34,9 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
             'D-2.1':dict(action='Filter link reads by authenticated project membership',output='Membership access guard for link queries',evidence='Authorization code review checklist'),
             'D-2.2':dict(action='Test another project member requesting a foreign URL',output='Cross project denial integration test',evidence='Denied response without link payload')}
         result={key:details[key.rsplit('.',1)[0]][key.rsplit('.',1)[1]] for key in schema['required']}
+        # Only the explicitly marked fixture's B lane fails; never use live transport.
+        if lane.lane=='B' and any('fixture blocked lane' in x.lower() for x in data.get('forbidden',[])):
+            result={}
     elif schema is discovery.DOCUMENT_SCHEMA:
         result=model_document()
     else:
