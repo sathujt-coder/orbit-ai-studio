@@ -49,6 +49,8 @@ on:
       - tools/offline_sandbox_gate.py
       - tools/offline_generation.py
       - tools/offline_inference_smoke.py
+      - tools/model_cache.py
+      - tests/test_model_cache.py
       - tools/setup_offline_models.sh
       - tools/run_offline_models.sh
       - .github/workflows/offline-inference.yml
@@ -63,25 +65,57 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prepare model cache directory
+        run: mkdir -p "$RUNNER_TEMP/orbit-ollama-models" "$RUNNER_TEMP/offline-report"
+      - name: Restore model cache
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/orbit-ollama-models
+          key: orbit-ollama-models-v1-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            orbit-ollama-models-v1-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-
       - name: Prepare model files in temporary download container
+        id: prepare-models
+        env:
+          ORBIT_CACHE_MATCHED_KEY: ${{ steps.model-cache.outputs.cache-matched-key }}
         run: |
+          set -euo pipefail
+          models="$RUNNER_TEMP/orbit-ollama-models"
+          report="$RUNNER_TEMP/offline-report/model-cache.json"
+          echo "Cache restore: ${ORBIT_CACHE_MATCHED_KEY:-MISS}"
           docker pull ollama/ollama:latest
           docker pull python:3.12-slim
           docker image inspect ollama/ollama:latest --format '{{index .RepoDigests 0}}'
-          docker volume create orbit-offline-models
-          docker run -d --name orbit-download -e OLLAMA_NO_CLOUD=1 -v orbit-offline-models:/root/.ollama ollama/ollama:latest
-          for i in $(seq 1 60); do
-            if docker exec orbit-download ollama list; then break; fi
-            sleep 1
-          done
-          docker exec orbit-download ollama pull qwen2.5-coder:3b
-          docker exec orbit-download ollama pull qwen2.5:3b
-          docker rm -f orbit-download
+          if python tools/model_cache.py verify --root "$models" --report "$report"; then
+            echo "Verified cache HIT; no registry model pulls"
+          else
+            status=$?
+            test "$status" -eq 2  # only absent/corrupt models are repairable
+            docker run -d --name orbit-download --user "$(id -u):$(id -g)" -e HOME=/tmp -e OLLAMA_NO_CLOUD=1 -e OLLAMA_MODELS=/models -v "$models:/models" ollama/ollama:latest
+            for i in $(seq 1 60); do
+              if docker exec orbit-download ollama list; then break; fi
+              sleep 1
+            done
+            docker exec orbit-download ollama list
+            # The download daemon runs as the runner UID/GID so repair and cache save can write.
+            status=0
+            python tools/model_cache.py ensure --root "$models" --docker-container orbit-download --report "$report" || status=$?
+            docker rm -f orbit-download
+            test "$status" -eq 0
+          fi
+          python -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["gate"]=="PASS"; print("downloaded="+("true" if p["downloaded_models"] else "false"))' "$report" >> "$GITHUB_OUTPUT"
+      - name: Save verified model cache
+        if: steps.prepare-models.outputs.downloaded == 'true' || steps.model-cache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/orbit-ollama-models
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
       - name: Start inference runtime with no external network
         run: |
           mkdir -p "$RUNNER_TEMP/offline-report" "$RUNNER_TEMP/offline-private"
           chmod 700 "$RUNNER_TEMP/offline-private"
-          docker run -d --name orbit-airgap --network none --memory 6g --memory-swap 6g --cpus 2 -e OLLAMA_NO_CLOUD=1 -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_CONTEXT_LENGTH=8192 -v orbit-offline-models:/root/.ollama ollama/ollama:latest
+          docker run -d --name orbit-airgap --network none --memory 6g --memory-swap 6g --cpus 2 -e OLLAMA_NO_CLOUD=1 -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_CONTEXT_LENGTH=8192 -e OLLAMA_MODELS=/models -v "$RUNNER_TEMP/orbit-ollama-models:/models" ollama/ollama:latest
           test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' orbit-airgap)" = none
           for i in $(seq 1 60); do
             if docker exec orbit-airgap ollama list; then break; fi
@@ -142,5 +176,4 @@ jobs:
         if: always()
         run: |
           docker rm -f orbit-airgap orbit-download || true
-          docker volume rm orbit-offline-models || true
           rm -rf "$RUNNER_TEMP/offline-private"
