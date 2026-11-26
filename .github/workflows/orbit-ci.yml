@@ -112,6 +112,8 @@ jobs:
     timeout-minutes: 12
     permissions:
       contents: read
+    outputs:
+      dependency_evidence_sha256: ${{ steps.dependency-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,13 +144,28 @@ jobs:
         env:
           ORBIT_REQUIREMENTS_BROWSER_FIXTURE: '1'
           AI_COMPANY_DB: ${{ runner.temp }}/requirements-browser.sqlite
-        run: node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs
+          ORBIT_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/dependency-browser-evidence.json
+        run: |
+          set -o pipefail
+          node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
+      - name: Validate dependency integration evidence
+        id: dependency-evidence
+        run: python tools/dependency_acceptance.py "$RUNNER_TEMP/dependency-browser-evidence.json"
+      - name: Retain verified dependency evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-browser-evidence
+          path: ${{ runner.temp }}/dependency-browser-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain browser diagnostic log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: p61-browser-diagnostics
-          path: ${{ runner.temp }}/requirements-browser.log
+          path: |
+            ${{ runner.temp }}/requirements-browser.log
+            ${{ runner.temp }}/planning-browser.tap
           retention-days: 7
       - name: Stop fixture
         if: always()
@@ -156,7 +173,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.3c.1d.1 — Engineering system acceptance
+    name: P6.3c.1e — Engineering system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -167,15 +184,19 @@ jobs:
           STUDIO_NEEDS: ${{ toJSON(needs) }}
         run: |
           python - <<'PY'
-          import json, os
+          import json, os, re
           required = ["validate","web-e2e","requirements-browser","web-typescript-docker","react-offline-smoke","p4-fixture-e2e","tls-container-smoke","proxy-container-smoke","stress-fixture","planning-system-acceptance"]
           actual = json.loads(os.environ['STUDIO_NEEDS'])
           checks = {key: actual.get(key, {}).get('result', 'missing') for key in required}
-          passed = set(actual) == set(required) and all(value == 'success' for value in checks.values())
+          evidence_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('dependency_evidence_sha256', '')
+          evidence_valid = isinstance(evidence_sha256, str) and bool(re.fullmatch(r'[0-9a-f]{64}', evidence_sha256)) and checks['requirements-browser'] == 'success'
+          passed = set(actual) == set(required) and all(value == 'success' for value in checks.values()) and evidence_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.3c.1d.1', source_commit=os.environ['GITHUB_SHA'],
-                        checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.3c.1e' if passed else None,
+                        milestone='P6.3c.1e', source_commit=os.environ['GITHUB_SHA'],
+                        checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
+                        dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
+                        system_acceptance='PASS' if passed else 'BLOCK',
+                        development_next_phase='P6.3d' if passed else None,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
                         automatic_adoption=False, automatic_dispatch=False,

@@ -67,6 +67,8 @@ async function openPlanning(page,pid,requirementsDigest,role){
 test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',async()=>{
  const browser=await chromium.launch({headless:true});
  let recoveryBrowser;
+ const evidence=Object.create(null);
+ const checkpoint=id=>{assert.ok(!Object.hasOwn(evidence,id),'Duplicate acceptance checkpoint: '+id);evidence[id]=true};
  try{
   // Explicit context owns the session independently of a single page.
   const ownerContext=await browser.newContext();
@@ -287,6 +289,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.match((await deniedDependency.json()).error,/Missing prerequisite completion receipt/);
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.some(j=>j.source_binding?.package_id===edge.target),false);
   console.log('Dependent HTTP submission blocked before prerequisite completion');
+  checkpoint('missing_prerequisite_rejected');
   const queueBody={adoption_version:1,package_id:wp.id,binding_digest:bound.digest,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
   assert.equal((await post(viewer,vc,base+'coding',queueBody)).status(),403);
   assert.equal((await post(reviewer,rc,base+'coding',queueBody)).status(),403);
@@ -349,6 +352,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   }
   assert.equal(await qaForm.evaluate(form=>form.checkValidity()),true);
   console.log('QA form identity, confirmation, verdict and rationale preserved across unrelated polling');
+  checkpoint('qa_form_preserved');
   // Observe actual consumption of the old JSON response, not just dispatch.
   // The next task runs after the application's await/JSON continuation.
   await studio.evaluate(()=>{
@@ -406,9 +410,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    assert.equal(persisted.source_digest,posted.source_digest);
    assert.deepEqual(persisted.criteria,posted.criteria);
    console.log('QA HTTP 201; persisted receipt, source digest and exact criteria verified');
+  checkpoint('root_qa_receipt');
    // Fresh committed state must render even while the old request is still held.
    await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
    console.log('Fresh QA state rendered before releasing stale GET');
+  checkpoint('fresh_qa_before_old_poll');
    releaseOld();
    const routeError=await oldDone;
    if(routeError)throw routeError;
@@ -416,6 +422,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    // Verify immediately after consumption, not after a later correcting poll.
    assert.match(await studio.locator('[data-qa-job="'+boundJob.job_id+'"] h4').textContent(),/HUMAN_QA_PASS/);
    console.log('Delayed stale GET consumed; QA state did not regress');
+  checkpoint('stale_poll_rejected');
   }finally{
    clearTimeout(timer);
    releaseOld();
@@ -482,10 +489,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    assert.equal(restored.state,'READY_FOR_EXPLICIT_SUBMISSION');
    assert.equal(restored.source_digest,eligible.source_digest);
    console.log('Dependent atomic rollback verified: '+fault+'; exact job/queue/pin/audit/event/usage rows unchanged');
+  checkpoint(fault==='dependency-pin-fault-on'?'rollback_dependency_pin':'rollback_dependency_audit');
   }
   const staleDispatch=JSON.parse(evidenceFixture('stale-dispatch-copy',pid,boundJob.job_id).toString());
   assert.deepEqual(staleDispatch,['before_claim','after_routing'].map(scenario=>({scenario,queue:'dead',reason:'coding_source_invalid',job:'failed',model_calls:0,pin_unchanged:true})));
   console.log('Stale dispatch protection verified before claim and after routing: zero model calls; immutable pins; no bound retry');
+  checkpoint('stale_dispatch_zero_calls');
   const dependentSubmitted=await post(dev,dc,dependentPath,dependentBody);
   assert.equal(dependentSubmitted.status(),202,await dependentSubmitted.text());
   const dependentJob=await dependentSubmitted.json();
@@ -526,6 +535,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,dependentPath,dependentBody)).status(),400);
   assert.equal((await post(owner,csrf,base+'coding',blockedLegacy)).status(),400);
   console.log('Dependent HTTP 202; real dispatcher succeeded; immutable prerequisite and contract pin verified');
+  checkpoint('dependent_dispatch_and_pin');
   // QA cannot be attested using a successful queue alone.
   assert.equal((await post(reviewer,rc,base+'qa',{...qaBody,job_id:dependentJob.job_id})).status(),400);
   evidenceFixture('report',pid,dependentJob.job_id);
@@ -555,6 +565,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(dependentQA.dependency_completed,false);
   assert.equal(dependentQA.production_release_authorized,false);
   console.log('Dependent QA HTTP 201; A/B sandbox evidence and persisted criterion receipt verified');
+  checkpoint('dependent_qa_receipt');
   const dependentCompletionState=async()=> (await dependentState()).dependency_completion.items.find(x=>x.job_id===dependentJob.job_id);
   const dependentCandidate=await dependentCompletionState();
   assert.equal(dependentCandidate.state,'AWAITING_CONFIRMATION');
@@ -583,6 +594,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(persistedCompletion.selected_digest,dependentSaved.receipt.selected_digest);
   assert.equal((await post(reviewer,rc,completionPath,dependentCompletionBody)).status(),400);
   console.log('Dependent completion HTTP 201; selected candidate and upstream evidence pinned');
+  checkpoint('dependent_completion_receipt');
   const verifyPackage=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='verify'&&p.depends_on.includes(wp.id));
   assert.ok(verifyPackage);
   const vb=await post(owner,csrf,base+'bind',{...bindingBody,package_id:verifyPackage.id});
@@ -608,6 +620,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(reviewer,rc,completionPath,{...dependentCompletionBody,expected_version:1})).status(),400);
   assert.equal((await post(reviewer,rc,base+'qa',{...dependentQARequest,expected_version:1})).status(),400);
   console.log('Upstream report replacement invalidates dependent pin, QA and completion evidence');
+  checkpoint('upstream_stale_propagation');
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();
@@ -652,6 +665,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   legacy.on('dialog',d=>d.accept());
   await legacy.bringToFront();
   await openPlanning(legacy,pid,beforeIsolation.requirements_input.digest,'owner');
+  checkpoint('owner_navigation_bootstrap');
   const afterIsolation=await get(legacy,pp);
   assert.equal(afterIsolation.current,null);
   assert.deepEqual(afterIsolation.wbs.adoption.current,beforeIsolation.wbs.adoption.current);
@@ -659,6 +673,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const freshFrames=await sampleFrames(legacy);
   console.log('Fresh planning renderer and unchanged session/project: '+JSON.stringify(freshFrames));
   assert.ok(freshFrames.frameCount>=2&&freshFrames.stable,'Fresh renderer must produce consecutive stable frames');
+  checkpoint('same_session_and_adoption');
   // Observe the exact mutation HTTP response; a UI timeout alone hides its cause.
   let seedCommitted=false,failedRefreshCount=0;
   const planningUrl=ORIGIN+pp;
@@ -717,6 +732,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const recoveryFrames=await sampleFrames(legacy);
   console.log('Legacy reload renderer after HTTP 503: '+JSON.stringify(recoveryFrames));
   assert.ok(recoveryFrames.frameCount>=2&&recoveryFrames.stable,'Reload recovery must produce consecutive stable frames');
+  checkpoint('recovery_stable_frames');
   let manualReload;
   try{
    // Normal user-equivalent scrolling and clicking; keep all actionability
@@ -740,6 +756,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   let data=await get(legacy,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(recovered.current.digest,data.current.digest);
   console.log('Legacy seed HTTP 200; exactly one refresh HTTP 503; manual reload HTTP 200 and persisted Plan v1 digest verified');
+  checkpoint('legacy_reload_and_digest');
   assert.equal(await legacy.locator('#tasks tr').count(),4);
   const approval={version:1,digest:data.current.digest,requirements_version:req.version,requirements_digest:req.digest,confirmation:'APPROVE PROJECT PLAN'};
   const legacyReviewerContext=await recoveryBrowser.newContext({storageState:reviewerState});
@@ -770,6 +787,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   legacyReviewer.on('dialog',d=>d.accept());
   await legacyReviewer.bringToFront();
   await openPlanning(legacyReviewer,pid,beforeIsolation.requirements_input.digest,'reviewer');
+  checkpoint('reviewer_navigation_bootstrap');
   assert.equal(await legacyReviewer.locator('#save').isDisabled(),true);
   const [approveResponse]=await Promise.all([legacyReviewer.waitForResponse(r=>r.url()===planningUrl+'/approve'&&r.request().method()==='POST'),legacyReviewer.locator('#approve').click()]);
   assert.equal(approveResponse.status(),200,await approveResponse.text());
@@ -803,9 +821,20 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await get(legacy,pp)).wbs.sprint_schedule.analysis,null);
   assert.equal(await legacy.locator('#seed').isDisabled(),true);
   assert.equal((await post(legacy,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
+  checkpoint('legacy_approval_and_prd_stale');
  }finally{
   try{if(recoveryBrowser)await recoveryBrowser.close()}
   finally{if(browser.isConnected())await browser.close()}
+ }
+ // Only emit after every assertion AND browser cleanup succeeds. The whole
+ // node test suite must also pass before CI verifies or accepts this evidence.
+ if(process.env.ORBIT_DEPENDENCY_EVIDENCE){
+  assert.equal(process.env.ORBIT_REQUIREMENTS_BROWSER_FIXTURE,'1');
+  const report={schema:'orbit.dependency-browser-evidence.v1',milestone:'P6.3c.1e',
+   source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+   transport:'isolated_synthetic_inference_and_sandbox_fixture',checkpoints:evidence,
+   automatic_dispatch:false,execution_authorized:false,merge_authorized:false,production_release_authorized:false};
+  require('node:fs').writeFileSync(process.env.ORBIT_DEPENDENCY_EVIDENCE,JSON.stringify(report,null,2)+'\n',{flag:'wx'});
  }
 });
 
