@@ -185,7 +185,7 @@ function workflowControls(state){
 }
 function renderWorkflow(holder,state,submit){
  const w=state.workflow;
- const rights=workflowControls(state),signature=JSON.stringify([w,rights]);
+ const rights=workflowControls(state),signature=JSON.stringify([w,rights,state.engineering]);
  if(holder.dataset.projectId===state.project?.id&&holder.dataset.signature===signature)return;
  holder.replaceChildren();delete holder.dataset.projectId;delete holder.dataset.signature;
  if(!w||w.project_id!==state.project?.id){holder.append(el('p','line-notice','Unified workflow chưa xác minh'));return}
@@ -232,6 +232,15 @@ function renderWorkflow(holder,state,submit){
  for(const b of packages?.bindings||[])wp.append(el('p','role-evidence-item',b.package_id+' · v'+b.adoption_version+' · '+b.state+' · '+b.digest));
  if(!rights.write)wp.append(el('p','line-notice','Chỉ đọc: cần quyền write.'));
 
+ const eng=state.engineering;
+ if(eng?.project_id===w.project_id){
+  const section=panel('Engineering Execution Contracts','Development only · không cấp quyền thực thi',[]);
+  section.dataset.workflowStage='engineering';
+  for(const item of eng.contracts){
+   section.append(el('p','role-evidence-item',item.package_id+' · '+item.state+' · v'+item.latest_version+' · '+(item.source_digest||'unavailable')));
+   if(item.source)section.append(el('p','line-notice','Graph '+item.source.graph_digest+' · prerequisites '+(item.source.predecessors.join(', ')||'none')+' · '+item.source.reasons.join(', ')));
+  }
+ }
  const jobs=w.coding_jobs.flatMap(j=>['Job '+j.job_id+' · '+j.status+' · '+j.planning_binding+(j.source_binding?' · '+j.source_binding.package_id+' · '+j.source_binding.binding_digest:''),'Queue '+(j.queue?.id||'unlinked')+' · '+(j.queue?.status||'unknown'), 'Manifest '+(j.manifest_digest||'unknown'), 'Verification '+(j.verification?j.verification.id+' · '+j.verification.state+' · '+j.verification.digest:'NOT_RECORDED'), 'QA '+(j.qa?j.qa.state+' · '+(j.qa.source_digest||'unavailable'):'NOT_RECORDED')]);
  const coding=panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection');coding.dataset.workflowStage='coding';
  const qaPanel=panel('QA/QC · Criterion Attestation',rights.approve?'Human approval required':'Chỉ đọc: cần quyền approve',[]);qaPanel.dataset.workflowStage='qa';

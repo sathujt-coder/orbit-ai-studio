@@ -51,3 +51,21 @@ The [Planning readiness checkpoint](PROJECT_PLANNING.md#p62j1--system-completion
 
 ## SG.7 — Studio readiness boundary
 See [Studio Generator final acceptance](STUDIO_GENERATOR.md#sg7--final-studio-acceptance-pending-current-ci) and [historical evidence](studio-readiness-baseline.json). Current SG.7 System PASS permits P6.3 development only under P6.2j.1. No draft merge, production release, automatic adoption or execution authorization. Real AI and model qualification, actual bound sandbox execution, dependency completion and applicable release gates remain separate; synthetic QA fixture evidence is not production verification.
+
+## P6.3 — Engineering Execution & Dependency Orchestration (development only)
+SG.7 baseline b9f6cf6, CI 45740316572, artifact 15081340751: System PASS 418 Python, 22 general Browser/JS, 3 planning Chromium, 11 jobs. Model/release gates unchanged.
+
+| Phase | Scope |
+|---|---|
+| P6.3a | Versioned engineering execution contract, graph binding, explicit approval |
+| P6.3b | Dependency completion evidence |
+| P6.3c | Dependency-aware queue |
+| P6.3d | Bound retry and recovery |
+| P6.3e | Isolated project Git workspace |
+| P6.3f | Tech Lead candidate selection binding |
+| P6.3g | Real sandbox workflow integration |
+| P6.3h | GitHub draft PR integration |
+| P6.3i | Engineering quality and defect tracking |
+| P6.3j | Engineering workflow acceptance |
+
+P6.3a adds an advisory immutable application contract and approve-role confirmation, bound to current adopted WBS, exact package binding, adopted graph and independently checked topology. Only dependency-free implementation roots are structurally eligible; dependent/verify packages remain blocked. No new execution path, no requirement on existing SG.6 coding submission, no queue or model changes. Confirmation is API-only; Studio exposes read-only projection. Subsequent phases must explicitly integrate contracts before enabling new execution paths. No production or merge authorization.

@@ -15,6 +15,7 @@ import studio_workflow
 import work_package_binding
 import studio_coding
 import studio_verification
+import engineering_contract
 import coding_factory
 import verification_factory
 import auth_store
@@ -140,6 +141,7 @@ def init_db():
         work_package_binding.ensure_schema(c)
         studio_coding.ensure_schema(c)
         studio_verification.ensure_schema(c)
+        engineering_contract.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -197,6 +199,7 @@ def project_state(pid,actor=None):
                     handoff=handoff,activity=studio_activity.view(c,pid,STAGES,handoff),
                     quality=studio_quality.view(c,pid,STAGES,tasks,handoff),
                     workflow=studio_workflow.view(c,pid),
+                    engineering=engineering_contract.view(c,pid),
                     workflow_permissions=workflow_permissions(c,pid,actor),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
@@ -948,6 +951,10 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/contracts/confirm',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=engineering_contract.confirm(c,pid,actor,body,now())
+                self.send_json(201,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/qa',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=studio_verification.attest(c,pid,actor,body,now())
