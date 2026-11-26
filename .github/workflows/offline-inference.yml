@@ -72,9 +72,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/orbit-ollama-models
-          key: orbit-ollama-models-v1-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-${{ github.run_id }}-${{ github.run_attempt }}
+          key: orbit-ollama-models-v2-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            orbit-ollama-models-v1-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-
+            orbit-ollama-models-v2-${{ runner.os }}-${{ runner.arch }}-qwen25-3b-pair-
       - name: Prepare model files in temporary download container
         id: prepare-models
         env:
@@ -111,6 +111,52 @@ jobs:
         with:
           path: ${{ runner.temp }}/orbit-ollama-models
           key: ${{ steps.model-cache.outputs.cache-primary-key }}
+      - name: Select exact verified cache key for round trip
+        id: cache-roundtrip
+        env:
+          PRIMARY_KEY: ${{ steps.model-cache.outputs.cache-primary-key }}
+          MATCHED_KEY: ${{ steps.model-cache.outputs.cache-matched-key }}
+          DOWNLOADED: ${{ steps.prepare-models.outputs.downloaded }}
+        run: |
+          key="$MATCHED_KEY"
+          if [ "$DOWNLOADED" = true ] || [ -z "$key" ]; then key="$PRIMARY_KEY"; fi
+          test -n "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          # Remove the verified local copy; restoration must come from Actions cache.
+          rm -rf -- "$RUNNER_TEMP/orbit-ollama-models"
+          test ! -e "$RUNNER_TEMP/orbit-ollama-models"
+      - name: Restore exact cache into empty model directory
+        id: warm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/orbit-ollama-models
+          key: ${{ steps.cache-roundtrip.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Verify actual warm cache without pulls
+        env:
+          EXPECTED_KEY: ${{ steps.cache-roundtrip.outputs.key }}
+          RESTORED_KEY: ${{ steps.warm-cache.outputs.cache-matched-key }}
+          EXACT_HIT: ${{ steps.warm-cache.outputs.cache-hit }}
+        run: |
+          test "$EXACT_HIT" = true
+          test "$EXPECTED_KEY" = "$RESTORED_KEY"
+          python tools/model_cache.py verify --root "$RUNNER_TEMP/orbit-ollama-models" --report "$RUNNER_TEMP/offline-report/model-cache-warm.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d=Path(os.environ['RUNNER_TEMP'])/'offline-report'
+          first=json.loads((d/'model-cache.json').read_text())
+          warm=json.loads((d/'model-cache-warm.json').read_text())
+          assert first['gate']==warm['gate']=='PASS'
+          assert first['models']==warm['models'] and warm['downloaded_models']==[]
+          report=dict(schema='orbit.model-cache-roundtrip.v1',gate='PASS',
+                      source_commit=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],
+                      run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],cache_key=os.environ['EXPECTED_KEY'],
+                      exact_cache_hit=True,initial_downloads=first['downloaded_models'],warm_downloads=[],
+                      models=warm['models'])
+          (d/'model-cache-roundtrip.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('REAL CACHE ROUNDTRIP PASS; no model pulls after exact restore')
+          PY
       - name: Start inference runtime with no external network
         run: |
           mkdir -p "$RUNNER_TEMP/offline-report" "$RUNNER_TEMP/offline-private"
@@ -121,6 +167,8 @@ jobs:
             if docker exec orbit-airgap ollama list; then break; fi
             sleep 1
           done
+          docker exec orbit-airgap ollama show qwen2.5-coder:3b >/dev/null
+          docker exec orbit-airgap ollama show qwen2.5:3b >/dev/null
       - name: Generate, review, sandbox and repair up to two times
         run: |
           image="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"

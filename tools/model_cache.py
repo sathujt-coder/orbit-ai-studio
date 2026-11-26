@@ -45,6 +45,29 @@ def checked(path, directory=False):
     return True
 
 
+MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
+MANIFEST_LIST = "application/vnd.ollama.manifest.list.v2+json"
+BLOB_NAME = re.compile(r"sha256-[0-9a-f]{64}\Z")
+
+
+def v2_link(root, path):
+    """Only exact relative named-manifest links to a direct local digest blob."""
+    parts = path.relative_to(root).parts
+    if (len(parts) != 5 or parts[:2] != ("manifests-v2", "ollama.com")
+            or not all(COMPONENT.fullmatch(x) for x in parts[2:])):
+        raise UnsafeStore(f"unexpected symlink: {path}")
+    target = os.readlink(path)
+    name = target.rsplit("/", 1)[-1]
+    if not BLOB_NAME.fullmatch(name) or target != "../../../../blobs/" + name:
+        raise UnsafeStore(f"unsafe manifest link: {path}")
+    blob = root / "blobs" / name
+    # Never resolve through another link, including the blobs directory.
+    checked(blob)
+    if blob.exists() and blob.lstat().st_nlink != 1:
+        raise UnsafeStore(f"unexpected hard link: {blob}")
+    return blob
+
+
 def check_store(root):
     if not checked(root, directory=True):
         return
@@ -55,6 +78,9 @@ def check_store(root):
             checked(Path(directory) / name, directory=True)
         for name in files:
             path = Path(directory) / name
+            if path.is_symlink():
+                v2_link(root, path)
+                continue
             checked(path)
             if path.lstat().st_nlink != 1:
                 raise UnsafeStore(f"unexpected hard link: {path}")
@@ -71,6 +97,10 @@ def manifest_path(root, model):
     return root / "manifests" / "registry.ollama.ai" / components[0] / components[1] / tag
 
 
+def v2_path(root, model):
+    return root / "manifests-v2" / "ollama.com" / Path(*manifest_path(root, model).relative_to(root).parts[2:])
+
+
 def hash_file(path):
     digest = hashlib.sha256()
     size = 0
@@ -82,59 +112,130 @@ def hash_file(path):
 
 
 def inspect_model(root, model, *, repair=False, memo=None):
-    """Return evidence or raise. Repair removes only invalid target manifest/blobs."""
+    """Check both layouts when present, including all manifest-list children."""
     if memo is None:
         memo = {}
-    manifest = manifest_path(root, model)
-    if not checked(manifest):
+    legacy, modern = manifest_path(root, model), v2_path(root, model)
+    names = [p for p in (modern, legacy) if os.path.lexists(p)]
+    if not names:
         raise InvalidModel("missing manifest")
-    try:
-        if manifest.stat().st_size > 1024 * 1024:
-            raise InvalidModel("oversized manifest")
-        raw = manifest.read_bytes()
+    verified, manifests, problems = {}, [], []
+    active = set()
+
+    def blob(digest, size=None, manifest=False):
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            raise InvalidModel("invalid blob digest")
+        path = root / "blobs" / digest.replace(":", "-")
+        if not checked(path):
+            raise InvalidModel("missing blob " + digest)
+        if path.lstat().st_nlink != 1:
+            raise UnsafeStore("hardlinked blob")
+        if digest not in memo:
+            memo[digest] = hash_file(path)
+        actual, actual_size = memo[digest]
+        if actual != digest[7:]:
+            if repair:
+                path.unlink()
+                memo.pop(digest, None)
+            raise InvalidModel("corrupt blob " + digest)
+        if size is not None and actual_size != size:
+            raise InvalidModel("descriptor size mismatch " + digest)
+        verified[digest] = actual_size
+        if manifest:
+            if actual_size > 1024 * 1024:
+                raise InvalidModel("oversized manifest blob")
+            return path.read_bytes()
+
+    def descriptor(entry, *, size_required=True):
+        if not isinstance(entry, dict):
+            raise InvalidModel("invalid descriptor")
+        size = entry.get("size")
+        if (size_required or "size" in entry) and (type(size) is not int or size < 0):
+            raise InvalidModel("invalid blob descriptor size")
+        return entry.get("digest"), size
+
+    def parse(raw, depth=0):
+        if depth > 8 or len(raw) > 1024 * 1024:
+            raise InvalidModel("manifest recursion or size limit")
+        key = hashlib.sha256(raw).hexdigest()
+        if key in active:
+            raise InvalidModel("manifest reference cycle")
+        active.add(key)
         try:
-            data = json.loads(raw)
-        except (ValueError, UnicodeError) as exc:
-            raise InvalidModel("malformed manifest") from exc
-        if not isinstance(data, dict) or data.get("schemaVersion") != 2:
-            raise InvalidModel("invalid manifest schema")
+            try:
+                data = json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise InvalidModel("malformed manifest") from exc
+            if not isinstance(data, dict) or data.get("schemaVersion") != 2:
+                raise InvalidModel("invalid manifest schema")
+            walk(data, depth)
+        finally:
+            active.remove(key)
+
+    def walk(data, depth):
+        if depth > 8:
+            raise InvalidModel("manifest recursion limit")
+        media = data.get("mediaType")
+        if media == MANIFEST_LIST:
+            children = data.get("manifests")
+            if not isinstance(children, list) or not 1 <= len(children) <= 64:
+                raise InvalidModel("invalid manifest list")
+            for child in children:
+                if not isinstance(child, dict) or child.get("mediaType") != MANIFEST:
+                    raise InvalidModel("invalid child manifest")
+                if "digest" in child:
+                    if child.get("config") or child.get("layers"):
+                        raise InvalidModel("ambiguous manifest reference")
+                    digest, size = descriptor(child, size_required=False)
+                    parse(blob(digest, size, manifest=True), depth + 1)
+                else:
+                    if child.get("schemaVersion") != 2:
+                        raise InvalidModel("invalid inline child manifest")
+                    walk(child, depth + 1)
+            return
+        if media not in (None, MANIFEST):
+            raise InvalidModel("unsupported manifest media type")
         layers = data.get("layers")
         if not isinstance(layers, list) or not layers:
             raise InvalidModel("missing layers")
-        entries = [data.get("config"), *layers]
-        verified = {}
-        problems = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                raise InvalidModel("invalid descriptor")
-            digest = entry.get("digest")
-            size = entry.get("size")
-            if not isinstance(digest, str) or not DIGEST.fullmatch(digest) or type(size) is not int or size < 0:
-                raise InvalidModel("invalid blob descriptor")
-            blob = root / "blobs" / digest.replace(":", "-")
-            if not checked(blob):
-                problems.append("missing blob " + digest)
-                continue
-            if digest not in memo:
-                memo[digest] = hash_file(blob)
-            actual, actual_size = memo[digest]
-            if actual != digest[7:]:
-                problems.append("corrupt blob " + digest)
-                if repair:
-                    blob.unlink()
-                    memo.pop(digest, None)
-            elif actual_size != size:
-                problems.append("descriptor size mismatch " + digest)
+        errors = []
+        for entry in [data.get("config"), *layers]:
+            try:
+                digest, size = descriptor(entry)
+                nested = entry.get("mediaType") in (MANIFEST, MANIFEST_LIST)
+                raw = blob(digest, size, manifest=nested)
+                if nested:
+                    parse(raw, depth + 1)
+            except InvalidModel as exc:
+                errors.append(str(exc))
+        if errors:
+            raise InvalidModel("; ".join(errors))
+
+    for name in names:
+        try:
+            if name.is_symlink():
+                target = v2_link(root, name)
+                digest = "sha256:" + target.name[7:]
+                raw = blob(digest, manifest=True)
             else:
-                verified[digest] = size
-        if problems:
-            raise InvalidModel("; ".join(problems))
-        return {"model": model, "manifest_sha256": hashlib.sha256(raw).hexdigest(),
-                "blobs": [{"digest": d, "size": n} for d, n in sorted(verified.items())]}
-    except InvalidModel:
+                if not checked(name) or name.stat().st_size > 1024 * 1024:
+                    raise InvalidModel("missing or oversized manifest")
+                raw = name.read_bytes()
+            parse(raw)
+            manifests.append({"layout": "v2" if name == modern else "legacy",
+                "kind": "symlink" if name.is_symlink() else "file",
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                **({"link_target": os.readlink(name)} if name.is_symlink() else {})})
+        except InvalidModel as exc:
+            problems.append(str(exc))
+    if problems:
         if repair:
-            manifest.unlink()
-        raise
+            for name in names:
+                name.unlink()
+        raise InvalidModel("; ".join(problems))
+    return {"model": model, "manifest_sha256": manifests[0]["sha256"],
+            "manifests": manifests,
+            "blobs": [{"digest": d, "size": n} for d, n in sorted(verified.items())]}
 
 
 def verify(root, models):
