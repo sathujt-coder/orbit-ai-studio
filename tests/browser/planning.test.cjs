@@ -5,8 +5,68 @@ const {execFileSync}=require('node:child_process');
 const evidenceFixture=(action,pid,id)=>execFileSync('python',['tests/browser/studio_evidence_fixture.py',action,pid,id],{stdio:'pipe'});
 const {login,headers,ORIGIN}=require('./auth-helper.cjs');
 
+// Track real browser navigation and bootstrap separately. Preserve the original
+// 30-second navigation budget INCLUDING load, not a fresh timeout per phase.
+// Never log cookies, headers, tokens or response bodies.
+async function openPlanning(page,pid,requirementsDigest,role){
+ const events=[],started=performance.now();
+ const record=(event,path,detail)=>events.push({ms:Math.round(performance.now()-started),event,path,...detail});
+ const pathOf=url=>{try{return new URL(url).pathname}catch{return 'unknown'}};
+ const interesting=req=>['document','stylesheet','script','fetch','xhr'].includes(req.resourceType());
+ const onRequest=req=>{if(interesting(req))record('request',pathOf(req.url()),{type:req.resourceType()})};
+ const onResponse=res=>{const req=res.request();if(interesting(req))record('response',pathOf(res.url()),{type:req.resourceType(),status:res.status()})};
+ const onFailed=req=>{if(interesting(req))record('failed',pathOf(req.url()),{type:req.resourceType(),error:req.failure()?.errorText||'unknown'})};
+ const onFinished=req=>{if(interesting(req))record('finished',pathOf(req.url()),{type:req.resourceType()})};
+ const onDom=()=>record('DOMContentLoaded','/planning.html',{});
+ const onLoad=()=>record('load','/planning.html',{});
+ const onCrash=()=>record('crash','/planning.html',{});
+ const listeners=[['request',onRequest],['response',onResponse],['requestfailed',onFailed],['requestfinished',onFinished],
+  ['domcontentloaded',onDom],['load',onLoad],['crash',onCrash]];
+ for(const [event,handler] of listeners)page.on(event,handler);
+ const remaining=()=>Math.max(1,30000-(performance.now()-started));
+ const successful=path=>events.some(x=>x.event==='response'&&x.path===path&&x.status===200);
+ try{
+  const documentResponse=await page.goto(ORIGIN+'/planning.html',{waitUntil:'commit',timeout:remaining()});
+  assert.ok(documentResponse,'Missing navigation document response');
+  assert.equal(documentResponse.status(),200);
+  assert.equal(documentResponse.url(),ORIGIN+'/planning.html');
+  record('commit','/planning.html',{status:documentResponse.status()});
+  await page.waitForLoadState('domcontentloaded',{timeout:remaining()});
+  record('domcontentloaded-confirmed','/planning.html',{});
+  await page.waitForLoadState('load',{timeout:remaining()});
+  record('load-confirmed','/planning.html',{});
+  assert.ok(performance.now()-started<=30000,'Navigation exceeded original 30-second budget');
+  for(const asset of ['/styles.css','/auth.css','/usage.css','/planning.js']){
+   assert.ok(successful(asset),'Missing successful static asset response: '+asset);
+   assert.ok(!events.some(x=>x.event==='failed'&&x.path===asset),'Static asset request failed: '+asset);
+  }
+  // load is not application readiness: DOMContentLoaded launches async auth,
+  // project bootstrap, and the planning GET. Keep the original UI waits.
+  await page.locator('#panel').waitFor({state:'visible'});
+  await page.locator('#project').selectOption(pid);
+  await page.waitForFunction(({id,digest,role})=>{
+   const $=id=>document.getElementById(id);
+   return $('project').value===id&&!$('panel').hidden&&$('input-state').textContent.includes(digest)
+    &&$('status').textContent==='Đã tải kế hoạch'&&!$('reload').disabled
+    &&!(role==='owner'?$('seed'): $('approve')).disabled;
+  },{id:pid,digest:requirementsDigest,role});
+  for(const path of ['/api/auth/session','/api/bootstrap','/api/projects/'+pid+'/planning'])
+   assert.ok(successful(path),'Missing successful bootstrap response: '+path);
+  const ready=await page.evaluate(()=>({readyState:document.readyState,visibility:document.visibilityState,focused:document.hasFocus(),
+   project:document.querySelector('#project').value,panelHidden:document.querySelector('#panel').hidden}));
+  assert.equal(ready.readyState,'complete');
+  assert.equal(ready.project,pid);
+  assert.equal(ready.panelHidden,false);
+  console.log('Planning navigation and bootstrap verified ('+role+'): '+JSON.stringify({ready,events}));
+ }catch(err){
+  console.error('Planning navigation lifecycle failure ('+role+'): '+JSON.stringify({url:pathOf(page.url()),closed:page.isClosed(),events}));
+  throw err;
+ }finally{for(const [event,handler] of listeners)page.off(event,handler)}
+}
+
 test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',async()=>{
  const browser=await chromium.launch({headless:true});
+ let recoveryBrowser;
  try{
   // Explicit context owns the session independently of a single page.
   const ownerContext=await browser.newContext();
@@ -574,18 +634,24 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const beforeIsolation=await get(owner,pp);
   assert.equal(beforeIsolation.current,null);
   assert.equal(beforeIsolation.wbs.adoption.current.digest,adopted.current.digest);
+  // Transfer existing authenticated storage states in memory. A new process,
+  // not merely a new page, isolates the legacy phase from the long-lived renderer.
+  const ownerState=await ownerContext.storageState();
+  const reviewerState=await reviewer.context().storageState();
+  const devState=await dev.context().storageState();
   await owner.close();
-  const legacy=await ownerContext.newPage();
-  assert.equal(legacy.context(),ownerContext);
+  await browser.close();
+  recoveryBrowser=await chromium.launch({headless:true});
+  const legacyContext=await recoveryBrowser.newContext({storageState:ownerState});
+  const legacy=await legacyContext.newPage();
+  assert.equal(legacy.context(),legacyContext);
+  assert.notEqual(legacyContext.browser(),browser);
   const sameSession=await get(legacy,'/api/auth/session');
   assert.equal(sameSession.csrf_token,csrf);
   assert.equal(sameSession.user,'ci-browser-user');
   legacy.on('dialog',d=>d.accept());
   await legacy.bringToFront();
-  await legacy.goto(ORIGIN+'/planning.html');
-  await legacy.locator('#panel').waitFor({state:'visible'});
-  await legacy.locator('#project').selectOption(pid);
-  await legacy.waitForFunction(id=>document.querySelector('#project').value===id&&!document.querySelector('#panel').hidden&&!document.querySelector('#seed').disabled&&!document.querySelector('#reload').disabled,pid);
+  await openPlanning(legacy,pid,beforeIsolation.requirements_input.digest,'owner');
   const afterIsolation=await get(legacy,pp);
   assert.equal(afterIsolation.current,null);
   assert.deepEqual(afterIsolation.wbs.adoption.current,beforeIsolation.wbs.adoption.current);
@@ -676,7 +742,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   console.log('Legacy seed HTTP 200; exactly one refresh HTTP 503; manual reload HTTP 200 and persisted Plan v1 digest verified');
   assert.equal(await legacy.locator('#tasks tr').count(),4);
   const approval={version:1,digest:data.current.digest,requirements_version:req.version,requirements_digest:req.digest,confirmation:'APPROVE PROJECT PLAN'};
-  assert.equal((await post(reviewer,rc,pp+'/approve',approval)).status(),400);
+  const legacyReviewerContext=await recoveryBrowser.newContext({storageState:reviewerState});
+  const legacyReviewerSession=await get(legacyReviewerContext,'/api/auth/session');
+  assert.equal(legacyReviewerSession.csrf_token,rc);
+  assert.equal(legacyReviewerSession.user,'ci-reviewer');
+  assert.equal((await post(legacyReviewerContext,rc,pp+'/approve',approval)).status(),400);
   let estimated=data.current.document;for(const task of estimated.tasks)task.effort_minutes=15;
   await legacy.locator('#document').fill(JSON.stringify(estimated));
   const [saveResponse]=await Promise.all([legacy.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='POST'),legacy.locator('#save').click()]);
@@ -690,15 +760,21 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(await legacy.locator('#graph-nodes tr').count(),4);
   assert.equal(await legacy.locator('#graph-edges li').count(),2);
   const ready={...approval,version:2,digest:data.current.digest};
-  assert.equal((await post(dev,dc,pp+'/approve',ready)).status(),403);
-  reviewer.on('dialog',d=>d.accept());
-  await reviewer.bringToFront();
-  await reviewer.goto(ORIGIN+'/planning.html');await reviewer.locator('#panel').waitFor({state:'visible'});
-  await reviewer.locator('#project').selectOption(pid);await reviewer.waitForFunction(()=>!document.querySelector('#approve').disabled);
-  assert.equal(await reviewer.locator('#save').isDisabled(),true);
-  const [approveResponse]=await Promise.all([reviewer.waitForResponse(r=>r.url()===planningUrl+'/approve'&&r.request().method()==='POST'),reviewer.locator('#approve').click()]);
+  const legacyDevContext=await recoveryBrowser.newContext({storageState:devState});
+  const legacyDevSession=await get(legacyDevContext,'/api/auth/session');
+  assert.equal(legacyDevSession.csrf_token,dc);
+  assert.equal(legacyDevSession.user,'ci-developer');
+  assert.equal((await post(legacyDevContext,dc,pp+'/approve',ready)).status(),403);
+  await legacyDevContext.close();
+  const legacyReviewer=await legacyReviewerContext.newPage();
+  legacyReviewer.on('dialog',d=>d.accept());
+  await legacyReviewer.bringToFront();
+  await openPlanning(legacyReviewer,pid,beforeIsolation.requirements_input.digest,'reviewer');
+  assert.equal(await legacyReviewer.locator('#save').isDisabled(),true);
+  const [approveResponse]=await Promise.all([legacyReviewer.waitForResponse(r=>r.url()===planningUrl+'/approve'&&r.request().method()==='POST'),legacyReviewer.locator('#approve').click()]);
   assert.equal(approveResponse.status(),200,await approveResponse.text());
-  await reviewer.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('READY')&&!document.querySelector('#reload').disabled);
+  await legacyReviewer.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('READY')&&!document.querySelector('#reload').disabled);
+  await legacyReviewerContext.close();
   assert.equal((await get(legacy,pp)).execution_ready,true);
   assert.equal((await post(legacy,csrf,rp,{expected_version:1,document:doc})).status(),200);
   await legacy.bringToFront();
@@ -727,7 +803,10 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await get(legacy,pp)).wbs.sprint_schedule.analysis,null);
   assert.equal(await legacy.locator('#seed').isDisabled(),true);
   assert.equal((await post(legacy,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
- }finally{await browser.close()}
+ }finally{
+  try{if(recoveryBrowser)await recoveryBrowser.close()}
+  finally{if(browser.isConnected())await browser.close()}
+ }
 });
 
 test('P6.2d.10 system acceptance — explicit recovery after synthetic lane failure',async()=>{
