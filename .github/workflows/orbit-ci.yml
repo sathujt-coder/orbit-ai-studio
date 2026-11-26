@@ -114,6 +114,7 @@ jobs:
       contents: read
     outputs:
       dependency_evidence_sha256: ${{ steps.dependency-evidence.outputs.evidence_sha256 }}
+      sandbox_evidence_sha256: ${{ steps.engineering-sandbox-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,6 +129,11 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: Prepare pinned real engineering sandbox image
+        run: |
+          docker pull python:3.12-alpine
+          image="$(docker image inspect python:3.12-alpine --format '{{index .RepoDigests 0}}')"
+          echo "ORBIT_SANDBOX_PYTHON_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Start isolated HTTP and durable queue fixture
         run: |
           export ORBIT_REQUIREMENTS_BROWSER_FIXTURE=1 AI_PROVIDER=ollama AI_MODEL_A=fixture-a AI_MODEL_B=fixture-b AI_HOST=127.0.0.1 AI_PORT=8787 ORBIT_MAX_RUN_CALLS=20
@@ -151,12 +157,23 @@ jobs:
           ORBIT_MAX_RUN_CALLS: '20'
           AI_COMPANY_DB: ${{ runner.temp }}/requirements-browser.sqlite
           ORBIT_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/dependency-browser-evidence.json
+          ORBIT_ENGINEERING_SANDBOX_EVIDENCE: ${{ runner.temp }}/engineering-sandbox-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
       - name: Validate dependency integration evidence
         id: dependency-evidence
         run: python tools/dependency_acceptance.py "$RUNNER_TEMP/dependency-browser-evidence.json"
+      - name: Validate real Git sandbox integration evidence
+        id: engineering-sandbox-evidence
+        run: python tools/engineering_sandbox_acceptance.py "$RUNNER_TEMP/engineering-sandbox-evidence.json"
+      - name: Retain real Git sandbox integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-sandbox-evidence
+          path: ${{ runner.temp }}/engineering-sandbox-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain verified dependency evidence
         uses: actions/upload-artifact@v4
         with:
@@ -179,7 +196,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.3f — Engineering system acceptance
+    name: P6.3g — Engineering system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -196,13 +213,17 @@ jobs:
           checks = {key: actual.get(key, {}).get('result', 'missing') for key in required}
           evidence_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('dependency_evidence_sha256', '')
           evidence_valid = isinstance(evidence_sha256, str) and bool(re.fullmatch(r'[0-9a-f]{64}', evidence_sha256)) and checks['requirements-browser'] == 'success'
-          passed = set(actual) == set(required) and all(value == 'success' for value in checks.values()) and evidence_valid
+          sandbox_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('sandbox_evidence_sha256', '')
+          sandbox_valid = isinstance(sandbox_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',sandbox_sha256)) and checks['requirements-browser']=='success'
+          passed = set(actual) == set(required) and all(value == 'success' for value in checks.values()) and evidence_valid and sandbox_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.3f', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.3g', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
+                        engineering_sandbox_acceptance='PASS' if sandbox_valid else 'BLOCK',
+                        engineering_sandbox_evidence_sha256=sandbox_sha256 if sandbox_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.3g' if passed else None,
+                        development_next_phase='P6.3h' if passed else None,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
                         automatic_adoption=False, automatic_dispatch=False,

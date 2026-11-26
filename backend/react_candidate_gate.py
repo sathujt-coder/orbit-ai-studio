@@ -25,7 +25,7 @@ def plan_react(proposal):
             blockers.append('POSSIBLE_SECRET')
     return {'blockers':blockers,'sha256':plan_lane(proposal)['sha256']}
 
-def verify_react(job, *, image, approval, runner=subprocess.run, timeout=40):
+def verify_react(job, *, image, approval, runner=subprocess.run, timeout=40, materialize=None):
     if approval != 'RUN REACT SANDBOX ' + str(job.get('id','')):
         raise PermissionError('Explicit React sandbox approval required')
     if type(timeout) is not int or not 1 <= timeout <= 60:
@@ -42,7 +42,8 @@ def verify_react(job, *, image, approval, runner=subprocess.run, timeout=40):
     image = immutable_web_image(image)
     for lane, proposal in proposals.items():
         with tempfile.TemporaryDirectory(prefix='orbit-react-') as tmp:
-            root = _materialize_proposal(proposal,tmp)
+            root = (_materialize_proposal(proposal,tmp) if materialize is None
+                    else materialize(lane,proposal,tmp))
             step = _execute_docker(image,root,[],runner,timeout,'react_welcome_render')
             passed = step['passed'] and 'React component bundle and render: PASS' in step['output'].splitlines()
             step['passed'] = bool(passed)

@@ -137,6 +137,7 @@ jobs:
           EXPECTED_KEY: ${{ steps.cache-roundtrip.outputs.key }}
           RESTORED_KEY: ${{ steps.warm-cache.outputs.cache-matched-key }}
           EXACT_HIT: ${{ steps.warm-cache.outputs.cache-hit }}
+          INITIAL_MATCHED_KEY: ${{ steps.model-cache.outputs.cache-matched-key }}
         run: |
           test "$EXACT_HIT" = true
           test "$EXPECTED_KEY" = "$RESTORED_KEY"
@@ -153,6 +154,11 @@ jobs:
                       source_commit=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],
                       run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],cache_key=os.environ['EXPECTED_KEY'],
                       exact_cache_hit=True,initial_downloads=first['downloaded_models'],warm_downloads=[],
+                      initial_matched_key=os.environ.get('INITIAL_MATCHED_KEY',''),
+                      cross_run_reuse=bool(os.environ.get('INITIAL_MATCHED_KEY','')
+                          and not first['downloaded_models']
+                          and os.environ['INITIAL_MATCHED_KEY']==os.environ['EXPECTED_KEY']
+                          and not os.environ['INITIAL_MATCHED_KEY'].rsplit('-',2)[-2]==os.environ['GITHUB_RUN_ID']),
                       models=warm['models'])
           (d/'model-cache-roundtrip.json').write_text(json.dumps(report,indent=2)+'\n')
           print('REAL CACHE ROUNDTRIP PASS; no model pulls after exact restore')
@@ -169,6 +175,19 @@ jobs:
           done
           docker exec orbit-airgap ollama show qwen2.5-coder:3b >/dev/null
           docker exec orbit-airgap ollama show qwen2.5:3b >/dev/null
+      - name: Capture early isolated runtime evidence
+        run: python tools/resource_container_evidence.py "$RUNNER_TEMP/offline-report/container-resources-early.json"
+      - name: Retain early verified cache evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-cache-early-evidence
+          path: |
+            ${{ runner.temp }}/offline-report/model-cache.json
+            ${{ runner.temp }}/offline-report/model-cache-warm.json
+            ${{ runner.temp }}/offline-report/model-cache-roundtrip.json
+            ${{ runner.temp }}/offline-report/container-resources-early.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Generate, review, sandbox and repair up to two times
         run: |
           image="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"

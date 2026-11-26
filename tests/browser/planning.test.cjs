@@ -460,6 +460,57 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(savedCompletion.state,'COMPLETION_EVIDENCE_CONFIRMED');
   assert.equal(savedCompletion.receipt.selected,'B');
   assert.equal(savedCompletion.latest_version,1);
+  // P6.3g: real Git + real Docker replay on the exact bound coding job.
+  // The preceding synthetic sandbox receipt remains immutable historical input.
+  const engineering='/api/projects/'+pid+'/engineering';
+  assert.equal((await post(dev,dc,engineering+'/workspace',{confirmation:'INITIALIZE PROJECT GIT WORKSPACE'})).status(),403);
+  const initialized=await post(owner,csrf,engineering+'/workspace',{confirmation:'INITIALIZE PROJECT GIT WORKSPACE'});
+  assert.equal(initialized.status(),200,await initialized.text());
+  const baseline=await initialized.json();
+  assert.equal(baseline.state,'READY');
+  const selectionPath=engineering+'/candidate-selections/'+boundJob.job_id;
+  const selection=await get(owner,selectionPath);
+  assert.equal(selection.state,'AWAITING_SELECTION');
+  const choose={job_id:boundJob.job_id,source_digest:selection.source_digest,expected_version:0,selected:'B',
+   rationale:'Explicit fixture Tech Lead selection for the real Git-bound sandbox replay.',
+   confirmation:'SELECT ENGINEERING DEV-B '+boundJob.job_id};
+  assert.equal((await post(dev,dc,engineering+'/candidate-selections/confirm',choose)).status(),403);
+  assert.equal((await post(reviewer,'0'.repeat(64),engineering+'/candidate-selections/confirm',choose)).status(),403);
+  const choice=await post(reviewer,rc,engineering+'/candidate-selections/confirm',choose);
+  assert.equal(choice.status(),201,await choice.text());
+  const chosen=await choice.json();
+  const sandboxPath=engineering+'/sandbox/'+boundJob.job_id;
+  const readySandbox=await get(owner,sandboxPath);
+  assert.equal(readySandbox.state,'AWAITING_EXPLICIT_SANDBOX');
+  assert.equal((await post(owner,csrf,sandboxPath,{})).status(),404);
+  const args=['tools/run_engineering_sandbox.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,
+   '--actor','ci-reviewer','--source-digest',readySandbox.source_digest,'--expected-version','0',
+   '--confirm','RUN ENGINEERING SANDBOX '+boundJob.job_id];
+  assert.ok(process.env.ORBIT_SANDBOX_PYTHON_IMAGE,'Real pinned Python image required');
+  const replay=JSON.parse(execFileSync('python',args,{stdio:'pipe',timeout:120000}).toString());
+  assert.equal(replay.gate,'PASS');
+  assert.equal(replay.selection_digest,chosen.digest);
+  assert.equal(replay.selected,'B');
+  assert.notEqual(replay.git.A.commit,replay.git.B.commit);
+  for(const lane of ['A','B']){
+   assert.equal(replay.git[lane].parent,baseline.base_commit);
+   assert.equal(replay.git[lane].source_sha256,selection.source.bound_evidence.candidates[lane].digest);
+  }
+  const sandboxSaved=await get(owner,sandboxPath);
+  assert.equal(sandboxSaved.state,'PASS');
+  assert.equal(sandboxSaved.receipt.digest,replay.digest);
+  assert.equal(sandboxSaved.execution_authorized,false);
+  for(const lane of ['A','B'])assert.ok(sandboxSaved.receipt.lanes[lane].test_count>0);
+  assert.deepEqual(await get(owner,engineering+'/workspace'),baseline);
+  assert.equal((await get(owner,selectionPath)).receipt.digest,chosen.digest);
+  const fsSandbox=require('node:fs');
+  fsSandbox.writeFileSync(process.env.ORBIT_ENGINEERING_SANDBOX_EVIDENCE,JSON.stringify({
+   schema:'orbit.engineering-sandbox-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+   run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_inference_real_git_real_docker',
+   project_id:pid,job_id:boundJob.job_id,base_commit:baseline.base_commit,selection_digest:chosen.digest,
+   receipt:sandboxSaved.receipt,execution_authorized:false,merge_authorized:false,production_release_authorized:false
+  }),{flag:'wx'});
+  console.log('P6.3g real Git/Docker A/B replay, selection binding and immutable receipt PASS');
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -627,6 +678,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const staleQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
   assert.equal(staleQA.state,'STALE');
   assert.equal((await completionState()).state,'STALE');
+  assert.equal((await get(owner,sandboxPath)).state,'STALE');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
   assert.equal(staleDependent.planning_binding,'STALE');
