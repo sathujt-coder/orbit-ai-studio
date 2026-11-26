@@ -14,6 +14,8 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/draft-pr/('+ID+r')',path)
+        if m:return (m[1],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/sandbox/('+ID+r')',path)
         if m:return (m[1],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/candidate-selections/('+ID+r')',path)

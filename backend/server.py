@@ -20,6 +20,7 @@ import engineering_contract
 import project_git_workspace
 import engineering_candidate_selection
 import engineering_sandbox
+import engineering_draft
 import dependency_completion
 import dependency_queue
 import wbs_dependency_extension
@@ -153,6 +154,7 @@ def init_db():
         engineering_contract.ensure_schema(c)
         engineering_candidate_selection.ensure_schema(c)
         engineering_sandbox.ensure_schema(c)
+        engineering_draft.ensure_schema(c)
         dependency_completion.ensure_schema(c)
         dependency_queue.ensure_schema(c)
         bound_recovery.ensure_schema(c)
@@ -842,6 +844,11 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/draft-pr/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_draft.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/sandbox/[A-Za-z0-9_-]{1,100}',path):
                 actor,pid,_=self.auth_context
                 jid=path.rsplit('/',1)[1]

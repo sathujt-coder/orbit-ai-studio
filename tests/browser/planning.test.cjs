@@ -511,6 +511,19 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    receipt:sandboxSaved.receipt,execution_authorized:false,merge_authorized:false,production_release_authorized:false
   }),{flag:'wx'});
   console.log('P6.3g real Git/Docker A/B replay, selection binding and immutable receipt PASS');
+  const draftPath=engineering+'/draft-pr/'+boundJob.job_id;
+  assert.equal((await get(owner,draftPath)).state,'AWAITING_EXPLICIT_DRAFT');
+  assert.equal((await post(owner,csrf,draftPath,{})).status(),404);
+  const draftEvidence=JSON.parse(execFileSync('python',['tests/browser/engineering_draft_browser.py',pid,boundJob.job_id],{stdio:'pipe',timeout:60000}).toString());
+  assert.equal(draftEvidence.plan.source.sandbox_digest,replay.digest);
+  assert.equal(draftEvidence.plan.source.git.commit,replay.git.B.commit);
+  assert.equal(draftEvidence.receipt.remote.draft,true);
+  const draftSaved=await get(owner,draftPath);
+  assert.equal(draftSaved.state,'CREATED_DRAFT');
+  assert.equal(draftSaved.plan_digest,draftEvidence.plan_digest);
+  assert.equal(draftSaved.execution_authorized,false);
+  fsSandbox.writeFileSync(process.env.ORBIT_ENGINEERING_DRAFT_EVIDENCE,JSON.stringify(draftEvidence),{flag:'wx'});
+  console.log('P6.3h Git-bound draft PR contract, real SQLite receipt and duplicate rejection PASS');
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -679,6 +692,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(staleQA.state,'STALE');
   assert.equal((await completionState()).state,'STALE');
   assert.equal((await get(owner,sandboxPath)).state,'STALE');
+  assert.equal((await get(owner,draftPath)).state,'STALE_OR_INVALID');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
   assert.equal(staleDependent.planning_binding,'STALE');
