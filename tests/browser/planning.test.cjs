@@ -279,24 +279,49 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    assert.equal(await qaForm.getByLabel('Rationale '+criterion.id,{exact:true}).inputValue(),'Synthetic acceptance fixture only; not real functional verification.');
   }
   assert.equal(await qaForm.evaluate(form=>form.checkValidity()),true);
-  let releaseOld,markHeld;
+  console.log('QA form identity, confirmation, verdict and rationale preserved across unrelated polling');
+  // Observe actual consumption of the old JSON response, not just dispatch.
+  // The next task runs after the application's await/JSON continuation.
+  await studio.evaluate(()=>{
+   const original=Response.prototype.json;
+   window.__orbitFixtureStaleConsumed=false;
+   Response.prototype.json=async function(...args){
+    const data=await original.apply(this,args);
+    if(this.headers.get('x-orbit-fixture-stale')==='1'){
+     setTimeout(()=>{window.__orbitFixtureStaleConsumed=true},0);
+    }
+    return data;
+   };
+   window.__orbitRestoreFixtureJson=()=>{Response.prototype.json=original};
+  });
+  let releaseOld,markHeld,finishOld,started=false;
   const oldGate=new Promise(resolve=>{releaseOld=resolve});
   const held=new Promise(resolve=>{markHeld=resolve});
-  let firstRead=true;
+  const oldDone=new Promise(resolve=>{finishOld=resolve});
   const oldPoll=async route=>{
-   if(!firstRead){await route.continue();return}
-   firstRead=false;
-   const response=await route.fetch();
-   const state=await response.json();
-   assert.equal(state.workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa.state,'AWAITING_HUMAN_QA');
-   markHeld();
-   await oldGate;
-   await route.fulfill({response});
+   started=true;
+   let error=null;
+   try{
+    assert.equal(route.request().method(),'GET');
+    const response=await route.fetch();
+    assert.equal(response.status(),200);
+    const state=await response.json();
+    assert.equal(state.workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa.state,'AWAITING_HUMAN_QA');
+    markHeld(null);
+    await oldGate;
+    // One explicit terminal operation. Do not reuse the APIResponse object.
+    await route.fulfill({status:200,json:state,headers:{'content-type':'application/json','cache-control':'no-store','x-orbit-fixture-stale':'1'}});
+   }catch(err){
+    error=err;
+    markHeld(err);
+   }finally{finishOld(error)}
   };
-  await studio.route(stateUrl,oldPoll);
+  // Only the first request is intercepted; fresh reads use the real backend.
+  await studio.route(stateUrl,oldPoll,{times:1});
   let timer;
   try{
-   await Promise.race([held,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('No pre-submit poll captured')),15000)})]);
+   const captureError=await Promise.race([held,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('No pre-submit poll captured')),15000)})]);
+   if(captureError)throw captureError;
    clearTimeout(timer);
    const [qaResponse]=await Promise.all([
     studio.waitForResponse(r=>r.url()===qaUrl&&r.request().method()==='POST',{timeout:15000}),
@@ -311,9 +336,27 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    assert.equal(persisted.digest,receipt.digest);
    assert.equal(persisted.source_digest,posted.source_digest);
    assert.deepEqual(persisted.criteria,posted.criteria);
+   console.log('QA HTTP 201; persisted receipt, source digest and exact criteria verified');
    // Fresh committed state must render even while the old request is still held.
    await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
-  }finally{clearTimeout(timer);releaseOld();await studio.unroute(stateUrl,oldPoll)}
+   console.log('Fresh QA state rendered before releasing stale GET');
+   releaseOld();
+   const routeError=await oldDone;
+   if(routeError)throw routeError;
+   await studio.waitForFunction(()=>window.__orbitFixtureStaleConsumed===true,null,{timeout:15000});
+   // Verify immediately after consumption, not after a later correcting poll.
+   assert.match(await studio.locator('[data-qa-job="'+boundJob.job_id+'"] h4').textContent(),/HUMAN_QA_PASS/);
+   console.log('Delayed stale GET consumed; QA state did not regress');
+  }finally{
+   clearTimeout(timer);
+   releaseOld();
+   try{
+    // Never unregister/close while the captured handler is still fulfilling.
+    if(started){const error=await oldDone;if(error)throw error}
+    await studio.unroute(stateUrl,oldPoll);
+    if(started){const error=await oldDone;if(error)throw error}
+   }finally{await studio.evaluate(()=>{window.__orbitRestoreFixtureJson();delete window.__orbitRestoreFixtureJson;delete window.__orbitFixtureStaleConsumed})}
+  }
   await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
   currentQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
   assert.equal(currentQA.receipt.version,1);
