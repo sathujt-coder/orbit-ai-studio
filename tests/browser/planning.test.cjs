@@ -304,7 +304,14 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   // root UI workflow; do not replace or skip any existing assertions.
   const recoveryHttp=JSON.parse(evidenceFixture('bound-recovery-http',pid,wp.id).toString());
   const expectedRecovery=(kind,previous_status)=>({kind,previous_status,retry_http:202,rollback:true,model_calls:4,qa_http:201,completion_http:201,immutable_history:true});
-  assert.deepEqual(recoveryHttp,{root:expectedRecovery('root','cancelled'),dependent:expectedRecovery('dependent','interrupted'),recovered_root_prerequisite:true,upstream_stale:true});
+  const {defect_continuity,...recoveryResults}=recoveryHttp;
+  assert.deepEqual(recoveryResults,{root:expectedRecovery('root','cancelled'),dependent:expectedRecovery('dependent','interrupted'),recovered_root_prerequisite:true,upstream_stale:true});
+  assert.ok(defect_continuity&&defect_continuity.quality.state==='QUALITY_EVIDENCE_PASS');
+  require('node:fs').writeFileSync(process.env.ORBIT_ENGINEERING_WORKFLOW_EVIDENCE,JSON.stringify({
+    schema:'orbit.engineering-workflow-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_inference_real_git_docker_http',
+    recovery:recoveryResults,continuity:defect_continuity,execution_authorized:false,merge_authorized:false,production_release_authorized:false
+  }),{flag:'wx'});
   console.log('Root and dependent recovery HTTP E2E verified: HTTP 202/201/201, rollback, four calls each, immutable history, recovered root prerequisite, upstream stale');
   await queueForm.locator('input[name=confirmation]').fill(queueBody.confirmation);
   await queueForm.locator('button[type=submit]').click();

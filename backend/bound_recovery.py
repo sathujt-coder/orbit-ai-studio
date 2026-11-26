@@ -57,12 +57,15 @@ def snapshot(c,pid,qid):
         if not sc.effective_predecessors(c,pid,row['adoption_version'],snap):
             raise ValueError('Pinned dependency graph no longer current')
         dq.checked_package(c,pid,row)
+    defects=[]
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_defect_events'").fetchone():
+        defects=[dict(x) for x in c.execute('SELECT * FROM engineering_defect_events WHERE project_id=? AND job_id=? ORDER BY defect_id,version',(pid,row['job_id']))]
     return dict(schema='orbit.bound-recovery-source.v1',project_id=pid,previous_job_id=row['job_id'],
         previous_queue_id=qid,previous_status=old['status'],previous_reason=old['reason'],
         previous_job_digest=pp.digest(dict(job)),previous_queue_digest=pp.digest(dict(old)),
         adoption_version=row['adoption_version'],package_id=row['package_id'],binding_digest=row['binding_digest'],
         spec_digest=row['spec_digest'],dependency_source_digest=pin['digest'] if pin else None,
-        execution_authorized=False),job['spec']
+        execution_authorized=False,**({'defect_history_digest':pp.digest(defects)} if defects else {})),job['spec']
 
 def source(c,pid,qid):
     src,spec=snapshot(c,pid,qid)

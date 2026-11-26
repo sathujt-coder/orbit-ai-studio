@@ -30,6 +30,7 @@ def dependency_snapshot(c,pid):
         'dependency_audit':"SELECT * FROM auth_audit WHERE project_id=? AND action='engineering_dependency_queue' ORDER BY rowid",
         'bound_retry_audit':"SELECT * FROM auth_audit WHERE project_id=? AND action='studio_bound_retry' ORDER BY rowid",
         'retry_receipts':'SELECT * FROM studio_bound_retries WHERE project_id=? ORDER BY rowid',
+        'defect_events':'SELECT * FROM engineering_defect_events WHERE project_id=? ORDER BY rowid',
         'usage':'SELECT * FROM ai_usage WHERE project_id=? ORDER BY rowid',
         'completions':'SELECT * FROM engineering_completions WHERE project_id=? ORDER BY rowid',
         'qa':'SELECT * FROM studio_qa_receipts WHERE project_id=? ORDER BY rowid',

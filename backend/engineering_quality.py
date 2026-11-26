@@ -56,17 +56,44 @@ def require_retest(src,prior):
         raise ValueError('Fresh passing Git sandbox replay and current human QA required')
 
 
+def lineage(c,pid,jid):
+    """Only the latest exact-package attempt may mutate or publish defects."""
+    import bound_recovery as br
+    import agent_queue as aq
+    target=sc.lookup(c,pid,jid)
+    if not target:raise ValueError('Unknown bound defect job')
+    keys=('adoption_version','package_id','binding_digest','spec_digest')
+    rows=c.execute("""SELECT * FROM studio_coding_bindings WHERE project_id=? AND adoption_version=?
+        AND package_id=? ORDER BY rowid""",(pid,target['adoption_version'],target['package_id'])).fetchall()
+    if not rows or rows[-1]['job_id']!=jid:raise ValueError('Superseded defect job')
+    previous=None
+    for row in rows:
+        if any(row[k]!=target[k] for k in keys):raise ValueError('Retry defect binding mismatch')
+        queue=aq.get(c,pid,row['queue_id'])
+        if queue['coding_job_id']!=row['job_id'] or queue['actor']!=row['actor'] or queue['kind']!='coding':
+            raise ValueError('Invalid defect queue binding')
+        if previous:
+            if queue['retry_of']!=previous['queue_id']:raise ValueError('Nonlinear defect retry lineage')
+            br.validate_retry(c,pid,row,queue)
+        elif queue['retry_of'] or c.execute('SELECT 1 FROM studio_bound_retries WHERE job_id=?',(row['job_id'],)).fetchone():
+            raise ValueError('Missing defect lineage root')
+        previous=row
+    return [row['job_id'] for row in rows]
+
+
 def history(c,pid,jid):
     result={}
-    for row in c.execute("""SELECT * FROM engineering_defect_events WHERE project_id=? AND job_id=?
-                            ORDER BY defect_id,version""",(pid,jid)):
+    jobs=lineage(c,pid,jid)
+    rows=[row for job in jobs for row in c.execute("""SELECT * FROM engineering_defect_events
+        WHERE project_id=? AND job_id=? ORDER BY defect_id,version""",(pid,job))]
+    for row in rows:
         e=json.loads(row['snapshot'])
         did=row['defect_id'];chain=result.setdefault(did,[])
         prev=chain[-1] if chain else None
-        if (pp.digest(e)!=row['digest'] or e['project_id']!=pid or e['job_id']!=jid
+        if (pp.digest(e)!=row['digest'] or e['project_id']!=pid or e['job_id']!=row['job_id']
             or e['defect_id']!=did or e['version']!=row['version'] or e['version']!=len(chain)+1
             or e['previous_digest']!=(prev['digest'] if prev else None)
-            or e['source']['project_id']!=pid or e['source']['job_id']!=jid
+            or e['source']['project_id']!=pid or e['source']['job_id']!=row['job_id']
             or e['source_digest']!=pp.digest(e['source'])
             or e['severity'] not in SEVERITIES or e['category'] not in CATEGORIES
             or any(e[k] is not False for k in FLAGS)):
@@ -76,7 +103,9 @@ def history(c,pid,jid):
             if e['state'] not in NEXT[p['state']] or any(e[k]!=p[k] for k in ('severity','category','title')):
                 raise ValueError('Invalid defect transition')
             if e['source']['binding']!=p['source']['binding']:raise ValueError('Defect binding changed')
-            if e['state']=='CLOSED':require_retest(e['source'],p['source'])
+            if e['state']=='CLOSED':
+                if p['job_id']!=e['job_id']:raise ValueError('Retest handoff required on current retry job')
+                require_retest(e['source'],p['source'])
         elif e['state']!='OPEN':raise ValueError('Defect must start OPEN')
         chain.append(dict(digest=row['digest'],event=e))
     return result
@@ -129,7 +158,9 @@ def record(c,db,pid,jid,actor,body,stamp):
             if state not in NEXT[p['state']] or src['binding']!=p['source']['binding']:
                 raise ValueError('Invalid defect transition or binding')
             severity,category,title=(p[k] for k in ('severity','category','title'))
-            if state=='CLOSED':require_retest(src,p['source'])
+            if state=='CLOSED':
+                if p['job_id']!=jid:raise ValueError('Retest handoff required on current retry job')
+                require_retest(src,p['source'])
         event=dict(schema='orbit.engineering-defect-event.v1',project_id=pid,job_id=jid,
             defect_id=did,version=version+1,state=state,severity=severity,category=category,title=title,
             rationale=rationale,actor=actor,created_at=stamp,source=src,source_digest=pp.digest(src),
@@ -151,14 +182,14 @@ def view(c,db,pid,jid):
     try:
         src=source(c,db,pid,jid)
         chains=history(c,pid,jid)
-        out.update(source=src,source_digest=pp.digest(src))
+        out.update(source=src,source_digest=pp.digest(src),lineage=lineage(c,pid,jid))
         for did,chain in chains.items():
             last=chain[-1]['event']
             if last['source']['binding']!=src['binding']:raise ValueError('Stale defect binding')
             out['counts'][last['state']]+=1
             out['defects'].append(dict(defect_id=did,state=last['state'],version=last['version'],
                 severity=last['severity'],category=last['category'],title=last['title'],
-                digest=chain[-1]['digest'],history=chain))
+                digest=chain[-1]['digest'],origin_job_id=chain[0]['event']['job_id'],last_event_job_id=last['job_id'],history=chain))
         # Closed defects become stale if the current reviewed source is replaced.
         fresh=all(x['state']=='CLOSED' and x['history'][-1]['event']['source']==src for x in out['defects'])
         if fresh and src['sandbox']['state']=='PASS' and src['qa']['state']=='HUMAN_QA_PASS':

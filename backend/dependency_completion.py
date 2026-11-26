@@ -25,6 +25,18 @@ def ensure_schema(c):
 
 def source(c,pid,jid):
     src=qa.source(c,pid,jid)
+    # A prior completion is not a bypass for outstanding defects.
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_defect_events'").fetchone():
+        any_defect=c.execute("""SELECT 1 FROM engineering_defect_events e JOIN studio_coding_bindings b
+            ON b.job_id=e.job_id AND b.project_id=e.project_id
+            WHERE b.project_id=? AND b.adoption_version=? AND b.package_id=? LIMIT 1""",
+            (pid,src['adoption_version'],src['package_id'])).fetchone()
+        if any_defect:
+            import engineering_quality as quality
+            from pathlib import Path
+            db_path=next((r[2] for r in c.execute('PRAGMA database_list') if r[1]=='main'),'')
+            if not db_path:raise ValueError('Persistent defect evidence database required')
+            quality.guard_no_open_defects(c,pid,jid,Path(db_path))
     if src['project_id']!=pid or src['job_id']!=jid:raise ValueError('QA source scope mismatch')
     v,p=src['adoption_version'],src['package_id']
     contract=ec.source(c,pid,p)

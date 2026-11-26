@@ -4,6 +4,7 @@ No live worker manipulation, real inference, or production release. The HTTP
 handler and dispatcher are production code; only transport/sandbox are fixtures.
 """
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -92,7 +93,9 @@ def exercise(pid,root_package,port,snapshot):
     root_binding=next(x for x in state()['workflow']['work_packages']['bindings'] if x['package_id']==root_package)
     root_body=dict(adoption_version=root_binding['adoption_version'],package_id=root_package,
                    binding_digest=root_binding['digest'],confirmation='QUEUE ADOPTED WORK PACKAGE')
+    continuity=None
     def recover(kind,submit_path,submit_body,upstream=None):
+        nonlocal continuity
         old=dev.expect(202,submit_path,submit_body)
         oid,oq=old['job_id'],old['queue_id']
         assert job_view(oid)['queue']['status']=='queued'
@@ -110,11 +113,23 @@ def exercise(pid,root_package,port,snapshot):
         prior=job_view(oid)
         assert prior['queue']['status']==terminal and prior['status']=='failed'
         assert prior['qa']['state']=='BLOCK'
+        def quality_path(job):return base+'/engineering/quality/'+job
+        def defect(job,action,version,source,**extra):
+            return dict(action=action,defect_id='retry-defect',expected_version=version,
+                source_digest=source,rationale='Explicit recovery defect evidence for the failed attempt.',
+                confirmation='DEFECT '+action+' '+job+' retry-defect',**extra)
+        if kind=='root':
+            before_quality=owner.expect(200,quality_path(oid))
+            assert before_quality['state']=='BLOCK' and before_quality['source_digest']
+            opened=reviewer.expect(201,quality_path(oid)+'/defects',defect(oid,'OPEN',0,
+                before_quality['source_digest'],severity='HIGH',category='TEST',title='Recover failed coding attempt'))
+            prior=job_view(oid)
         recovery=prior['recovery']
         assert recovery['state']=='READY_FOR_EXPLICIT_RETRY'
         src=recovery['source']
         assert src['previous_job_id']==oid and src['previous_queue_id']==oq
         assert src['previous_status']==terminal
+        if kind=='root':assert len(src['defect_history_digest'])==64
         assert pp.digest(src)==recovery['source_digest']
         assert src['dependency_source_digest']==(submit_body['source_digest'] if upstream else None)
         body=dict(queue_id=oq,source_digest=recovery['source_digest'],
@@ -154,6 +169,18 @@ def exercise(pid,root_package,port,snapshot):
         assert queued['queue']['retry_of']==oq and queued['queue']['status']=='queued'
         assert queued['planning_binding']=='BOUND' and queued['qa']['state']=='BLOCK'
         assert queued['source_binding']['spec_digest']==src['spec_digest']
+        if kind=='root':
+            inherited=owner.expect(200,quality_path(jid))
+            assert inherited['state']=='BLOCK' and inherited['counts']['OPEN']==1
+            assert inherited['lineage']==[oid,jid]
+            assert inherited['defects'][0]['origin_job_id']==oid and inherited['defects'][0]['digest']==opened['digest']
+            dev.expect(400,quality_path(oid)+'/defects',defect(oid,'READY_FOR_RETEST',1,before_quality['source_digest']))
+            reviewer.expect(400,quality_path(jid)+'/defects',defect(jid,'OPEN',0,inherited['source_digest'],
+                severity='HIGH',category='TEST',title='Duplicate defect'))
+            handoff=dev.expect(201,quality_path(jid)+'/defects',defect(jid,'READY_FOR_RETEST',1,inherited['source_digest']))
+            assert handoff['event']['previous_digest']==opened['digest']
+            ready_quality=owner.expect(200,quality_path(jid))
+            reviewer.expect(400,quality_path(jid)+'/defects',defect(jid,'CLOSED',2,ready_quality['source_digest']))
         assert job_view(oid)['recovery']['state']=='BLOCK'
         dev.expect(400,wp+'retry',body)
         with server.db() as db:
@@ -192,6 +219,38 @@ def exercise(pid,root_package,port,snapshot):
         attested=reviewer.expect(201,wp+'qa',qa_body)
         assert attested['version']==1
         assert job_view(jid)['qa']['state']=='HUMAN_QA_PASS'
+        if kind=='root':
+            assert completion_view(jid)['state']=='BLOCK'
+            import engineering_sandbox as sb
+            import engineering_quality as eq
+            import project_git_workspace as ws
+            owner.expect(200,base+'/engineering/workspace',{'confirmation':ws.CONFIRMATION})
+            selected=owner.expect(200,base+'/engineering/candidate-selections/'+jid)
+            reviewer.expect(201,base+'/engineering/candidate-selections/confirm',dict(job_id=jid,
+                source_digest=selected['source_digest'],expected_version=0,selected='B',
+                rationale='Explicit recovered candidate selection for verified defect retest.',
+                confirmation='SELECT ENGINEERING DEV-B '+jid))
+            sandbox_ready=owner.expect(200,base+'/engineering/sandbox/'+jid)
+            assert sandbox_ready['state']=='AWAITING_EXPLICIT_SANDBOX'
+            image=os.environ['ORBIT_SANDBOX_PYTHON_IMAGE']
+            with server.db() as db:
+                replay=sb.run(db,server.DB_PATH,pid,jid,'ci-reviewer',sandbox_ready['source_digest'],0,
+                    'RUN ENGINEERING SANDBOX '+jid,python_image=image)
+            assert replay['gate']=='PASS'
+            verified=owner.expect(200,quality_path(jid))
+            assert verified['state']=='BLOCK'
+            closed=reviewer.expect(201,quality_path(jid)+'/defects',defect(jid,'CLOSED',2,verified['source_digest']))
+            final=owner.expect(200,quality_path(jid))
+            assert final['state']=='QUALITY_EVIDENCE_PASS' and final['counts']['CLOSED']==1
+            assert [x['digest'] for x in final['defects'][0]['history']]==[opened['digest'],handoff['digest'],closed['digest']]
+            with server.db() as db:
+                eq.guard_no_open_defects(db,pid,jid,server.DB_PATH)
+                receipt=db.execute('SELECT snapshot,digest FROM studio_bound_retries WHERE job_id=?',(jid,)).fetchone()
+                old_rows=[dict(x) for x in db.execute('SELECT * FROM engineering_defect_events WHERE project_id=? AND job_id=? ORDER BY defect_id,version',(pid,oid))]
+                assert len(old_rows)==1 and pp.digest(old_rows)==src['defect_history_digest']
+                continuity=dict(previous_job_id=oid,current_job_id=jid,retry_receipt=json.loads(receipt['snapshot']),
+                    retry_digest=receipt['digest'],previous_events=old_rows,quality=final,sandbox=replay,
+                    completion_block_before_retest=True,prior_job_write_rejected=True,duplicate_rejected=True)
         candidate=completion_view(jid)
         assert candidate['state']=='AWAITING_CONFIRMATION' and candidate['source']['qa_digest']==attested['digest']
         complete_body=dict(job_id=jid,source_digest=candidate['source_digest'],expected_version=0,selected='B',
@@ -232,4 +291,4 @@ def exercise(pid,root_package,port,snapshot):
     assert job_view(dep_jid)['planning_binding']=='STALE'
     assert job_view(dep_jid)['qa']['state']=='STALE'
     assert completion_view(dep_jid)['state']=='STALE'
-    return dict(root=root_result,dependent=dep_result,recovered_root_prerequisite=True,upstream_stale=True)
+    return dict(root=root_result,dependent=dep_result,recovered_root_prerequisite=True,upstream_stale=True,defect_continuity=continuity)

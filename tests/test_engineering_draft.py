@@ -16,6 +16,8 @@ class EngineeringDraftTests(unittest.TestCase):
         self.replay=self.f.run_replay()
         ed.ensure_schema(self.c)
         self.c.commit()
+        import engineering_quality as eq
+        p=patch.object(eq,'lineage',return_value=[self.jid]);p.start();self.addCleanup(p.stop)
         self.remote=FakeRemote()
         self.repo,self.base,self.base_sha='example/orbit','main','a'*40
 
