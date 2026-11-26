@@ -529,40 +529,82 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   // Observe the exact mutation HTTP response; a UI timeout alone hides its cause.
   await owner.bringToFront();
   await owner.waitForFunction(()=>!document.querySelector('#seed').disabled&&!document.querySelector('#reload').disabled);
-  let seedCommitted=false;
+  let seedCommitted=false,failedRefreshCount=0;
   const planningUrl=ORIGIN+pp;
   const seedUrl=planningUrl+'/seed';
   const interceptSeed=async route=>{
+   assert.equal(route.request().method(),'POST');
    const response=await route.fetch();
+   const state=await response.json();
    seedCommitted=response.ok();
-   await route.fulfill({response});
+   await route.fulfill({status:response.status(),json:state,headers:{'cache-control':'no-store'}});
   };
   const failRefresh=async route=>{
-   if(seedCommitted&&route.request().method()==='GET'){
+   if(seedCommitted&&route.request().method()==='GET'&&failedRefreshCount===0){
+    ++failedRefreshCount;
     await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic reload failure after committed seed'})});
    }else await route.continue();
   };
   await owner.route(planningUrl,failRefresh);
-  await owner.route(seedUrl,interceptSeed);
+  await owner.route(seedUrl,interceptSeed,{times:1});
   try{
-   const [seedResponse]=await Promise.all([
+   const [seedResponse,failedRefresh]=await Promise.all([
     owner.waitForResponse(r=>r.url()===seedUrl&&r.request().method()==='POST'),
+    owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'&&r.status()===503),
     owner.locator('#seed').click()
    ]);
    assert.equal(seedResponse.status(),200,await seedResponse.text());
    assert.equal((await seedResponse.json()).current.version,1);
+   assert.equal(failedRefresh.status(),503);
+   assert.equal(failedRefreshCount,1);
    await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
    await owner.waitForFunction(()=>document.querySelector('#status').textContent.includes('tải lại thất bại'));
    assert.equal(await owner.locator('#seed').isDisabled(),true);
    assert.equal(await owner.locator('#save').isDisabled(),true);
    assert.equal(await owner.locator('#reload').isDisabled(),false);
   }finally{
-   await owner.unroute(seedUrl,interceptSeed);
-   await owner.unroute(planningUrl,failRefresh);
+   // These are the only routes on the owner page. Drain all active handlers
+   // before restoring normal network traffic. Do not ignore handler errors.
+   await owner.unrouteAll({behavior:'wait'});
   }
-  await owner.locator('#reload').click();
+  const reloadButton=owner.locator('#reload');
+  const reloadDiagnostics=()=>reloadButton.evaluate(button=>{
+   const rect=button.getBoundingClientRect(),style=getComputedStyle(button);
+   const x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+   const hit=document.elementFromPoint(x,y);
+   return {visibility:document.visibilityState,focused:document.hasFocus(),disabled:button.disabled,
+    display:style.display,visibilityStyle:style.visibility,scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior,
+    rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},viewport:{width:innerWidth,height:innerHeight},
+    scroll:{x:scrollX,y:scrollY},hit:hit?{tag:hit.tagName,id:hit.id}:null,
+    panelHidden:document.querySelector('#panel').hidden,status:document.querySelector('#status').textContent};
+  });
+  await owner.bringToFront();
+  assert.equal(await reloadButton.isVisible(),true);
+  assert.equal(await reloadButton.isEnabled(),true);
+  const beforeScroll=await reloadDiagnostics();
+  assert.equal(beforeScroll.scrollBehavior,'auto');
+  let manualReload;
+  try{
+   // Normal user-equivalent scrolling and clicking; keep all actionability
+   // checks active and use the existing Playwright timeouts.
+   await reloadButton.scrollIntoViewIfNeeded();
+   console.log('Legacy reload actionability before click: '+JSON.stringify(await reloadDiagnostics()));
+   [manualReload]=await Promise.all([
+    owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'),
+    reloadButton.click()
+   ]);
+  }catch(err){
+   console.error('Legacy reload actionability failure: '+JSON.stringify(await reloadDiagnostics()));
+   throw err;
+  }
+  assert.equal(manualReload.status(),200,await manualReload.text());
+  const recovered=await manualReload.json();
+  assert.equal(recovered.project_id,pid);
+  assert.equal(recovered.current.version,1);
   await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1')&&!document.querySelector('#save').disabled);
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
+  assert.equal(recovered.current.digest,data.current.digest);
+  console.log('Legacy seed HTTP 200; exactly one refresh HTTP 503; manual reload HTTP 200 and persisted Plan v1 digest verified');
   assert.equal(await owner.locator('#tasks tr').count(),4);
   const approval={version:1,digest:data.current.digest,requirements_version:req.version,requirements_digest:req.digest,confirmation:'APPROVE PROJECT PLAN'};
   assert.equal((await post(reviewer,rc,pp+'/approve',approval)).status(),400);
