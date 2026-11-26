@@ -300,6 +300,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    const failed=await post(owner,csrf,base+'coding',queueBody);
    assert.ok(failed.status()>=400);
   }finally{evidenceFixture('fault-off',pid,wp.id)}
+  // Run the complete recovery chain on an isolated snapshot before the live
+  // root UI workflow; do not replace or skip any existing assertions.
+  const recoveryHttp=JSON.parse(evidenceFixture('bound-recovery-http',pid,wp.id).toString());
+  const expectedRecovery=(kind,previous_status)=>({kind,previous_status,retry_http:202,rollback:true,model_calls:4,qa_http:201,completion_http:201,immutable_history:true});
+  assert.deepEqual(recoveryHttp,{root:expectedRecovery('root','cancelled'),dependent:expectedRecovery('dependent','interrupted'),recovered_root_prerequisite:true,upstream_stale:true});
+  console.log('Root and dependent recovery HTTP E2E verified: HTTP 202/201/201, rollback, four calls each, immutable history, recovered root prerequisite, upstream stale');
   await queueForm.locator('input[name=confirmation]').fill(queueBody.confirmation);
   await queueForm.locator('button[type=submit]').click();
   let boundJob;

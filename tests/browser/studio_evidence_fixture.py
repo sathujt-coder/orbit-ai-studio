@@ -251,6 +251,9 @@ def main():
             print(json.dumps(stale_dispatch_copy(c,pid,identifier)));return
         if action=='bound-retry-copy':
             print(json.dumps(bound_retry_copy(c,pid,identifier)));return
+        if action=='bound-recovery-http':
+            from bound_recovery_http import run
+            print(json.dumps(run(c,pid,identifier,dependency_snapshot)));return
         job=cf.detail(c,identifier)
         assert job['project_id']==pid and job['status']=='ready'
         assert job['proposal_a']['summary'].startswith('Synthetic coding fixture ')
