@@ -59,6 +59,15 @@ def lookup(c,pid,jid):
     if row and row['project_id']!=pid:raise ValueError('Coding binding project mismatch')
     return row
 
+def checked_job_package(c,pid,row):
+    # Legacy root jobs use the unchanged SG.6 contract. Dependent jobs
+    # must have a current pinned prerequisite receipt, never queue success.
+    snap=binding.source(c,pid,row['package_id'])
+    if snap['package']['depends_on']:
+        import dependency_queue
+        return dependency_queue.checked_package(c,pid,row)
+    return checked_package(c,pid,row['adoption_version'],row['package_id'],row['binding_digest'])
+
 def validate(c,pid,jid,qid):
     row=lookup(c,pid,jid)
     if not row:return None
@@ -66,7 +75,7 @@ def validate(c,pid,jid,qid):
     if row['queue_id']!=qid or q['coding_job_id']!=jid or q['kind']!='coding' or q['actor']!=row['actor'] or q['status']!='running':
         raise ValueError('Coding queue binding mismatch')
     pp.check_role(c,pid,row['actor'],'write')
-    snap=checked_package(c,pid,row['adoption_version'],row['package_id'],row['binding_digest'])
+    snap=checked_job_package(c,pid,row)
     job=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()
     if not job or job['spec']!=spec_for(snap) or pp.digest(job['spec'])!=row['spec_digest']:
         raise ValueError('Coding specification digest mismatch')
@@ -78,7 +87,7 @@ def evidence(c,pid,jid):
     result={k:row[k] for k in ('job_id','queue_id','adoption_version','package_id','binding_digest','spec_digest')}
     result['state']='STALE'
     try:
-        snap=checked_package(c,pid,row['adoption_version'],row['package_id'],row['binding_digest'])
+        snap=checked_job_package(c,pid,row)
         job=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()
         q=agent_queue.get(c,pid,row['queue_id'])
         if job and job['spec']==spec_for(snap) and pp.digest(job['spec'])==row['spec_digest'] and q['coding_job_id']==jid and q['kind']=='coding' and q['actor']==row['actor']:

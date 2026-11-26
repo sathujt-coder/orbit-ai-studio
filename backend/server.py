@@ -17,6 +17,7 @@ import studio_coding
 import studio_verification
 import engineering_contract
 import dependency_completion
+import dependency_queue
 import coding_factory
 import verification_factory
 import auth_store
@@ -144,6 +145,7 @@ def init_db():
         studio_verification.ensure_schema(c)
         engineering_contract.ensure_schema(c)
         dependency_completion.ensure_schema(c)
+        dependency_queue.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -203,6 +205,7 @@ def project_state(pid,actor=None):
                     workflow=studio_workflow.view(c,pid),
                     engineering=engineering_contract.view(c,pid),
                     dependency_completion=dependency_completion.view(c,pid),
+                    dependency_queue=dependency_queue.view(c,pid),
                     workflow_permissions=workflow_permissions(c,pid,actor),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
@@ -434,6 +437,18 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
         jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
+
+def enqueue_dependent_coding(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:_,spec=dependency_queue.request(c,pid,actor,body)
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,routing=ROUTING['fingerprint'])
+            dependency_queue.record(c,pid,actor,body,jid,task['id'],spec,now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],status='queued',production_release_authorized=False)
 
 def enqueue_bound_coding(pid,actor,body):
     with LOCK:
@@ -954,6 +969,9 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependent-coding',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_dependent_coding(pid,actor,body));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/completions/confirm',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=dependency_completion.record(c,pid,actor,body,now())

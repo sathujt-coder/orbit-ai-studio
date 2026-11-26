@@ -253,6 +253,18 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(savedCompletion.state,'COMPLETION_EVIDENCE_CONFIRMED');
   assert.equal(savedCompletion.receipt.selected,'B');
   assert.equal(savedCompletion.latest_version,1);
+  const dependentPath='/api/projects/'+pid+'/engineering/dependent-coding';
+  const verifyPackage=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='verify'&&p.depends_on.includes(wp.id));
+  assert.ok(verifyPackage);
+  const vb=await post(owner,csrf,base+'bind',{...bindingBody,package_id:verifyPackage.id});
+  assert.equal(vb.status(),201);
+  const verifyDigest=(await vb.json()).digest;
+  const dbdy={adoption_version:1,package_id:verifyPackage.id,binding_digest:verifyDigest,source_digest:'missing',confirmation:'QUEUE DEPENDENT WORK PACKAGE'};
+  assert.equal((await post(viewer,vc,dependentPath,dbdy)).status(),403);
+  assert.equal((await post(reviewer,rc,dependentPath,dbdy)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),dependentPath,dbdy)).status(),403);
+  assert.equal((await post(owner,csrf,dependentPath,dbdy)).status(),400);
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===verifyPackage.id).state,'BLOCK');
   assert.equal((await post(owner,csrf,completionPath,cbdy)).status(),400);
   evidenceFixture('reopen-check',pid,boundJob.job_id);
   evidenceFixture('report',pid,boundJob.job_id);
