@@ -4,6 +4,9 @@ A QA pass alone is insufficient. Explicit candidate-bound human completion
 is a development evidence receipt; later phases must integrate eligibility.
 """
 import json
+import os
+import sys
+import time
 import engineering_contract as ec
 import studio_verification as qa
 import project_planning as pp
@@ -24,6 +27,15 @@ def ensure_schema(c):
         REFERENCES studio_work_packages(project_id,adoption_version,package_id))""")
 
 def source(c,pid,jid):
+    started=time.monotonic()
+    try:return _source(c,pid,jid)
+    finally:
+        elapsed=time.monotonic()-started
+        if elapsed>=0.1 and os.getenv('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')=='1':
+            print('ORBIT dependency evidence timing elapsed_ms=%d'%(elapsed*1000),file=sys.stderr,flush=True)
+
+
+def _source(c,pid,jid):
     src=qa.source(c,pid,jid)
     # A prior completion is not a bypass for outstanding defects.
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engineering_defect_events'").fetchone():

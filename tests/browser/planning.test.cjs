@@ -659,16 +659,28 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.notEqual(dependentJob.job_id,boundJob.job_id);
   assert.notEqual(dependentJob.queue_id,boundJob.queue.id);
   const dependentState=()=>get(owner,'/api/projects/'+pid+'/state');
-  let dependentReady;
-  const dependentDeadline=Date.now()+30000;
-  while(Date.now()<dependentDeadline){
-   const state=await dependentState();
-   dependentReady=state.workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
-   if(dependentReady?.queue?.status==='succeeded')break;
-   if(['dead','cancelled','interrupted'].includes(dependentReady?.queue?.status))
-    assert.fail('Dependent coding queue failed: '+JSON.stringify(state.workflow.queue.tasks.find(q=>q.id===dependentJob.queue_id)));
+  // Queue polling must not repeatedly run the expensive project evidence graph.
+  // The existing 30-second dispatch deadline and every final evidence assertion remain.
+  const dispatchStart=performance.now();
+  const dependentDeadline=dispatchStart+30000;
+  const dispatchSamples=[];
+  let dependentQueue;
+  while(performance.now()<dependentDeadline){
+   const started=performance.now();
+   const queue=await get(owner,'/api/projects/'+pid+'/queue');
+   dependentQueue=queue.tasks.find(q=>q.id===dependentJob.queue_id);
+   assert.ok(dependentQueue,'Dependent queue identity missing');
+   assert.equal(dependentQueue.coding_job_id,dependentJob.job_id);
+   dispatchSamples.push({elapsed_ms:Math.round(performance.now()-dispatchStart),
+    request_ms:Math.round(performance.now()-started),status:dependentQueue.status,coding_status:dependentQueue.coding_status});
+   if(dependentQueue.status==='succeeded')break;
+   if(['dead','cancelled','interrupted'].includes(dependentQueue.status))break;
    await new Promise(r=>setTimeout(r,200));
   }
+  console.log('Dependent dispatch lifecycle: '+JSON.stringify(dispatchSamples));
+  assert.equal(dependentQueue?.status,'succeeded',JSON.stringify(dispatchSamples));
+  assert.ok(performance.now()<=dependentDeadline,'Dependent dispatch exceeded original 30-second budget');
+  const dependentReady=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
   assert.equal(dependentReady?.queue?.status,'succeeded',JSON.stringify(dependentReady));
   assert.equal(dependentReady.status,'ready');
   assert.equal(dependentReady.planning_binding,'BOUND');

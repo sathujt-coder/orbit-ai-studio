@@ -63,7 +63,34 @@ MODEL_LANES = model_provider.load_config(os.environ)
 PROVIDER = model_provider.mode(MODEL_LANES)
 MODEL_A = MODEL_LANES['A'].model
 MODEL_B = MODEL_LANES['B'].model
-LOCK = threading.RLock()
+class TimedDispatchLock:
+    """Preserve RLock semantics; bounded diagnostic output only in browser fixture."""
+    def __init__(self):
+        self.lock=threading.RLock()
+        self.local=threading.local()
+    def acquire(self,*args,**kwargs):
+        start=time.monotonic()
+        acquired=self.lock.acquire(*args,**kwargs)
+        if acquired:
+            stack=getattr(self.local,'stack',[])
+            stack.append((start,time.monotonic()))
+            self.local.stack=stack
+        return acquired
+    def release(self):
+        start,held=self.local.stack.pop()
+        self.lock.release()
+        end=time.monotonic()
+        if not self.local.stack and os.getenv('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')=='1':
+            wait,hold=held-start,end-held
+            if wait>=0.1 or hold>=0.1:
+                print('ORBIT lock timing wait_ms=%d hold_ms=%d'%(wait*1000,hold*1000),file=sys.stderr,flush=True)
+    def __enter__(self):
+        self.acquire()
+        return self
+    def __exit__(self,*exc):
+        self.release()
+
+LOCK = TimedDispatchLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 CONCURRENCY = concurrency_control.Limiter()
 BUDGET_GUARD = inference_guard.Guard()
@@ -602,6 +629,7 @@ def run_cross_review(pid,identifier,lanes):
         agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
 
 def dispatch_one():
+    dispatch_started=time.monotonic()
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
         # Stop before claiming so paused dispatch does not inflate attempts or history.
@@ -613,6 +641,7 @@ def dispatch_one():
     if not row:return False
     pid,identifier=row['project_id'],row['id']
     stage=None
+    claimed=time.monotonic()
     try:
         with LOCK,db() as c:
             row=agent_queue.get(c,pid,identifier)
@@ -692,6 +721,9 @@ def dispatch_one():
                 if row['kind']=='requirements' and isinstance(error,RuntimeError) and str(error).startswith('requirements_provider_failure:'):
                     reason=str(error)[:160]
                 agent_queue.fail(c,current,reason,int(time.time()),now())
+    finally:
+        if os.getenv('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')=='1':
+            print('ORBIT dispatch timing kind=%s claim_ms=%d total_ms=%d'%(row['kind'],(claimed-dispatch_started)*1000,(time.monotonic()-dispatch_started)*1000),file=sys.stderr,flush=True)
     return True
 
 def queue_worker():
