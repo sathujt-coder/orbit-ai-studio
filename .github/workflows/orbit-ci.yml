@@ -179,7 +179,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.3e — Engineering system acceptance
+    name: P6.3f — Engineering system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -198,11 +198,11 @@ jobs:
           evidence_valid = isinstance(evidence_sha256, str) and bool(re.fullmatch(r'[0-9a-f]{64}', evidence_sha256)) and checks['requirements-browser'] == 'success'
           passed = set(actual) == set(required) and all(value == 'success' for value in checks.values()) and evidence_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.3e', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.3f', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.3f' if passed else None,
+                        development_next_phase='P6.3g' if passed else None,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
                         automatic_adoption=False, automatic_dispatch=False,

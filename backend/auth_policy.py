@@ -14,6 +14,8 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/candidate-selections/('+ID+r')',path)
+        if m:return (m[1],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/workspace',path)
         if m:return (m[1],'read')
         if path in ('/api/provider/monitoring','/api/provider/monitoring/history'):return ('','provider_monitoring_read')
@@ -34,6 +36,8 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/candidate-selections/confirm',path)
+        if m:return (m[1],'approve')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/workspace',path)
         if m:return (m[1],'manage')
         if path=='/api/provider/protection/stop':return ('','provider_protection_stop')
