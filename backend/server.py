@@ -17,6 +17,7 @@ import studio_coding
 import bound_recovery
 import studio_verification
 import engineering_contract
+import project_git_workspace
 import dependency_completion
 import dependency_queue
 import wbs_dependency_extension
@@ -837,6 +838,10 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/workspace',path):
+                actor,pid,_=self.auth_context
+                with LOCK:data=project_git_workspace.view(DB_PATH,pid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:
@@ -1005,6 +1010,12 @@ class Handler(SimpleHTTPRequestHandler):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=dependency_completion.record(c,pid,actor,body,now())
                 self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/workspace',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    if not auth_store.authorize(c,actor,pid,'manage'):raise PermissionError('Owner required')
+                    data=project_git_workspace.initialize(DB_PATH,pid,body)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/contracts/confirm',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=engineering_contract.confirm(c,pid,actor,body,now())

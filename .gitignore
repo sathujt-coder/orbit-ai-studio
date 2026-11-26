@@ -17,3 +17,5 @@ deployment/tls/
 deployment/proxy-tls/
 
 offline-inference-report.json
+
+*.git-workspaces/
