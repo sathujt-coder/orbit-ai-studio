@@ -147,6 +147,23 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(adopted.current.version,1);assert.equal(adopted.execution_authorized,false);
   assert.equal(adopted.current.bundle_digest,ab.bundle_digest);
   assert.equal((await post(owner,csrf,pp+'/wbs/adopt',{...ab,expected_version:1})).status(),400);
+  const extensionPath='/api/projects/'+pid+'/engineering/dependency-extension/approve';
+  const roots=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).filter(p=>p.kind==='implement');
+  assert.equal(roots.length,2);
+  const edge={source:roots[0].id,target:roots[1].id,rationale:'Implementation dependency reviewed by the synthetic human fixture.'};
+  const ext={adoption_version:1,adoption_digest:adopted.current.digest,expected_version:0,edges:[edge],confirmation:'APPROVE WBS DEPENDENCY EXTENSION'};
+  assert.equal((await post(dev,dc,extensionPath,ext)).status(),403);
+  assert.equal((await post(viewer,vc,extensionPath,ext)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),extensionPath,ext)).status(),403);
+  assert.equal((await post(owner,csrf,extensionPath,{...ext,adoption_digest:'bad'})).status(),400);
+  assert.equal((await post(owner,csrf,extensionPath,{...ext,edges:[edge,{...edge,source:edge.target,target:edge.source}]})).status(),400);
+  const approvedExt=await post(reviewer,rc,extensionPath,ext);assert.equal(approvedExt.status(),201);
+  const extReceipt=await approvedExt.json();assert.equal(extReceipt.version,1);assert.equal(extReceipt.execution_authorized,false);
+  assert.equal(extReceipt.snapshot.effective_graph.critical_path_minutes,45);
+  assert.equal(extReceipt.snapshot.review_scope,'original_bundle_only');
+  assert.equal((await post(owner,csrf,extensionPath,ext)).status(),400);
+  assert.deepEqual((await get(owner,pp)).wbs.adoption.current,adopted.current);
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_extension.state,'APPROVED_ADVISORY');
   // SG.6f: use the actual adopted bundle, not a mocked adoption view.
   const wp=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='implement'&&p.depends_on.length===0);
   assert.ok(wp);
@@ -314,6 +331,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const staleAdoption=(await get(owner,pp)).wbs.adoption;
   assert.equal(staleAdoption.stale,true);assert.equal(staleAdoption.current.digest,adopted.current.digest);
   assert.equal((await get(owner,pp)).wbs.cross_review.quality_ready,false);
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_extension.state,'STALE');
   const staleStudio=(await get(owner,'/api/projects/'+pid+'/state')).workflow;
   assert.equal(staleStudio.coding_jobs.find(j=>j.job_id===boundJob.job_id).planning_binding,'STALE');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===wp.id).state,'STALE');

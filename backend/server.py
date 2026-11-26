@@ -18,6 +18,7 @@ import studio_verification
 import engineering_contract
 import dependency_completion
 import dependency_queue
+import wbs_dependency_extension
 import coding_factory
 import verification_factory
 import auth_store
@@ -146,6 +147,7 @@ def init_db():
         engineering_contract.ensure_schema(c)
         dependency_completion.ensure_schema(c)
         dependency_queue.ensure_schema(c)
+        wbs_dependency_extension.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -206,6 +208,7 @@ def project_state(pid,actor=None):
                     engineering=engineering_contract.view(c,pid),
                     dependency_completion=dependency_completion.view(c,pid),
                     dependency_queue=dependency_queue.view(c,pid),
+                    dependency_extension=wbs_dependency_extension.view(c,pid),
                     workflow_permissions=workflow_permissions(c,pid,actor),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
@@ -969,6 +972,10 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependency-extension/approve',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=wbs_dependency_extension.approve(c,pid,actor,body,now())
+                self.send_json(201,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependent-coding',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_dependent_coding(pid,actor,body));return

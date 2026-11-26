@@ -38,6 +38,8 @@ def scope(c,method,path,query='',body=None):
         if path in ('/api/provider/settings','/api/provider/probe','/api/provider/models','/api/provider/rates'):
             return ('','provider_'+path.rsplit('/',1)[1])
         if path=='/api/projects':return ('','create')
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/dependency-extension/approve',path)
+        if m:return (m.group(1),'approve')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/dependent-coding',path)
         if m:return (m.group(1),'write')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/(?:contracts|completions)/confirm',path)
