@@ -16,6 +16,9 @@ import studio_verification as qa
 import agent_queue as aq
 from web_candidate_selection import compare
 from test_verification_factory import FakeDocker,PY_IMG
+import isolated_workspace_snapshot as snapshots
+import project_git_workspace as ws
+import engineering_quality as quality
 
 def dependency_snapshot(c,pid):
     """Exact persisted row digests, not merely counts; exclude HTTP access audit."""
@@ -31,6 +34,10 @@ def dependency_snapshot(c,pid):
         'bound_retry_audit':"SELECT * FROM auth_audit WHERE project_id=? AND action='studio_bound_retry' ORDER BY rowid",
         'retry_receipts':'SELECT * FROM studio_bound_retries WHERE project_id=? ORDER BY rowid',
         'defect_events':'SELECT * FROM engineering_defect_events WHERE project_id=? ORDER BY rowid',
+        'candidate_selections':'SELECT * FROM engineering_candidate_selections WHERE project_id=? ORDER BY rowid',
+        'sandbox_receipts':'SELECT * FROM engineering_sandbox_runs WHERE project_id=? ORDER BY rowid',
+        'draft_exports':'SELECT * FROM engineering_draft_exports WHERE project_id=? ORDER BY rowid',
+        'draft_results':'SELECT * FROM engineering_draft_results WHERE project_id=? ORDER BY rowid',
         'usage':'SELECT * FROM ai_usage WHERE project_id=? ORDER BY rowid',
         'completions':'SELECT * FROM engineering_completions WHERE project_id=? ORDER BY rowid',
         'qa':'SELECT * FROM studio_qa_receipts WHERE project_id=? ORDER BY rowid',
@@ -43,12 +50,50 @@ def dependency_snapshot(c,pid):
     assert not c.execute('PRAGMA foreign_key_check').fetchall()
     return out
 
+def copy_dependency_fixture(c,destination,pid,root_job):
+    """Check original and copied dependency evidence with production gates."""
+    import dependency_completion as dc
+    source_db=snapshots.database_path(c)
+    expected_quality=quality.view(c,source_db,pid,root_job)
+    assert expected_quality['state']=='QUALITY_EVIDENCE_PASS'
+    expected_completion=dc.source(c,pid,root_job)
+    before=snapshots.copy_project_snapshot(c,destination,pid,dependency_snapshot)
+    from contextlib import closing
+    with closing(sqlite3.connect(destination)) as isolated:
+        isolated.row_factory=sqlite3.Row
+        assert quality.view(isolated,destination,pid,root_job)==expected_quality
+        assert dc.source(isolated,pid,root_job)==expected_completion
+        # Exercise production fail-closed behavior on this disposable copy.
+        repo=ws.location(destination,pid)
+        missing=repo.with_name(repo.name+'.temporarily-missing')
+        repo.rename(missing)
+        try:
+            assert quality.view(isolated,destination,pid,root_job)['state']=='BLOCK'
+            try:dc.source(isolated,pid,root_job)
+            except ValueError:pass
+            else:raise AssertionError('Missing workspace accepted')
+        finally:missing.rename(repo)
+        head=repo/'HEAD'
+        raw=head.read_bytes()
+        try:
+            head.write_bytes(b'invalid fixture ref')
+            assert quality.view(isolated,destination,pid,root_job)['state']=='BLOCK'
+            try:dc.source(isolated,pid,root_job)
+            except ValueError:pass
+            else:raise AssertionError('Tampered workspace accepted')
+        finally:head.write_bytes(raw)
+        assert snapshots.capture(isolated,pid,dependency_snapshot)==before
+        assert dc.source(isolated,pid,root_job)==expected_completion
+    assert snapshots.capture(c,pid,dependency_snapshot)==before
+    print('Coherent isolated SQLite/Git snapshot: exact evidence, missing/tampered workspace blocked',file=sys.stderr)
+    return before
+
+
 def stale_dispatch_copy(c,pid,root_job):
     """Use a coherent SQLite backup, no live-worker control or source mocks.
     Run the actual dispatcher in two isolated copies; prohibit model transport.
     """
     import tempfile
-    from contextlib import closing
     from unittest.mock import patch
     import dependency_queue as dq
     import dependency_completion as dc
@@ -63,12 +108,12 @@ def stale_dispatch_copy(c,pid,root_job):
     body=dict(adoption_version=item['adoption_version'],package_id=item['package_id'],
         binding_digest=source['binding_digest'],source_digest=item['source_digest'],confirmation='QUEUE DEPENDENT WORK PACKAGE')
     assert next(x for x in dc.view(c,pid)['items'] if x['job_id']==root_job)['state']=='COMPLETION_EVIDENCE_CONFIRMED'
-    original=dependency_snapshot(c,pid)
+    original=snapshots.capture(c,pid,dependency_snapshot)
     results=[]
     for scenario in ('before_claim','after_routing'):
         with tempfile.TemporaryDirectory(prefix='orbit-dependent-dispatch-') as temp:
             copy_path=Path(temp)/'isolated.sqlite'
-            with closing(sqlite3.connect(copy_path)) as dest:c.backup(dest)
+            assert copy_dependency_fixture(c,copy_path,pid,root_job)==original
             with patch.object(server,'DB_PATH',copy_path),aq.dispatcher_lock(copy_path):
                 # Other concurrent browser tests may have queued work in the
                 # backup. Defer it in the COPY only; never touch the live DB.
@@ -120,13 +165,12 @@ def stale_dispatch_copy(c,pid,root_job):
                 except ValueError as err:assert 'Bound coding retry' in str(err)
                 else:raise AssertionError('Unexpected automatic retry path')
                 results.append(dict(scenario=scenario,queue='dead',reason='coding_source_invalid',job='failed',model_calls=0,pin_unchanged=True))
-    assert dependency_snapshot(c,pid)==original
+    assert snapshots.capture(c,pid,dependency_snapshot)==original
     return results
 
 def bound_retry_copy(c,pid,root_job):
     """Exercise real recovery on a disposable copy of the approved A->B fixture."""
     import tempfile
-    from contextlib import closing
     from unittest.mock import patch
     import bound_recovery as br
     import dependency_queue as dq
@@ -138,10 +182,10 @@ def bound_retry_copy(c,pid,root_job):
     assert [x['job_id'] for x in src['prerequisites']]==[root_job]
     body=dict(adoption_version=item['adoption_version'],package_id=item['package_id'],binding_digest=src['binding_digest'],
         source_digest=item['source_digest'],confirmation='QUEUE DEPENDENT WORK PACKAGE')
-    original=dependency_snapshot(c,pid)
+    original=snapshots.capture(c,pid,dependency_snapshot)
     with tempfile.TemporaryDirectory(prefix='orbit-bound-retry-') as temp:
         copy_path=Path(temp)/'isolated.sqlite'
-        with closing(sqlite3.connect(copy_path)) as dest:c.backup(dest)
+        assert copy_dependency_fixture(c,copy_path,pid,root_job)==original
         with patch.object(server,'DB_PATH',copy_path),aq.dispatcher_lock(copy_path):
             with server.db() as db:
                 db.execute("UPDATE agent_queue SET available_at=253402300799 WHERE project_id<>? AND status='queued'",(pid,))
@@ -214,7 +258,7 @@ def bound_retry_copy(c,pid,root_job):
                 assert cf.detail(db,old['job_id'])==saved_job
                 assert dict(aq.get(db,pid,old['queue_id']))==saved_queue
                 assert not db.execute('PRAGMA foreign_key_check').fetchall()
-    assert dependency_snapshot(c,pid)==original
+    assert snapshots.capture(c,pid,dependency_snapshot)==original
     return dict(interrupted=True,rollback=True,immutable_history=True,duplicate_rejected=True,dispatcher='succeeded',qa='BLOCK',model_calls=4)
 
 def main():
