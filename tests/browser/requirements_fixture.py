@@ -15,8 +15,17 @@ import model_provider as mp
 import requirements_discovery as discovery
 import planning_discovery as planning
 import planning_review as review
+import coding_factory as coding
 
 def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
+    # Coding prompts are text, unlike planning JSON packets. Fixed trusted
+    # source only; no actual model transport or generated-code execution.
+    if schema is coding.PROPOSAL_SCHEMA or schema is coding.REVIEW_SCHEMA:
+        if schema is coding.PROPOSAL_SCHEMA:
+            result=dict(summary='Synthetic coding fixture '+lane.lane,files=[dict(path='main.py',content='def add(a,b):\n    return a+b\n'),dict(path='test_main.py',content='import unittest\nfrom main import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2,3),5)\n')])
+        else:result=dict(verdict='APPROVE',score=90,feedback='Synthetic fixture review only')
+        if usage_observer:usage_observer(dict(input_tokens=20,output_tokens=30,total_tokens=50,coverage='complete',source='fixture',status='ok',elapsed_ms=1))
+        return json.dumps(result)
     data=json.loads(user)
     idea=data.get('idea','')
     if schema is discovery.RESEARCH_SCHEMA:

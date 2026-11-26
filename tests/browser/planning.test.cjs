@@ -145,6 +145,57 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(adopted.current.version,1);assert.equal(adopted.execution_authorized,false);
   assert.equal(adopted.current.bundle_digest,ab.bundle_digest);
   assert.equal((await post(owner,csrf,pp+'/wbs/adopt',{...ab,expected_version:1})).status(),400);
+  // SG.6f: use the actual adopted bundle, not a mocked adoption view.
+  const wp=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='implement'&&p.depends_on.length===0);
+  assert.ok(wp);
+  const base='/api/projects/'+pid+'/studio/work-packages/';
+  const bindingBody={adoption_version:adopted.current.version,bundle_digest:adopted.current.bundle_digest,package_id:wp.id,confirmation:'BIND ADOPTED WORK PACKAGE'};
+  for(const [page,token] of [[viewer,vc],[reviewer,rc]])assert.equal((await post(page,token,base+'bind',bindingBody)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),base+'bind',bindingBody)).status(),403);
+  assert.equal((await post(owner,csrf,base+'bind',{...bindingBody,bundle_digest:'wrong'})).status(),400);
+  const studio=await browser.newPage();const sc=await login(studio);
+  await studio.addInitScript(({origin,id})=>{if(location.origin===origin)localStorage.setItem('orbit-project',id)},{origin:ORIGIN,id:pid});
+  await studio.goto(ORIGIN+'/');
+  await studio.locator('#studioLine[data-project-id="'+pid+'"][data-ready="true"]').waitFor();
+  const card=studio.locator('#studioWorkflow [data-package-id="'+wp.id+'"]');
+  const bindForm=card.locator('form[data-studio-action="bind"]');
+  await bindForm.locator('input[name=confirmation]').fill('wrong');
+  await bindForm.locator('button[type=submit]').click();
+  assert.match(await bindForm.locator('[role=status]').textContent(),/không khớp/);
+  await bindForm.locator('input[name=confirmation]').fill(bindingBody.confirmation);
+  await bindForm.locator('button[type=submit]').click();
+  const queueForm=card.locator('form[data-studio-action="coding"]');
+  await queueForm.waitFor({timeout:15000});
+  let unified=(await get(owner,'/api/projects/'+pid+'/state')).workflow;
+  const bound=unified.work_packages.bindings.find(b=>b.package_id===wp.id);
+  assert.equal(bound.state,'BOUND');
+  const queueBody={adoption_version:1,package_id:wp.id,binding_digest:bound.digest,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
+  assert.equal((await post(viewer,vc,base+'coding',queueBody)).status(),403);
+  assert.equal((await post(reviewer,rc,base+'coding',queueBody)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),base+'coding',queueBody)).status(),403);
+  assert.equal((await post(owner,csrf,base+'coding',{...queueBody,binding_digest:'wrong'})).status(),400);
+  await queueForm.locator('input[name=confirmation]').fill(queueBody.confirmation);
+  await queueForm.locator('button[type=submit]').click();
+  let boundJob;
+  const deadline=Date.now()+30000;
+  while(Date.now()<deadline){
+   unified=(await get(owner,'/api/projects/'+pid+'/state')).workflow;
+   boundJob=unified.coding_jobs.find(j=>j.source_binding?.package_id===wp.id);
+   if(boundJob?.queue?.status==='succeeded')break;
+   if(boundJob?.queue?.status==='dead')assert.fail('Bound coding queue failed');
+   await new Promise(r=>setTimeout(r,200));
+  }
+  assert.equal(boundJob?.queue?.status,'succeeded');
+  assert.equal(boundJob.planning_binding,'BOUND');
+  assert.equal(boundJob.qa.state,'BLOCK'); // No sandbox report from synthetic inference.
+  assert.equal((await post(owner,csrf,base+'coding',queueBody)).status(),400);
+  const qaBody={job_id:boundJob.job_id,source_digest:'missing',expected_version:0,criteria:[],confirmation:'ATTEST WORK PACKAGE QA'};
+  assert.equal((await post(dev,dc,base+'qa',qaBody)).status(),403);
+  assert.equal((await post(viewer,vc,base+'qa',qaBody)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),base+'qa',qaBody)).status(),403);
+  assert.equal((await post(reviewer,rc,base+'qa',qaBody)).status(),400);
+  assert.equal((await post(viewer,vc,'/api/projects/'+other+'/studio/work-packages/bind',bindingBody)).status(),403);
+  await studio.close();
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);
@@ -185,6 +236,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const staleAdoption=(await get(owner,pp)).wbs.adoption;
   assert.equal(staleAdoption.stale,true);assert.equal(staleAdoption.current.digest,adopted.current.digest);
   assert.equal((await get(owner,pp)).wbs.cross_review.quality_ready,false);
+  const staleStudio=(await get(owner,'/api/projects/'+pid+'/state')).workflow;
+  assert.equal(staleStudio.coding_jobs.find(j=>j.job_id===boundJob.job_id).planning_binding,'STALE');
+  assert.equal((await post(owner,csrf,base+'coding',queueBody)).status(),400);
   assert.equal((await get(owner,pp)).wbs.sprint_schedule.analysis,null);
   assert.equal(await owner.locator('#seed').isDisabled(),true);
   assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
