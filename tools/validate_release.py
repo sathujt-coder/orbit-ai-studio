@@ -15,6 +15,7 @@ REQUIRED = (
     'tools/planning_fixture.py', 'tools/wbs_benchmark.py', 'tests/test_wbs_benchmark.py',
     'docs/planning-readiness-baseline.json',
     'tests/test_planning_readiness_baseline.py',
+    'docs/studio-readiness-baseline.json', 'tests/test_studio_readiness_baseline.py',
     '.github/workflows/wbs-model-benchmark.yml',
     '.github/workflows/orbit-ci.yml',
 )

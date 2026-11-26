@@ -48,3 +48,6 @@ KPI gợi ý: Activation, D1/D7/D30 retention, crash-free sessions, conversion, 
 
 ## P6.2j.1 — Development sequencing and production boundary
 The [Planning readiness checkpoint](PROJECT_PLANNING.md#p62j1--system-completion--model-readiness-separation) records historical System PASS, Model BLOCK and Production BLOCK separately. P6.3 and later workflow development may proceed after system acceptance without model optimization. This is not permission to merge a draft, execute rejected planning candidates, adopt automatically, deploy or release. All existing technical and owner sign-off requirements, real AI acceptance and model qualification remain mandatory for applicable production readiness. Revalidate evidence against the intended release candidate and configured models.
+
+## SG.7 — Studio readiness boundary
+See [Studio Generator final acceptance](STUDIO_GENERATOR.md#sg7--final-studio-acceptance-pending-current-ci) and [historical evidence](studio-readiness-baseline.json). Current SG.7 System PASS permits P6.3 development only under P6.2j.1. No draft merge, production release, automatic adoption or execution authorization. Real AI and model qualification, actual bound sandbox execution, dependency completion and applicable release gates remain separate; synthetic QA fixture evidence is not production verification.

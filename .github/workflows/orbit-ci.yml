@@ -156,28 +156,30 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: SG.6f.1 — Studio Generator system acceptance
-    needs: [validate, web-e2e, requirements-browser]
+    name: SG.7 — Final Studio system acceptance
+    needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Record Studio-specific acceptance
         env:
-          REGRESSION_RESULT: ${{ needs.validate.result }}
-          GENERAL_BROWSER_RESULT: ${{ needs.web-e2e.result }}
-          PLANNING_BROWSER_RESULT: ${{ needs.requirements-browser.result }}
+          STUDIO_NEEDS: ${{ toJSON(needs) }}
         run: |
           python - <<'PY'
           import json, os
-          checks = dict(regression=os.environ['REGRESSION_RESULT'],
-                        general_browser=os.environ['GENERAL_BROWSER_RESULT'],
-                        planning_browser=os.environ['PLANNING_BROWSER_RESULT'])
-          passed = all(value == 'success' for value in checks.values())
+          required = ["validate","web-e2e","requirements-browser","web-typescript-docker","react-offline-smoke","p4-fixture-e2e","tls-container-smoke","proxy-container-smoke","stress-fixture","planning-system-acceptance"]
+          actual = json.loads(os.environ['STUDIO_NEEDS'])
+          checks = {key: actual.get(key, {}).get('result', 'missing') for key in required}
+          passed = set(actual) == set(required) and all(value == 'success' for value in checks.values())
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='SG.6f.1', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='SG.7', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='SG.7' if passed else None,
+                        development_next_phase='P6.3' if passed else None,
+                        development_scope='development_only',
+                        transport='isolated_synthetic_inference_and_sandbox_fixture',
+                        automatic_adoption=False, automatic_dispatch=False,
+                        execution_authorized=False, merge_authorized=False,
                         real_ai_acceptance='NOT_ASSESSED', model_qualification='NOT_ASSESSED',
                         production_release_authorized=False)
           with open('studio-system-acceptance.json','x') as out:
