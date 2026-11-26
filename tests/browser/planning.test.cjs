@@ -291,14 +291,51 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();
-  await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
+  // Observe the exact mutation HTTP response; a UI timeout alone hides its cause.
+  await owner.bringToFront();
+  await owner.waitForFunction(()=>!document.querySelector('#seed').disabled&&!document.querySelector('#reload').disabled);
+  let seedCommitted=false;
+  const planningUrl=ORIGIN+pp;
+  const seedUrl=planningUrl+'/seed';
+  const interceptSeed=async route=>{
+   const response=await route.fetch();
+   seedCommitted=response.ok();
+   await route.fulfill({response});
+  };
+  const failRefresh=async route=>{
+   if(seedCommitted&&route.request().method()==='GET'){
+    await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic reload failure after committed seed'})});
+   }else await route.continue();
+  };
+  await owner.route(planningUrl,failRefresh);
+  await owner.route(seedUrl,interceptSeed);
+  try{
+   const [seedResponse]=await Promise.all([
+    owner.waitForResponse(r=>r.url()===seedUrl&&r.request().method()==='POST'),
+    owner.locator('#seed').click()
+   ]);
+   assert.equal(seedResponse.status(),200,await seedResponse.text());
+   assert.equal((await seedResponse.json()).current.version,1);
+   await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
+   await owner.waitForFunction(()=>document.querySelector('#status').textContent.includes('tải lại thất bại'));
+   assert.equal(await owner.locator('#seed').isDisabled(),true);
+   assert.equal(await owner.locator('#save').isDisabled(),true);
+   assert.equal(await owner.locator('#reload').isDisabled(),false);
+  }finally{
+   await owner.unroute(seedUrl,interceptSeed);
+   await owner.unroute(planningUrl,failRefresh);
+  }
+  await owner.locator('#reload').click();
+  await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1')&&!document.querySelector('#save').disabled);
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(await owner.locator('#tasks tr').count(),4);
   const approval={version:1,digest:data.current.digest,requirements_version:req.version,requirements_digest:req.digest,confirmation:'APPROVE PROJECT PLAN'};
   assert.equal((await post(reviewer,rc,pp+'/approve',approval)).status(),400);
   let estimated=data.current.document;for(const task of estimated.tasks)task.effort_minutes=15;
   await owner.locator('#document').fill(JSON.stringify(estimated));
-  await owner.locator('#save').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v2'));
+  const [saveResponse]=await Promise.all([owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='POST'),owner.locator('#save').click()]);
+  assert.equal(saveResponse.status(),200,await saveResponse.text());
+  await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v2')&&!document.querySelector('#reload').disabled);
   data=await get(owner,pp);assert.equal(data.analysis.total_effort_minutes,60);
   assert.equal(data.analysis.dependency_graph.critical_path_minutes,30);
   assert.equal(data.analysis.dependency_graph.critical_nodes.length,4);
@@ -312,7 +349,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   await reviewer.goto(ORIGIN+'/planning.html');await reviewer.locator('#panel').waitFor({state:'visible'});
   await reviewer.locator('#project').selectOption(pid);await reviewer.waitForFunction(()=>!document.querySelector('#approve').disabled);
   assert.equal(await reviewer.locator('#save').isDisabled(),true);
-  await reviewer.locator('#approve').click();await reviewer.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('READY'));
+  const [approveResponse]=await Promise.all([reviewer.waitForResponse(r=>r.url()===planningUrl+'/approve'&&r.request().method()==='POST'),reviewer.locator('#approve').click()]);
+  assert.equal(approveResponse.status(),200,await approveResponse.text());
+  await reviewer.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('READY')&&!document.querySelector('#reload').disabled);
   assert.equal((await get(owner,pp)).execution_ready,true);
   assert.equal((await post(owner,csrf,rp,{expected_version:1,document:doc})).status(),200);
   await owner.locator('#reload').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('STALE'));

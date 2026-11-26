@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',current=null,busy=false,sequence=0,baseline='',wbsEditVersion=null,graphSnapshot=null,estimateBinding=null,scheduleBinding=null;
+let csrf='',current=null,busy=false,sequence=0,refreshRequired=false,baseline='',wbsEditVersion=null,graphSnapshot=null,estimateBinding=null,scheduleBinding=null;
 const base=pid=>'/api/projects/'+encodeURIComponent(pid)+'/planning';
 async function api(path,body){
  const response=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-ORBIT-UI':'1','X-ORBIT-CSRF':csrf},...(body?{body:JSON.stringify(body)}:{})});
@@ -9,7 +9,7 @@ async function api(path,body){
  const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data;
 }
 function buttons(){
- const d=current,canEdit=!!(d?.input_ready&&d?.can_write&&!d.stale);
+ const d=current,canEdit=!!(!refreshRequired&&d?.input_ready&&d?.can_write&&!d.stale);
  $('seed').disabled=busy||!d?.input_ready||!d?.can_write;
  $('discover').disabled=busy||!d?.input_ready||!d?.can_write||['queued','running','paused','waiting_approval'].includes(d?.discovery?.status);
  $('save').disabled=busy||!canEdit||!d?.current;
@@ -30,6 +30,10 @@ function buttons(){
  $('adopt-bundle').disabled=busy||!d?.can_approve||!w?.adoption?.can_adopt;
  const blank=w?.current?.document.deliverables.every(d=>d.packages.every(p=>['action','output','evidence'].every(k=>p[k]===null)));
  $('wbs-decompose').disabled=busy||!d?.can_write||!blank||w?.stale||w.current.version!==wbsEditVersion||['queued','running','paused','waiting_approval'].includes(d?.decomposition?.status);
+ if(refreshRequired){
+  for(const id of ['seed','discover','save','approve','wbs-seed','wbs-save','wbs-decompose','estimate-save','schedule-save','review-run','adopt-bundle'])$(id).disabled=true;
+  for(const id of ['document','scope-contract','wbs-document','estimate-document','schedule-document'])$(id).readOnly=true;
+ }
 }
 function renderGraph(){
  const d=graphSnapshot,kind=$('graph-source').value;
@@ -86,7 +90,7 @@ function renderEstimates(w,reset){
 async function saveEstimates(){
  if(busy||$('estimate-save').disabled||!current)return;
  const d=current,w=d.wbs,p=w.current,e=w.resource_estimates;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   d.wbs=await api(base(d.project_id)+'/wbs/estimates',{expected_version:e.current?.version||0,wbs_version:p.version,wbs_digest:p.digest,document:JSON.parse($('estimate-document').value),confirmation:'SAVE RESOURCE ESTIMATES'});
   renderWbs(d.wbs,true);graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph();
@@ -103,7 +107,7 @@ function renderSchedule(w,reset){
 async function saveSchedule(){
  if(busy||$('schedule-save').disabled||!current)return;
  const d=current,s=d.wbs.sprint_schedule;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   d.wbs=await api(base(d.project_id)+'/wbs/schedule',{...s.source,expected_version:s.current?.version||0,document:JSON.parse($('schedule-document').value),confirmation:'SAVE SPRINT SCHEDULE'});
   renderWbs(d.wbs,true);graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph();
@@ -119,7 +123,7 @@ async function runReview(){
  if(busy||$('review-run').disabled||!current)return;
  if(!confirm('Chạy hai lượt review Ollama local?'))return;
  const d=current;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   await api(base(d.project_id)+'/wbs/review',{bundle_digest:d.wbs.cross_review.bundle_digest,confirmation:'RUN PM CROSS REVIEW'});
   const fresh=await api(base(d.project_id));d.wbs=fresh.wbs;renderReview(d.wbs);
@@ -135,7 +139,7 @@ async function adoptBundle(){
  if(busy||$('adopt-bundle').disabled||!current)return;
  if(!confirm('Phê duyệt và tiếp nhận đúng bundle hiện tại? Không tự thực thi.'))return;
  const d=current,a=d.wbs.adoption;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   d.wbs=await api(base(d.project_id)+'/wbs/adopt',{...a.binding,expected_version:a.current?.version||0,confirmation:'APPROVE AND ADOPT PLANNING BUNDLE'});
   renderWbs(d.wbs,true);
@@ -164,7 +168,7 @@ async function mutateWbs(seed){
  const d=current,w=d.wbs,lane=seed?$('wbs-lane').value:w.current?.lane,source=w?.sources?.[lane];
  if(!source||(!seed&&w.current.version!==wbsEditVersion))return;
  if(seed&&!confirm('Tạo WBS nháp mới từ PM-'+lane+'?'))return;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   const body={...source,expected_version:w.current?.version||0,...(seed?{confirmation:'CREATE WBS DRAFT'}:{document:JSON.parse($('wbs-document').value)})};
   d.wbs=await api(base(d.project_id)+'/wbs'+(seed?'/seed':''),body);renderWbs(d.wbs,true);if(graphSnapshot){graphSnapshot={...graphSnapshot,wbs:d.wbs};renderGraph()}
@@ -182,7 +186,7 @@ async function decompose(){
  if(busy||!current||$('wbs-decompose').disabled)return;
  const d=current,p=d.wbs.current;
  if(!confirm('Chạy model Ollama local để phân rã WBS? Không tự ghi đè WBS.'))return;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{
   await api(base(d.project_id)+'/wbs/decompose',{wbs_version:p.version,wbs_digest:p.digest,confirmation:'RUN AI DECOMPOSITION'});
   const fresh=await api(base(d.project_id));d.decomposition=fresh.decomposition;renderDecomposition(d.decomposition);
@@ -190,15 +194,15 @@ async function decompose(){
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
 async function refreshDiscovery(){
- if(busy||!current||document.hidden)return;
- const d=current;
- try{const fresh=await api(base(d.project_id));if(!busy&&current===d){d.discovery=fresh.discovery;d.wbs=fresh.wbs;d.decomposition=fresh.decomposition;graphSnapshot=fresh;renderGraph();renderDiscovery(d);renderWbs(d.wbs);renderDecomposition(d.decomposition);buttons()}}catch(e){if(current===d)$('discovery-status').textContent=e.message}
+ if(busy||refreshRequired||!current||document.hidden)return;
+ const d=current,seq=sequence;
+ try{const fresh=await api(base(d.project_id));if(!busy&&current===d&&seq===sequence){d.discovery=fresh.discovery;d.wbs=fresh.wbs;d.decomposition=fresh.decomposition;graphSnapshot=fresh;renderGraph();renderDiscovery(d);renderWbs(d.wbs);renderDecomposition(d.decomposition);buttons()}}catch(e){if(!busy&&current===d&&seq===sequence)$('discovery-status').textContent=e.message}
 }
 async function discover(){
  if(busy||!current?.input_ready||!current.can_write)return;
  const d=current,src=d.requirements_input;
  if(!confirm('Chạy hai model AI độc lập? Có thể phát sinh chi phí theo cấu hình provider.'))return;
- busy=true;buttons();$('project').disabled=true;$('reload').disabled=true;
+ busy=true;++sequence;buttons();$('project').disabled=true;$('reload').disabled=true;
  try{const raw=$('scope-contract').value.trim();const scope=raw?JSON.parse(raw):null;
   await api(base(d.project_id)+'/discover',{requirements_version:src.version,requirements_digest:src.digest,confirmation:'RUN AI PLANNING',...(raw?{scope_contract:scope}:{})});
   const fresh=await api(base(d.project_id));d.discovery=fresh.discovery;d.wbs=fresh.wbs;renderDiscovery(d);renderWbs(d.wbs);
@@ -208,21 +212,36 @@ async function discover(){
 async function reload(){
  const seq=++sequence,pid=$('project').value;current=null;graphSnapshot=null;renderGraph();$('panel').hidden=true;buttons();
  if(!pid)return;
- try{const d=await api(base(pid));if(seq===sequence)render(d)}catch(e){if(seq===sequence)$('status').textContent=e.message}
+ try{const d=await api(base(pid));if(seq===sequence){refreshRequired=false;render(d)}}catch(e){if(seq===sequence)$('status').textContent=e.message}
 }
 async function mutate(kind){
- if(busy||!current)return;
+ if(busy||refreshRequired||!current)return;
  const d=current,src=d.requirements_input,p=d.current;
  if(!src)return;
  if(kind==='approve'&&$('document').value!==baseline){$('status').textContent='Có chỉnh sửa chưa lưu; lưu phiên bản trước khi duyệt.';return}
  if(kind==='seed'&&!confirm('Tạo phiên bản WBS nháp mới từ PRD hiện tại? Nội dung chưa lưu sẽ mất.'))return;
  if(kind==='approve'&&!confirm('Phê duyệt đúng phiên bản kế hoạch đã lưu?'))return;
- busy=true;$('project').disabled=true;$('reload').disabled=true;buttons();
+ busy=true;++sequence;$('project').disabled=true;$('reload').disabled=true;buttons();
  try{
   const source={requirements_version:src.version,requirements_digest:src.digest};
   const payload=kind==='approve'?{...source,version:p.version,digest:p.digest,confirmation:'APPROVE PROJECT PLAN'}:
     {...source,expected_version:p?.version||0,...(kind==='seed'?{confirmation:'CREATE PLAN DRAFT'}:{document:JSON.parse($('document').value)})};
-  await api(base(d.project_id)+(kind==='save'?'':'/'+kind),payload);await reload();
+  // The mutation response is the authoritative persisted legacy plan.
+  // Do not discard it while refreshing the other planning projections.
+  const seq=sequence;
+  const saved=await api(base(d.project_id)+(kind==='save'?'':'/'+kind),payload);
+  if(seq!==sequence||current!==d)return;
+  if(saved.project_id!==d.project_id||!saved.current)throw Error('Phản hồi kế hoạch không hợp lệ');
+  render({...d,...saved});
+  try{
+   const fresh=await api(base(d.project_id));
+   if(seq!==sequence||$('project').value!==d.project_id)return;
+   if(fresh.project_id!==d.project_id||!fresh.current||fresh.current.version<saved.current.version)
+    throw Error('Phiên bản kế hoạch tải lại không hợp lệ');
+   render(fresh);
+  }catch(err){
+   if(seq===sequence){refreshRequired=true;$('status').textContent='Đã lưu kế hoạch v'+saved.current.version+'; tải lại thất bại: '+err.message;}
+  }
  }catch(e){$('status').textContent=e.message}
  finally{busy=false;$('project').disabled=false;$('reload').disabled=false;buttons()}
 }
