@@ -23,3 +23,5 @@ test('workspace scopes evidence to selected role and project snapshot',()=>{
 });
 
 test('handoff evidence is bound to current project',()=>{const {workspaceModel}=require('../../web/studio-line.js');const stages=[{id:'pm'}],state={project:{id:'p'},tasks:[],handoff:{project_id:'q',roles:[{stage_id:'pm',output:{status:'reviewed_output'}}]}};assert.equal(workspaceModel(stages,state,'pm').handoff,null);state.handoff.project_id='p';assert.equal(workspaceModel(stages,state,'pm').handoff.output.status,'reviewed_output')});
+
+test('workflow controls fail closed for absent or foreign permissions',()=>{const {workflowControls}=require('../../web/studio-line.js');const state={project:{id:'p'},workflow:{project_id:'p'},workflow_permissions:{project_id:'q',can_write:true,can_approve:true}};assert.deepEqual(workflowControls(state),{write:false,approve:false});state.workflow_permissions.project_id='p';assert.deepEqual(workflowControls(state),{write:true,approve:true});state.workflow.project_id='q';assert.deepEqual(workflowControls(state),{write:false,approve:false})});

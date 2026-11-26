@@ -178,11 +178,18 @@ function render(holder,stages,tasks,selected,onSelect,handoff,activity,quality){
  }
  if(hadFocus&&focusId){const target=Array.from(holder.querySelectorAll('[data-role-id]')).find(n=>n.dataset.roleId===focusId);target?.querySelector('button')?.focus({preventScroll:true})}
 }
-function renderWorkflow(holder,state){
- holder.replaceChildren();delete holder.dataset.projectId;
+function workflowControls(state){
+ const w=state?.workflow,p=state?.workflow_permissions;
+ if(!w||w.project_id!==state.project?.id||p?.project_id!==w.project_id)return {write:false,approve:false};
+ return {write:p.can_write===true,approve:p.can_approve===true};
+}
+function renderWorkflow(holder,state,submit){
  const w=state.workflow;
+ const rights=workflowControls(state),signature=JSON.stringify([w,rights]);
+ if(holder.dataset.projectId===state.project?.id&&holder.dataset.signature===signature)return;
+ holder.replaceChildren();delete holder.dataset.projectId;delete holder.dataset.signature;
  if(!w||w.project_id!==state.project?.id){holder.append(el('p','line-notice','Unified workflow chưa xác minh'));return}
- holder.dataset.projectId=w.project_id;
+ holder.dataset.projectId=w.project_id;holder.dataset.signature=signature;
  holder.append(el('h2','','Unified Workflow · Artifact Contracts'));
  const panel=(title,status,lines,href)=>{const p=el('section','role-workspace-panel');p.append(el('h3','',title),el('p','line-notice',status));for(const line of lines)p.append(el('p','role-evidence-item',line));if(href){const a=el('a','line-link','Mở workflow ↗');a.href=href;p.append(a)}holder.append(p);return p};
  const revision=w.requirements.revision;
@@ -193,12 +200,68 @@ function renderWorkflow(holder,state){
  if(w.planning.reason)lines.push(w.planning.reason);
  panel('Planning Adoption',w.planning.state,lines,'/planning.html').dataset.workflowStage='planning';
  const packages=w.work_packages;
- panel('Work Package Contracts',packages?packages.bindings.length+' recorded bindings':'NOT_RECORDED',packages?[...packages.available.map(p=>p.id+' · '+p.kind),...packages.bindings.map(b=>b.package_id+' · '+b.state+' · '+b.digest)]:[]).dataset.workflowStage='work-packages';
+ const wp=panel('Work Package Contracts',packages?packages.bindings.length+' recorded bindings':'NOT_RECORDED',[]);wp.dataset.workflowStage='work-packages';
+ const action=(parent,kind,token,build)=>{
+  const form=el('form','studio-action');form.dataset.studioAction=kind;
+  const label=el('label','','Nhập chính xác: '+token);
+  const confirm=el('input','');confirm.required=true;confirm.autocomplete='off';confirm.name='confirmation';label.append(confirm);
+  const button=el('button','btn primary','Xác nhận '+kind);button.type='submit';
+  const status=el('p','line-notice');status.setAttribute('role','status');
+  form.append(label,button,status);
+  form.addEventListener('submit',async ev=>{
+   ev.preventDefault();
+   if(confirm.value!==token){status.textContent='Xác nhận không khớp.';return}
+   if(!form.isConnected||holder.dataset.signature!==signature||holder.dataset.projectId!==w.project_id){status.textContent='Nguồn đã thay đổi.';return}
+   button.disabled=true;
+   try{await submit(w.project_id,kind,{...build(),confirmation:token},signature);status.textContent='Đã gửi yêu cầu.'}
+   catch(err){status.textContent=err.message;button.disabled=false}
+  });
+  parent.append(form);return form;
+ };
+ for(const p of packages?.available||[]){
+  const card=el('article','studio-contract');card.dataset.packageId=p.id;card.append(el('h4','',p.id+' · '+p.kind));
+  const bound=packages.bindings.find(b=>b.package_id===p.id&&b.adoption_version===a?.version);
+  card.append(el('p','line-notice',bound?bound.state+' · '+bound.digest:'NOT_BOUND'));
+  if(rights.write&&submit&&w.planning.state==='adopted'&&!w.planning.stale&&a&&!bound)
+   action(card,'bind','BIND ADOPTED WORK PACKAGE',()=>({adoption_version:a.version,bundle_digest:a.bundle_digest,package_id:p.id}));
+  if(rights.write&&submit&&bound?.state==='BOUND'&&w.planning.state==='adopted'&&!w.planning.stale&&p.kind==='implement'&&Array.isArray(p.depends_on)&&p.depends_on.length===0&&!w.coding_jobs.some(j=>j.source_binding?.package_id===p.id&&j.source_binding?.adoption_version===a.version))
+   action(card,'coding','QUEUE ADOPTED WORK PACKAGE',()=>({adoption_version:a.version,package_id:p.id,binding_digest:bound.digest}));
+  if(p.kind!=='implement'||p.depends_on?.length)card.append(el('p','line-notice','Coding bị chặn: loại package hoặc dependency chưa đủ điều kiện.'));
+  wp.append(card);
+ }
+ for(const b of packages?.bindings||[])wp.append(el('p','role-evidence-item',b.package_id+' · v'+b.adoption_version+' · '+b.state+' · '+b.digest));
+ if(!rights.write)wp.append(el('p','line-notice','Chỉ đọc: cần quyền write.'));
+
  const jobs=w.coding_jobs.flatMap(j=>['Job '+j.job_id+' · '+j.status+' · '+j.planning_binding+(j.source_binding?' · '+j.source_binding.package_id+' · '+j.source_binding.binding_digest:''),'Queue '+(j.queue?.id||'unlinked')+' · '+(j.queue?.status||'unknown'), 'Manifest '+(j.manifest_digest||'unknown'), 'Verification '+(j.verification?j.verification.id+' · '+j.verification.state+' · '+j.verification.digest:'NOT_RECORDED'), 'QA '+(j.qa?j.qa.state+' · '+(j.qa.source_digest||'unavailable'):'NOT_RECORDED')]);
- panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection').dataset.workflowStage='coding';
+ const coding=panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection');coding.dataset.workflowStage='coding';
+ const qaPanel=panel('QA/QC · Criterion Attestation',rights.approve?'Human approval required':'Chỉ đọc: cần quyền approve',[]);qaPanel.dataset.workflowStage='qa';
+ for(const j of w.coding_jobs){
+  if(j.verification?.candidates)for(const lane of ['A','B']){const v=j.verification.candidates[lane];if(v)coding.append(el('p','role-evidence-item','DEV-'+lane+' · '+v.digest+' · tests '+v.test_count))}
+  const qa=j.qa;if(!qa)continue;
+  const card=el('article','studio-contract');card.dataset.qaJob=j.job_id;card.append(el('h4','',j.job_id+' · '+qa.state));
+  if(qa.receipt)card.append(el('p','line-notice','Receipt v'+qa.receipt.version+' · '+qa.receipt.digest));
+  const fields=[];
+  for(const criterion of qa.source?.acceptance||[]){
+   const section=el('section','studio-criterion');section.append(el('p','',criterion.id+' · '+criterion.text));
+   const saved=qa.receipt?.criteria?.find(x=>x.id===criterion.id);if(saved)section.append(el('p','line-notice',saved.verdict+' · '+saved.rationale));
+   if(rights.approve&&submit&&qa.source_digest){
+    const select=el('select','');select.setAttribute('aria-label','Verdict '+criterion.id);
+    for(const value of ['', 'PASS','BLOCK']){const opt=el('option','',value||'Chọn verdict');opt.value=value;select.append(opt)}select.required=true;
+    const rationale=el('textarea','');rationale.setAttribute('aria-label','Rationale '+criterion.id);rationale.required=true;rationale.minLength=20;rationale.maxLength=1200;
+    section.append(select,rationale);fields.push({id:criterion.id,select,rationale});
+   }
+   card.append(section);
+  }
+  if(fields.length&&j.planning_binding==='BOUND'&&qa.source_digest){
+   const form=action(card,'qa','ATTEST WORK PACKAGE QA',()=>({job_id:j.job_id,source_digest:qa.source_digest,expected_version:qa.latest_version,criteria:fields.map(x=>({id:x.id,verdict:x.select.value,rationale:x.rationale.value}))}));
+   for(const x of fields){x.select.closest('section').remove();const section=el('section','studio-criterion');section.append(el('p','',x.id+' · '+qa.source.acceptance.find(c=>c.id===x.id).text),x.select,x.rationale);form.prepend(section)}
+  }
+  qaPanel.append(card);
+ }
+
  panel('Agent Queue',w.queue.truncated?'Recent 100 · truncated':'Recent jobs',w.queue.tasks.map(q=>q.kind+' · '+q.id+' · '+q.status+' · dependency '+(q.dependency_id||'none'))).dataset.workflowStage='queue';
  holder.append(el('p','line-notice','Next checkpoint: '+w.next_checkpoint+' · Execution NOT AUTHORIZED. Không tự dispatch hoặc release.'));
 }
 root.StudioLine={model,render,workspaceModel,renderWorkspace,renderWorkflow};
-if(typeof module!=='undefined')module.exports={model,workspaceModel};
+if(typeof module!=='undefined')module.exports={model,workspaceModel,workflowControls};
 })(typeof window!=='undefined'?window:globalThis);

@@ -276,3 +276,21 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   assert.deepEqual(errors,[]);
  }finally{await browser.close()}
 });
+
+test('Studio orchestration controls fail closed without adopted source and preserve project permission scope',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:390,height:844}});const csrf=await login(page);
+  const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'SG6e '+Date.now(),idea:'Studio orchestration permission and missing source fixture',platform:'Web app'}});
+  assert.equal(created.status(),201);const pid=(await created.json()).project_id;
+  await page.goto(ORIGIN+'/');await page.locator('#projectSide [data-pid="'+pid+'"]').click();
+  await page.locator('#studioWorkflow[data-project-id="'+pid+'"]').waitFor();
+  const state=await (await page.request.get(ORIGIN+'/api/projects/'+pid+'/state')).json();
+  assert.deepEqual(state.workflow_permissions,{project_id:pid,can_write:true,can_approve:true});
+  assert.equal(await page.locator('#studioWorkflow [data-workflow-stage="qa"]').count(),1);
+  assert.equal(await page.locator('#studioWorkflow form[data-studio-action]').count(),0);
+  const response=await page.request.post(ORIGIN+'/api/projects/'+pid+'/studio/work-packages/bind',{headers:headers(csrf),data:{adoption_version:1,bundle_digest:'bad',package_id:'missing',confirmation:'BIND ADOPTED WORK PACKAGE'}});
+  assert.ok(response.status()>=400);
+  assert.equal(await page.locator('#studioWorkflow').evaluate(e=>e.scrollWidth<=e.clientWidth+2),true);
+ }finally{await browser.close()}
+});

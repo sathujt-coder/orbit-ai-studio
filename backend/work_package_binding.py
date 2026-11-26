@@ -70,5 +70,5 @@ def view(c,pid,w=None):
         row=w['adoption']['current']
         for d in row['snapshot']['bundle']['wbs']['document']['deliverables']:
             for p in d['packages']:
-                available.append(dict(id=p['id'],kind=p['kind'],deliverable_id=d['id']))
+                available.append(dict(id=p['id'],kind=p['kind'],deliverable_id=d['id'],depends_on=p['depends_on']))
     return dict(bindings=result,available=available,execution_authorized=False)

@@ -67,6 +67,7 @@ def attest(c,pid,actor,body,stamp):
 def view(c,pid,jid):
     out=dict(state='BLOCK',source=None,source_digest=None,receipt=None,dependency_completed=False,execution_authorized=False,production_release_authorized=False)
     row=c.execute('SELECT * FROM studio_qa_receipts WHERE project_id=? AND job_id=? ORDER BY version DESC LIMIT 1',(pid,jid)).fetchone()
+    out['latest_version']=row['version'] if row else 0
     try:
         src=source(c,pid,jid)
         out.update(state='AWAITING_HUMAN_QA',source=src,source_digest=pp.digest(src))

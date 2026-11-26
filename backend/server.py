@@ -171,7 +171,12 @@ def log(c,pid,sid,aid,level,message):
 def rows(c,query,params=()): return [dict(r) for r in c.execute(query,params).fetchall()]
 
 
-def project_state(pid):
+def workflow_permissions(c,pid,actor):
+    row=c.execute("SELECT m.role FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id WHERE m.project_id=? AND m.user_id=? AND u.active=1",(pid,actor)).fetchone() if actor else None
+    permissions=auth_store.ROLES.get(row[0],set()) if row else set()
+    return dict(project_id=pid,can_write='write' in permissions,can_approve='approve' in permissions)
+
+def project_state(pid,actor=None):
     with LOCK, db() as c:
         p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Không tìm thấy dự án')
@@ -192,6 +197,7 @@ def project_state(pid):
                     handoff=handoff,activity=studio_activity.view(c,pid,STAGES,handoff),
                     quality=studio_quality.view(c,pid,STAGES,tasks,handoff),
                     workflow=studio_workflow.view(c,pid),
+                    workflow_permissions=workflow_permissions(c,pid,actor),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 
@@ -907,7 +913,7 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: data=github_bridge.exports(c,path.split('/')[3])
                 self.send_json(200,{'exports':data});return
             if path.startswith('/api/projects/') and path.endswith('/state'):
-                self.send_json(200,project_state(path.split('/')[3])); return
+                self.send_json(200,project_state(path.split('/')[3],self.auth_context[0])); return
             if path.startswith('/api/artifacts/'):
                 aid=path.split('/')[3]
                 with LOCK,db() as c: a=c.execute('SELECT * FROM artifacts WHERE id=?',(aid,)).fetchone()
