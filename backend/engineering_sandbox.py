@@ -207,7 +207,7 @@ def run(c,db_path,pid,jid,actor,expected_digest,expected_version,confirmation,
     for lane in report['lanes'].values():
         for step in lane.get('steps',[]):
             step.pop('output',None)
-    snapshot=dict(source=context,git=git,report=report,actor=actor,scope='development_evidence_only',**FLAGS)
+    snapshot=dict(source=context,git=git,report=report,actor=actor,replay_version=expected_version+1,scope='development_evidence_only',**FLAGS)
     digest=pp.digest(snapshot)
     c.execute('BEGIN IMMEDIATE')
     try:
@@ -235,7 +235,8 @@ def view(c,db_path,pid,jid):
         result.update(latest_version=row['version'],state='STALE')
         try:
             snapshot=json.loads(row['snapshot'])
-            if pp.digest(snapshot)!=row['digest'] or snapshot['actor']!=row['actor']:
+            if (pp.digest(snapshot)!=row['digest'] or snapshot['actor']!=row['actor']
+                or snapshot.get('replay_version',row['version'])!=row['version']):
                 raise ValueError('Invalid sandbox receipt')
         except (ValueError,TypeError,KeyError):
             result['state']='INVALID';return result

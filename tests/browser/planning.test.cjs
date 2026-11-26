@@ -511,11 +511,69 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    receipt:sandboxSaved.receipt,execution_authorized:false,merge_authorized:false,production_release_authorized:false
   }),{flag:'wx'});
   console.log('P6.3g real Git/Docker A/B replay, selection binding and immutable receipt PASS');
+  // P6.3i: actual HTTP defect lifecycle and explicit real Docker retest.
+  const qualityPath=engineering+'/quality/'+boundJob.job_id;
+  const defectPath=qualityPath+'/defects';
+  const qualityBefore=await get(owner,qualityPath);
+  assert.equal(qualityBefore.state,'QUALITY_EVIDENCE_PASS');
+  const defectId='fixture-defect-1';
+  const makeDefect=(action,version,source,extra={})=>({action,defect_id:defectId,expected_version:version,
+   source_digest:source,rationale:'Explicit fixture defect review and evidence for engineering quality.',
+   confirmation:'DEFECT '+action+' '+boundJob.job_id+' '+defectId,...extra});
+  const openDefect=makeDefect('OPEN',0,qualityBefore.source_digest,{severity:'HIGH',category:'TEST',title:'Review fixture test coverage'});
+  assert.equal((await post(dev,dc,defectPath,openDefect)).status(),403);
+  assert.equal((await post(reviewer,'0'.repeat(64),defectPath,openDefect)).status(),403);
+  assert.equal((await post(reviewer,rc,defectPath,{...openDefect,source_digest:'wrong'})).status(),400);
+  const opened=await post(reviewer,rc,defectPath,openDefect);
+  assert.equal(opened.status(),201,await opened.text());
+  const openReceipt=await opened.json();
+  assert.equal((await post(reviewer,rc,defectPath,openDefect)).status(),400);
+  const qualityOpen=await get(owner,qualityPath);
+  assert.equal(qualityOpen.state,'BLOCK');
+  assert.equal(qualityOpen.counts.OPEN,1);
+  const readyDefect=makeDefect('READY_FOR_RETEST',1,qualityOpen.source_digest);
+  assert.equal((await post(viewer,vc,defectPath,readyDefect)).status(),403);
+  const readyResponse=await post(dev,dc,defectPath,readyDefect);
+  assert.equal(readyResponse.status(),201,await readyResponse.text());
+  const readyReceipt=await readyResponse.json();
+  const qualityReady=await get(owner,qualityPath);
+  assert.equal(qualityReady.counts.READY_FOR_RETEST,1);
+  assert.equal((await post(reviewer,rc,defectPath,makeDefect('CLOSED',2,qualityReady.source_digest))).status(),400);
+  const retestArgs=args.slice();
+  retestArgs[retestArgs.indexOf('--expected-version')+1]='1';
+  const retest=JSON.parse(execFileSync('python',retestArgs,{stdio:'pipe',timeout:120000}).toString());
+  assert.equal(retest.gate,'PASS');
+  assert.notEqual(retest.digest,replay.digest);
+  const qualityRetest=await get(owner,qualityPath);
+  const closeDefect=makeDefect('CLOSED',2,qualityRetest.source_digest);
+  assert.equal((await post(dev,dc,defectPath,closeDefect)).status(),403);
+  const closed=await post(reviewer,rc,defectPath,closeDefect);
+  assert.equal(closed.status(),201,await closed.text());
+  const closeReceipt=await closed.json();
+  const qualityClosed=await get(owner,qualityPath);
+  assert.equal(qualityClosed.state,'QUALITY_EVIDENCE_PASS');
+  assert.deepEqual(qualityClosed.counts,{OPEN:0,READY_FOR_RETEST:0,CLOSED:1});
+  assert.deepEqual(qualityClosed.defects[0].history.map(x=>x.digest),[openReceipt.digest,readyReceipt.digest,closeReceipt.digest]);
+  assert.equal(qualityClosed.execution_authorized,false);
+  const finalSandbox=await get(owner,sandboxPath);
+  assert.equal(finalSandbox.receipt.digest,retest.digest);
+  const sandboxEvidenceFile=process.env.ORBIT_ENGINEERING_SANDBOX_EVIDENCE;
+  const sandboxEvidence=JSON.parse(fsSandbox.readFileSync(sandboxEvidenceFile));
+  const initialSandbox=sandboxEvidence.receipt;
+  sandboxEvidence.receipt=finalSandbox.receipt;
+  fsSandbox.writeFileSync(sandboxEvidenceFile,JSON.stringify(sandboxEvidence));
+  fsSandbox.writeFileSync(process.env.ORBIT_ENGINEERING_QUALITY_EVIDENCE,JSON.stringify({
+   schema:'orbit.engineering-quality-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+   run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_inference_real_git_docker_http',
+   project_id:pid,job_id:boundJob.job_id,initial_sandbox:initialSandbox,retest_sandbox_digest:retest.digest,
+   prior_close_blocked:true,quality:qualityClosed
+  }),{flag:'wx'});
+  console.log('P6.3i defect lifecycle, fresh real Docker retest and quality evidence PASS');
   const draftPath=engineering+'/draft-pr/'+boundJob.job_id;
   assert.equal((await get(owner,draftPath)).state,'AWAITING_EXPLICIT_DRAFT');
   assert.equal((await post(owner,csrf,draftPath,{})).status(),404);
   const draftEvidence=JSON.parse(execFileSync('python',['tests/browser/engineering_draft_browser.py',pid,boundJob.job_id],{stdio:'pipe',timeout:60000}).toString());
-  assert.equal(draftEvidence.plan.source.sandbox_digest,replay.digest);
+  assert.equal(draftEvidence.plan.source.sandbox_digest,retest.digest);
   assert.equal(draftEvidence.plan.source.git.commit,replay.git.B.commit);
   assert.equal(draftEvidence.receipt.remote.draft,true);
   const draftSaved=await get(owner,draftPath);
@@ -693,6 +751,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await completionState()).state,'STALE');
   assert.equal((await get(owner,sandboxPath)).state,'STALE');
   assert.equal((await get(owner,draftPath)).state,'STALE_OR_INVALID');
+  assert.equal((await get(owner,qualityPath)).state,'BLOCK');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
   assert.equal(staleDependent.planning_binding,'STALE');

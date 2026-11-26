@@ -18,7 +18,7 @@ def main():
     require(all(d[k] is False for k in ('execution_authorized','merge_authorized','production_release_authorized')))
     require(hexstr(d['base_commit'],40) and hexstr(d['selection_digest'],64))
     r=d['receipt']
-    require(r['gate']=='PASS' and r['selected']=='B' and r['version']==1 and r['selection_digest']==d['selection_digest'] and hexstr(r['digest'],64))
+    require(r['gate']=='PASS' and r['selected']=='B' and r['version']==2 and r['selection_digest']==d['selection_digest'] and hexstr(r['digest'],64))
     require(set(r['git'])==set(r['lanes'])=={'A','B'} and r['git']['A']['commit']!=r['git']['B']['commit'])
     for lane in ('A','B'):
         g=r['git'][lane];v=r['lanes'][lane]

@@ -21,6 +21,7 @@ import project_git_workspace
 import engineering_candidate_selection
 import engineering_sandbox
 import engineering_draft
+import engineering_quality
 import dependency_completion
 import dependency_queue
 import wbs_dependency_extension
@@ -844,6 +845,11 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/quality/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_quality.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/draft-pr/[A-Za-z0-9_-]{1,100}',path):
                 actor,pid,_=self.auth_context
                 jid=path.rsplit('/',1)[1]
@@ -1027,6 +1033,11 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependent-coding',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_dependent_coding(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/quality/[A-Za-z0-9_-]{1,100}/defects',path):
+                actor,pid,_=self.auth_context
+                jid=path.split('/')[-2]
+                with LOCK,db() as c:data=engineering_quality.record(c,DB_PATH,pid,jid,actor,body,now())
+                self.send_json(201,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/candidate-selections/confirm',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=engineering_candidate_selection.record(c,DB_PATH,pid,actor,body,now())

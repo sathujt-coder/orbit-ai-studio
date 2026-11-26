@@ -25,6 +25,8 @@ BASE=re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z')
 
 
 def ensure_schema(c):
+    import engineering_quality
+    engineering_quality.ensure_schema(c)
     c.execute("""CREATE TABLE IF NOT EXISTS engineering_draft_exports(
         project_id TEXT NOT NULL REFERENCES projects(id),
         job_id TEXT NOT NULL REFERENCES studio_coding_bindings(job_id),
@@ -50,7 +52,8 @@ def current(c,db,pid,jid):
     if not row:raise ValueError('Current passing Git sandbox receipt required')
     snapshot=json.loads(row['snapshot'])
     if (pp.digest(snapshot)!=row['digest'] or snapshot['source']!=context
-        or snapshot['actor']!=row['actor'] or snapshot['report']['gate']!='PASS'):
+        or snapshot['actor']!=row['actor'] or snapshot.get('replay_version',row['version'])!=row['version']
+        or snapshot['report']['gate']!='PASS'):
         raise ValueError('Stale or invalid Git sandbox receipt')
     sb.validate(context,job,decision,snapshot['report'],snapshot['git'])
     lane=context['selected']
@@ -169,6 +172,8 @@ def publish(c,db,pid,jid,actor,repo,base,base_sha,expected_digest,confirmation,c
     c.execute('BEGIN IMMEDIATE')
     try:
         pp.check_role(c,pid,actor,'publish')
+        from engineering_quality import guard_no_open_defects
+        guard_no_open_defects(c,pid,jid,db)
         plan,files=prepare(c,db,pid,jid,repo,base,base_sha)
         if pp.digest(plan)!=expected_digest:raise ValueError('Stale export plan')
         if (c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='code_pr_exports'").fetchone()
@@ -187,6 +192,7 @@ def publish(c,db,pid,jid,actor,repo,base,base_sha,expected_digest,confirmation,c
     c.execute('BEGIN IMMEDIATE')
     def recheck():
         pp.check_role(c,pid,actor,'publish')
+        guard_no_open_defects(c,pid,jid,db)
         if prepare(c,db,pid,jid,repo,base,base_sha)!=(plan,files):
             raise ValueError('Draft source changed during publication')
     try:
