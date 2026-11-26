@@ -8,7 +8,9 @@ const {login,headers,ORIGIN}=require('./auth-helper.cjs');
 test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',async()=>{
  const browser=await chromium.launch({headless:true});
  try{
-  const owner=await browser.newPage(),reviewer=await browser.newPage(),viewer=await browser.newPage(),dev=await browser.newPage();
+  // Explicit context owns the session independently of a single page.
+  const ownerContext=await browser.newContext();
+  const owner=await ownerContext.newPage(),reviewer=await browser.newPage(),viewer=await browser.newPage(),dev=await browser.newPage();
   const csrf=await login(owner),rc=await login(reviewer,'ci-reviewer'),vc=await login(viewer,'ci-viewer'),dc=await login(dev,'ci-developer');
   const post=(page,token,path,data)=>page.request.post(ORIGIN+path,{headers:headers(token),data});
   const get=async(page,path)=>{const r=await page.request.get(ORIGIN+path);assert.equal(r.status(),200);return r.json()};
@@ -526,9 +528,49 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();
-  // Observe the exact mutation HTTP response; a UI timeout alone hides its cause.
+  // Compare renderer cadence before retiring the long-lived page and after
+  // creating a fresh page. The 1s sampling window is diagnostic, not a retry
+  // or increase of any existing assertion/action timeout.
+  const sampleFrames=page=>page.evaluate(()=>new Promise(resolve=>{
+   const samples=[];const started=performance.now();let raf,timer,done=false;
+   const finish=()=>{
+    if(done)return;done=true;clearTimeout(timer);cancelAnimationFrame(raf);
+    const stable=samples.some((s,i)=>i>0&&s.rect!==null&&JSON.stringify(s.rect)===JSON.stringify(samples[i-1].rect));
+    resolve({visibility:document.visibilityState,focused:document.hasFocus(),elapsedMs:Math.round(performance.now()-started),frameCount:samples.length,stable,samples});
+   };
+   const tick=stamp=>{
+    const b=document.querySelector('#reload'),r=b?.getBoundingClientRect();
+    samples.push({stamp:Math.round(stamp*100)/100,rect:r?[r.x,r.y,r.width,r.height]:null,disabled:b?.disabled??null});
+    if(samples.length===6)finish();else raf=requestAnimationFrame(tick);
+   };
+   timer=setTimeout(finish,1000);raf=requestAnimationFrame(tick);
+  }));
   await owner.bringToFront();
-  await owner.waitForFunction(()=>!document.querySelector('#seed').disabled&&!document.querySelector('#reload').disabled);
+  console.log('Retiring planning renderer: '+JSON.stringify(await sampleFrames(owner)));
+  // No re-login, new project, database reset, or injected application state.
+  const beforeIsolation=await get(owner,pp);
+  assert.equal(beforeIsolation.current,null);
+  assert.equal(beforeIsolation.wbs.adoption.current.digest,adopted.current.digest);
+  await owner.close();
+  const legacy=await ownerContext.newPage();
+  assert.equal(legacy.context(),ownerContext);
+  const sameSession=await get(legacy,'/api/auth/session');
+  assert.equal(sameSession.csrf_token,csrf);
+  assert.equal(sameSession.user,'ci-browser-user');
+  legacy.on('dialog',d=>d.accept());
+  await legacy.bringToFront();
+  await legacy.goto(ORIGIN+'/planning.html');
+  await legacy.locator('#panel').waitFor({state:'visible'});
+  await legacy.locator('#project').selectOption(pid);
+  await legacy.waitForFunction(id=>document.querySelector('#project').value===id&&!document.querySelector('#panel').hidden&&!document.querySelector('#seed').disabled&&!document.querySelector('#reload').disabled,pid);
+  const afterIsolation=await get(legacy,pp);
+  assert.equal(afterIsolation.current,null);
+  assert.deepEqual(afterIsolation.wbs.adoption.current,beforeIsolation.wbs.adoption.current);
+  assert.equal(afterIsolation.requirements_input.digest,beforeIsolation.requirements_input.digest);
+  const freshFrames=await sampleFrames(legacy);
+  console.log('Fresh planning renderer and unchanged session/project: '+JSON.stringify(freshFrames));
+  assert.ok(freshFrames.frameCount>=2&&freshFrames.stable,'Fresh renderer must produce consecutive stable frames');
+  // Observe the exact mutation HTTP response; a UI timeout alone hides its cause.
   let seedCommitted=false,failedRefreshCount=0;
   const planningUrl=ORIGIN+pp;
   const seedUrl=planningUrl+'/seed';
@@ -545,29 +587,29 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic reload failure after committed seed'})});
    }else await route.continue();
   };
-  await owner.route(planningUrl,failRefresh);
-  await owner.route(seedUrl,interceptSeed,{times:1});
+  await legacy.route(planningUrl,failRefresh);
+  await legacy.route(seedUrl,interceptSeed,{times:1});
   try{
    const [seedResponse,failedRefresh]=await Promise.all([
-    owner.waitForResponse(r=>r.url()===seedUrl&&r.request().method()==='POST'),
-    owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'&&r.status()===503),
-    owner.locator('#seed').click()
+    legacy.waitForResponse(r=>r.url()===seedUrl&&r.request().method()==='POST'),
+    legacy.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'&&r.status()===503),
+    legacy.locator('#seed').click()
    ]);
    assert.equal(seedResponse.status(),200,await seedResponse.text());
    assert.equal((await seedResponse.json()).current.version,1);
    assert.equal(failedRefresh.status(),503);
    assert.equal(failedRefreshCount,1);
-   await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
-   await owner.waitForFunction(()=>document.querySelector('#status').textContent.includes('tải lại thất bại'));
-   assert.equal(await owner.locator('#seed').isDisabled(),true);
-   assert.equal(await owner.locator('#save').isDisabled(),true);
-   assert.equal(await owner.locator('#reload').isDisabled(),false);
+   await legacy.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
+   await legacy.waitForFunction(()=>document.querySelector('#status').textContent.includes('tải lại thất bại'));
+   assert.equal(await legacy.locator('#seed').isDisabled(),true);
+   assert.equal(await legacy.locator('#save').isDisabled(),true);
+   assert.equal(await legacy.locator('#reload').isDisabled(),false);
   }finally{
-   // These are the only routes on the owner page. Drain all active handlers
+   // These are the only routes on the legacy page. Drain all active handlers
    // before restoring normal network traffic. Do not ignore handler errors.
-   await owner.unrouteAll({behavior:'wait'});
+   await legacy.unrouteAll({behavior:'wait'});
   }
-  const reloadButton=owner.locator('#reload');
+  const reloadButton=legacy.locator('#reload');
   const reloadDiagnostics=()=>reloadButton.evaluate(button=>{
    const rect=button.getBoundingClientRect(),style=getComputedStyle(button);
    const x=rect.left+rect.width/2,y=rect.top+rect.height/2;
@@ -578,11 +620,14 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     scroll:{x:scrollX,y:scrollY},hit:hit?{tag:hit.tagName,id:hit.id}:null,
     panelHidden:document.querySelector('#panel').hidden,status:document.querySelector('#status').textContent};
   });
-  await owner.bringToFront();
+  await legacy.bringToFront();
   assert.equal(await reloadButton.isVisible(),true);
   assert.equal(await reloadButton.isEnabled(),true);
   const beforeScroll=await reloadDiagnostics();
   assert.equal(beforeScroll.scrollBehavior,'auto');
+  const recoveryFrames=await sampleFrames(legacy);
+  console.log('Legacy reload renderer after HTTP 503: '+JSON.stringify(recoveryFrames));
+  assert.ok(recoveryFrames.frameCount>=2&&recoveryFrames.stable,'Reload recovery must produce consecutive stable frames');
   let manualReload;
   try{
    // Normal user-equivalent scrolling and clicking; keep all actionability
@@ -590,72 +635,75 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    await reloadButton.scrollIntoViewIfNeeded();
    console.log('Legacy reload actionability before click: '+JSON.stringify(await reloadDiagnostics()));
    [manualReload]=await Promise.all([
-    owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'),
+    legacy.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='GET'),
     reloadButton.click()
    ]);
   }catch(err){
    console.error('Legacy reload actionability failure: '+JSON.stringify(await reloadDiagnostics()));
+   console.error('Legacy reload frame cadence on failure: '+JSON.stringify(await sampleFrames(legacy)));
    throw err;
   }
   assert.equal(manualReload.status(),200,await manualReload.text());
   const recovered=await manualReload.json();
   assert.equal(recovered.project_id,pid);
   assert.equal(recovered.current.version,1);
-  await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1')&&!document.querySelector('#save').disabled);
-  let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
+  await legacy.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1')&&!document.querySelector('#save').disabled);
+  let data=await get(legacy,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
   assert.equal(recovered.current.digest,data.current.digest);
   console.log('Legacy seed HTTP 200; exactly one refresh HTTP 503; manual reload HTTP 200 and persisted Plan v1 digest verified');
-  assert.equal(await owner.locator('#tasks tr').count(),4);
+  assert.equal(await legacy.locator('#tasks tr').count(),4);
   const approval={version:1,digest:data.current.digest,requirements_version:req.version,requirements_digest:req.digest,confirmation:'APPROVE PROJECT PLAN'};
   assert.equal((await post(reviewer,rc,pp+'/approve',approval)).status(),400);
   let estimated=data.current.document;for(const task of estimated.tasks)task.effort_minutes=15;
-  await owner.locator('#document').fill(JSON.stringify(estimated));
-  const [saveResponse]=await Promise.all([owner.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='POST'),owner.locator('#save').click()]);
+  await legacy.locator('#document').fill(JSON.stringify(estimated));
+  const [saveResponse]=await Promise.all([legacy.waitForResponse(r=>r.url()===planningUrl&&r.request().method()==='POST'),legacy.locator('#save').click()]);
   assert.equal(saveResponse.status(),200,await saveResponse.text());
-  await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v2')&&!document.querySelector('#reload').disabled);
-  data=await get(owner,pp);assert.equal(data.analysis.total_effort_minutes,60);
+  await legacy.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v2')&&!document.querySelector('#reload').disabled);
+  data=await get(legacy,pp);assert.equal(data.analysis.total_effort_minutes,60);
   assert.equal(data.analysis.dependency_graph.critical_path_minutes,30);
   assert.equal(data.analysis.dependency_graph.critical_nodes.length,4);
-  await owner.locator('#graph-source').selectOption('plan');
-  await owner.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('CPM READY · 30 phút'));
-  assert.equal(await owner.locator('#graph-nodes tr').count(),4);
-  assert.equal(await owner.locator('#graph-edges li').count(),2);
+  await legacy.locator('#graph-source').selectOption('plan');
+  await legacy.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('CPM READY · 30 phút'));
+  assert.equal(await legacy.locator('#graph-nodes tr').count(),4);
+  assert.equal(await legacy.locator('#graph-edges li').count(),2);
   const ready={...approval,version:2,digest:data.current.digest};
   assert.equal((await post(dev,dc,pp+'/approve',ready)).status(),403);
   reviewer.on('dialog',d=>d.accept());
+  await reviewer.bringToFront();
   await reviewer.goto(ORIGIN+'/planning.html');await reviewer.locator('#panel').waitFor({state:'visible'});
   await reviewer.locator('#project').selectOption(pid);await reviewer.waitForFunction(()=>!document.querySelector('#approve').disabled);
   assert.equal(await reviewer.locator('#save').isDisabled(),true);
   const [approveResponse]=await Promise.all([reviewer.waitForResponse(r=>r.url()===planningUrl+'/approve'&&r.request().method()==='POST'),reviewer.locator('#approve').click()]);
   assert.equal(approveResponse.status(),200,await approveResponse.text());
   await reviewer.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('READY')&&!document.querySelector('#reload').disabled);
-  assert.equal((await get(owner,pp)).execution_ready,true);
-  assert.equal((await post(owner,csrf,rp,{expected_version:1,document:doc})).status(),200);
-  await owner.locator('#reload').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('STALE'));
-  assert.equal((await get(owner,pp)).execution_ready,false);
-  assert.equal((await get(owner,pp)).analysis,null);
-  assert.equal((await get(owner,pp)).wbs.dependency_graph,null);
-  await owner.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('STALE'));
-  assert.equal(await owner.locator('#graph-nodes tr').count(),0);
-  assert.equal((await get(owner,pp)).wbs.stale,true);
-  assert.equal((await get(owner,pp)).wbs.decomposition_ready,false);
-  assert.equal(await owner.locator('#wbs-save').isDisabled(),true);
-  assert.equal(await owner.locator('#estimate-save').isDisabled(),true);
-  assert.equal(await owner.locator('#schedule-save').isDisabled(),true);
-  assert.equal(await owner.locator('#review-run').isDisabled(),true);
-  assert.equal(await owner.locator('#adopt-bundle').isDisabled(),true);
-  const staleAdoption=(await get(owner,pp)).wbs.adoption;
+  assert.equal((await get(legacy,pp)).execution_ready,true);
+  assert.equal((await post(legacy,csrf,rp,{expected_version:1,document:doc})).status(),200);
+  await legacy.bringToFront();
+  await legacy.locator('#reload').click();await legacy.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('STALE'));
+  assert.equal((await get(legacy,pp)).execution_ready,false);
+  assert.equal((await get(legacy,pp)).analysis,null);
+  assert.equal((await get(legacy,pp)).wbs.dependency_graph,null);
+  await legacy.waitForFunction(()=>document.querySelector('#graph-status').textContent.includes('STALE'));
+  assert.equal(await legacy.locator('#graph-nodes tr').count(),0);
+  assert.equal((await get(legacy,pp)).wbs.stale,true);
+  assert.equal((await get(legacy,pp)).wbs.decomposition_ready,false);
+  assert.equal(await legacy.locator('#wbs-save').isDisabled(),true);
+  assert.equal(await legacy.locator('#estimate-save').isDisabled(),true);
+  assert.equal(await legacy.locator('#schedule-save').isDisabled(),true);
+  assert.equal(await legacy.locator('#review-run').isDisabled(),true);
+  assert.equal(await legacy.locator('#adopt-bundle').isDisabled(),true);
+  const staleAdoption=(await get(legacy,pp)).wbs.adoption;
   assert.equal(staleAdoption.stale,true);assert.equal(staleAdoption.current.digest,adopted.current.digest);
-  assert.equal((await get(owner,pp)).wbs.cross_review.quality_ready,false);
-  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_extension.state,'STALE');
-  const staleStudio=(await get(owner,'/api/projects/'+pid+'/state')).workflow;
+  assert.equal((await get(legacy,pp)).wbs.cross_review.quality_ready,false);
+  assert.equal((await get(legacy,'/api/projects/'+pid+'/state')).dependency_extension.state,'STALE');
+  const staleStudio=(await get(legacy,'/api/projects/'+pid+'/state')).workflow;
   assert.equal(staleStudio.coding_jobs.find(j=>j.job_id===boundJob.job_id).planning_binding,'STALE');
-  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===wp.id).state,'STALE');
-  assert.equal((await post(owner,csrf,engineeringPath,{...ebdy,expected_version:1})).status(),400);
-  assert.equal((await post(owner,csrf,base+'coding',queueBody)).status(),400);
-  assert.equal((await get(owner,pp)).wbs.sprint_schedule.analysis,null);
-  assert.equal(await owner.locator('#seed').isDisabled(),true);
-  assert.equal((await post(owner,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
+  assert.equal((await get(legacy,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===wp.id).state,'STALE');
+  assert.equal((await post(legacy,csrf,engineeringPath,{...ebdy,expected_version:1})).status(),400);
+  assert.equal((await post(legacy,csrf,base+'coding',queueBody)).status(),400);
+  assert.equal((await get(legacy,pp)).wbs.sprint_schedule.analysis,null);
+  assert.equal(await legacy.locator('#seed').isDisabled(),true);
+  assert.equal((await post(legacy,csrf,pp+'/seed',{...seed,expected_version:2})).status(),400);
  }finally{await browser.close()}
 });
 
