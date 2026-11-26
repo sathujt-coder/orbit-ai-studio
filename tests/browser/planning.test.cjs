@@ -520,6 +520,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   console.log('P6.3g real Git/Docker A/B replay, selection binding and immutable receipt PASS');
   // P6.3i: actual HTTP defect lifecycle and explicit real Docker retest.
   const qualityPath=engineering+'/quality/'+boundJob.job_id;
+  const qcPath=engineering+'/qc/'+boundJob.job_id;
   const defectPath=qualityPath+'/defects';
   const qualityBefore=await get(owner,qualityPath);
   assert.equal(qualityBefore.state,'QUALITY_EVIDENCE_PASS');
@@ -538,6 +539,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const qualityOpen=await get(owner,qualityPath);
   assert.equal(qualityOpen.state,'BLOCK');
   assert.equal(qualityOpen.counts.OPEN,1);
+  const qcOpen=await get(owner,qcPath);
+  assert.equal(qcOpen.state,'BLOCK');
+  assert.equal(qcOpen.checks.defects,'BLOCK');
   const readyDefect=makeDefect('READY_FOR_RETEST',1,qualityOpen.source_digest);
   assert.equal((await post(viewer,vc,defectPath,readyDefect)).status(),403);
   const readyResponse=await post(dev,dc,defectPath,readyDefect);
@@ -589,6 +593,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(draftSaved.execution_authorized,false);
   fsSandbox.writeFileSync(process.env.ORBIT_ENGINEERING_DRAFT_EVIDENCE,JSON.stringify(draftEvidence),{flag:'wx'});
   console.log('P6.3h Git-bound draft PR contract, real SQLite receipt and duplicate rejection PASS');
+  const qcPassed=await get(owner,qcPath);
+  assert.equal(qcPassed.state,'QA_QC_EVIDENCE_PASS',JSON.stringify(qcPassed));
+  assert.equal(qcPassed.selected,'B');
+  assert.deepEqual(await get(viewer,qcPath),qcPassed);
+  assert.equal((await post(owner,csrf,qcPath,{})).status(),404);
+  assert.equal(qcPassed.remote_live_verified,false);
+  assert.equal(qcPassed.execution_authorized,false);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -759,6 +770,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await get(owner,sandboxPath)).state,'STALE');
   assert.equal((await get(owner,draftPath)).state,'STALE_OR_INVALID');
   assert.equal((await get(owner,qualityPath)).state,'BLOCK');
+  const qcStale=await get(owner,qcPath);
+  assert.equal(qcStale.state,'BLOCK');
+  assert.equal(qcStale.checks.human_qa,'BLOCK');
+  assert.equal(qcStale.checks.sandbox,'BLOCK');
+  fsSandbox.writeFileSync(process.env.ORBIT_ENGINEERING_QC_EVIDENCE,JSON.stringify({
+   schema:'orbit.engineering-qc-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+   run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_inference_real_git_docker_http',
+   open:qcOpen,passed:qcPassed,stale:qcStale,read_only:true
+  }),{flag:'wx'});
+  console.log('P6.4a deterministic QC evidence, open/stale block and read-only HTTP PASS');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
   assert.equal(staleDependent.planning_binding,'STALE');
