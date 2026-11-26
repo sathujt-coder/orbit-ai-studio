@@ -14,6 +14,7 @@ import studio_quality
 import studio_workflow
 import work_package_binding
 import studio_coding
+import studio_verification
 import coding_factory
 import verification_factory
 import auth_store
@@ -138,6 +139,7 @@ def init_db():
         studio_activity.ensure_schema(c)
         work_package_binding.ensure_schema(c)
         studio_coding.ensure_schema(c)
+        studio_verification.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -940,6 +942,10 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/qa',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=studio_verification.attest(c,pid,actor,body,now())
+                self.send_json(201,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/coding',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_bound_coding(pid,actor,body));return
