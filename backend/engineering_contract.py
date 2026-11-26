@@ -32,9 +32,20 @@ def source(c,pid,package_id,w=None):
     for key in ('node_count','edge_count','execution_order','layers','roots','sinks','edges'):
         if graph[key]!=topology[key]:raise ValueError('Adopted dependency graph mismatch')
     package=snap['package']
+    import wbs_dependency_extension as ext
+    overlay=ext.current(c,pid,version,w)
+    predecessors=sorted(package['depends_on'])
+    extension_fields={}
+    if overlay:
+        graph=overlay['snapshot']['effective_graph']
+        nodes=[dict(id=n['id'],depends_on=n['depends_on'],effort_minutes=None) for n in graph['nodes']]
+        topology=dg.analyze(nodes)
+        predecessors=next(n['depends_on'] for n in topology['nodes'] if n['id']==package_id)
+        extension_fields=dict(extension_version=overlay['version'],extension_digest=overlay['digest'],
+            base_graph_digest=overlay['snapshot']['base_graph_digest'])
     reasons=[]
     if package['kind']!='implement':reasons.append('IMPLEMENTATION_KIND_REQUIRED')
-    if package['depends_on']:reasons.append('PREREQUISITE_EVIDENCE_REQUIRED')
+    if predecessors:reasons.append('PREREQUISITE_EVIDENCE_REQUIRED')
     spec_digest=None
     if package['kind']=='implement':
         try:spec_digest=pp.digest(sc.spec_for(snap))
@@ -43,12 +54,21 @@ def source(c,pid,package_id,w=None):
         package_id=package_id,binding_digest=row['digest'],adoption_digest=snap['adoption_digest'],
         bundle_digest=snap['bundle_digest'],requirements_digest=snap['requirements_digest'],
         wbs_digest=snap['wbs_digest'],graph_digest=pp.digest(graph),topology_digest=pp.digest(topology),
-        predecessors=sorted(package['depends_on']),kind=package['kind'],spec_digest=spec_digest,
-        structural_eligibility='BLOCK' if reasons else 'ROOT_IMPLEMENTATION',
-        reasons=reasons,execution_authorized=False,automatic_dispatch=False,production_release_authorized=False)
+        predecessors=predecessors,kind=package['kind'],spec_digest=spec_digest,
+        structural_eligibility=('DEPENDENT_IMPLEMENTATION' if overlay and reasons==['PREREQUISITE_EVIDENCE_REQUIRED'] else 'BLOCK' if reasons else 'ROOT_IMPLEMENTATION'),
+        reasons=reasons,execution_authorized=False,automatic_dispatch=False,production_release_authorized=False,**extension_fields)
 
 def latest(c,pid,version,package_id):
     return c.execute('SELECT * FROM engineering_contracts WHERE project_id=? AND adoption_version=? AND package_id=? ORDER BY version DESC LIMIT 1',(pid,version,package_id)).fetchone()
+
+def confirmable(src):
+    return src['structural_eligibility'] in ('ROOT_IMPLEMENTATION','DEPENDENT_IMPLEMENTATION')
+
+def require_confirmed(c,pid,src):
+    row=latest(c,pid,src['adoption_version'],src['package_id'])
+    if not confirmable(src) or not row or row['digest']!=pp.digest(src) or json.loads(row['snapshot'])!=src:
+        raise ValueError('Current confirmed engineering contract required')
+    return row
 
 def confirm(c,pid,actor,body,stamp):
     pp.check_role(c,pid,actor,'approve')
@@ -60,7 +80,7 @@ def confirm(c,pid,actor,body,stamp):
     digest=pp.digest(src)
     if src['adoption_version']!=body['adoption_version'] or digest!=body['source_digest']:
         raise ValueError('Current engineering source required')
-    if src['structural_eligibility']!='ROOT_IMPLEMENTATION':raise ValueError('Engineering structural eligibility blocked')
+    if not confirmable(src):raise ValueError('Engineering structural eligibility blocked')
     row=latest(c,pid,src['adoption_version'],src['package_id'])
     version=row['version'] if row else 0
     if version!=body['expected_version']:raise ValueError('Stale engineering contract version')
@@ -87,8 +107,8 @@ def view(c,pid,w=None):
             src=source(c,pid,p,w)
             if src['adoption_version']==v:
                 digest=pp.digest(src)
-                item.update(source=src,source_digest=digest,state='BLOCK' if src['reasons'] else 'AWAITING_CONFIRMATION')
-                if row:item['state']='CONFIRMED' if row['digest']==digest and json.loads(row['snapshot'])==src and not src['reasons'] else 'STALE'
+                item.update(source=src,source_digest=digest,state='AWAITING_CONFIRMATION' if confirmable(src) else 'BLOCK')
+                if row:item['state']='CONFIRMED' if row['digest']==digest and json.loads(row['snapshot'])==src and confirmable(src) else 'STALE'
         except (ValueError,KeyError,TypeError,AttributeError,PermissionError):pass
         out['contracts'].append(item)
     return out

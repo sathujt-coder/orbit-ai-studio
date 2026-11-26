@@ -18,7 +18,7 @@ def ensure_schema(c):
         FOREIGN KEY(project_id,adoption_version,package_id)
         REFERENCES studio_work_packages(project_id,adoption_version,package_id))""")
 
-def checked_package(c,pid,version,package_id,digest):
+def exact_package(c,pid,version,package_id,digest):
     row=c.execute("SELECT * FROM studio_work_packages WHERE project_id=? AND adoption_version=? AND package_id=?",(pid,version,package_id)).fetchone()
     if not row or row['digest']!=digest:raise ValueError('Current work package binding required')
     snap=json.loads(row['snapshot'])
@@ -26,9 +26,16 @@ def checked_package(c,pid,version,package_id,digest):
         raise ValueError('Stale or invalid work package binding')
     package=snap['package']
     if package['kind']!='implement':raise ValueError('Only implementation work packages may enter Coding Factory')
-    # Verification-bound dependency completion is a later checkpoint, never
-    # substitute mere queue success for verified prerequisite work.
-    if package['depends_on']:raise ValueError('Dependent work packages require verification integration')
+    return snap
+
+def effective_predecessors(c,pid,v,snap):
+    import wbs_dependency_extension as ext
+    return ext.predecessors(c,pid,v,snap['package'])
+
+def checked_package(c,pid,version,package_id,digest):
+    snap=exact_package(c,pid,version,package_id,digest)
+    if effective_predecessors(c,pid,version,snap):
+        raise ValueError('Dependent work packages require explicit dependency queue submission')
     return snap
 
 def spec_for(snap):
@@ -62,11 +69,11 @@ def lookup(c,pid,jid):
 def checked_job_package(c,pid,row):
     # Legacy root jobs use the unchanged SG.6 contract. Dependent jobs
     # must have a current pinned prerequisite receipt, never queue success.
-    snap=binding.source(c,pid,row['package_id'])
-    if snap['package']['depends_on']:
+    snap=exact_package(c,pid,row['adoption_version'],row['package_id'],row['binding_digest'])
+    if effective_predecessors(c,pid,row['adoption_version'],snap):
         import dependency_queue
         return dependency_queue.checked_package(c,pid,row)
-    return checked_package(c,pid,row['adoption_version'],row['package_id'],row['binding_digest'])
+    return snap
 
 def validate(c,pid,jid,qid):
     row=lookup(c,pid,jid)
@@ -92,5 +99,9 @@ def evidence(c,pid,jid):
         q=agent_queue.get(c,pid,row['queue_id'])
         if job and job['spec']==spec_for(snap) and pp.digest(job['spec'])==row['spec_digest'] and q['coding_job_id']==jid and q['kind']=='coding' and q['actor']==row['actor']:
             result['state']='BOUND'
+            if effective_predecessors(c,pid,row['adoption_version'],snap):
+                pinned=c.execute('SELECT digest FROM engineering_queue_sources WHERE job_id=? AND project_id=?',(jid,pid)).fetchone()
+                if not pinned:raise ValueError('Missing pinned prerequisite evidence')
+                result['dependency_source_digest']=pinned['digest']
     except (ValueError,KeyError,TypeError,PermissionError):pass
     return result

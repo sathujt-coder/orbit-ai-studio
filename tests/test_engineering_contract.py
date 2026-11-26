@@ -15,6 +15,8 @@ class EngineeringContractTests(unittest.TestCase):
         self.c=sqlite3.connect(':memory:');self.c.row_factory=sqlite3.Row;self.addCleanup(self.c.close)
         self.c.executescript("CREATE TABLE studio_work_packages(project_id,adoption_version,package_id,snapshot,digest,PRIMARY KEY(project_id,adoption_version,package_id)); CREATE TABLE auth_audit(actor,project_id,action,outcome,created_at);")
         ec.ensure_schema(self.c)
+        import wbs_dependency_extension as ext
+        ext.ensure_schema(self.c)
         self.package=dict(id='P',kind='implement',depends_on=[],criteria=['AC'],action='Build')
         self.snap=dict(adoption_version=1,adoption_digest='a',bundle_digest='b',requirements_digest='r',wbs_digest='w',deliverable_id='D',requirement='R',outcome='O',package=self.package,acceptance=[dict(id='AC',text='Exact criterion')])
         self.graph=dg.analyze([dict(id='P',depends_on=[],effort_minutes=15)])

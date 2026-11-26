@@ -28,10 +28,10 @@ def source(c,pid,jid):
     if src['project_id']!=pid or src['job_id']!=jid:raise ValueError('QA source scope mismatch')
     v,p=src['adoption_version'],src['package_id']
     contract=ec.source(c,pid,p)
-    row=ec.latest(c,pid,v,p)
-    if (not row or contract['adoption_version']!=v or contract['structural_eligibility']!='ROOT_IMPLEMENTATION'
-        or row['digest']!=pp.digest(contract) or json.loads(row['snapshot'])!=contract
-        or contract['binding_digest']!=src['binding_digest'] or contract['spec_digest']!=src['spec_digest']):
+    row=ec.require_confirmed(c,pid,contract)
+    if (contract['adoption_version']!=v
+        or contract['binding_digest']!=src['binding_digest'] or contract['spec_digest']!=src['spec_digest']
+        or (contract['predecessors'] and not src.get('dependency_source_digest'))):
         raise ValueError('Current confirmed engineering contract required')
     state=qa.view(c,pid,jid)
     receipt=state['receipt']
@@ -49,7 +49,7 @@ def source(c,pid,jid):
         adoption_version=v,package_id=p,contract_version=row['version'],contract_digest=row['digest'],
         graph_digest=contract['graph_digest'],qa_version=receipt['version'],qa_digest=receipt['digest'],
         qa_source_digest=pp.digest(src),report_id=src['report_id'],report_digest=src['report_digest'],
-        candidates=src['candidates'],execution_authorized=False)
+        candidates=src['candidates'],execution_authorized=False,**({'dependency_source_digest':src['dependency_source_digest']} if src.get('dependency_source_digest') else {}))
 
 def latest(c,pid,v,p):
     return c.execute('SELECT * FROM engineering_completions WHERE project_id=? AND adoption_version=? AND package_id=? ORDER BY version DESC LIMIT 1',(pid,v,p)).fetchone()

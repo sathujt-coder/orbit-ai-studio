@@ -21,7 +21,10 @@ def source(c,pid,jid):
     if not b or b['state']!='BOUND':raise ValueError('Current bound coding source required')
     q=agent_queue.get(c,pid,b['queue_id'])
     if q['status']!='succeeded':raise ValueError('Successful coding queue required')
-    snap=sc.checked_package(c,pid,b['adoption_version'],b['package_id'],b['binding_digest'])
+    if b.get('dependency_source_digest'):
+        snap=sc.checked_job_package(c,pid,sc.lookup(c,pid,jid))
+    else:
+        snap=sc.checked_package(c,pid,b['adoption_version'],b['package_id'],b['binding_digest'])
     job=coding_factory.detail(c,jid)
     if job['project_id']!=pid:raise ValueError('Coding project mismatch')
     row=c.execute('SELECT * FROM coding_verifications WHERE project_id=? AND job_id=? ORDER BY rowid DESC LIMIT 1',(pid,jid)).fetchone()
@@ -36,7 +39,7 @@ def source(c,pid,jid):
         review_digest=pp.digest([job['review_a'],job['review_b']]),
         report_id=row['id'],report_digest=hashlib.sha256(row['report_json'].encode()).hexdigest(),
         candidates={lane:{'digest':v['digest'],'test_count':v['test_count']} for lane,v in result['candidates'].items()},
-        acceptance=snap['acceptance'])
+        acceptance=snap['acceptance'],**({'dependency_source_digest':b['dependency_source_digest']} if b.get('dependency_source_digest') else {}))
 
 def attest(c,pid,actor,body,stamp):
     pp.check_role(c,pid,actor,'approve')

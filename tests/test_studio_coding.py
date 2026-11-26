@@ -15,6 +15,8 @@ class StudioCodingTests(unittest.TestCase):
         CREATE TABLE studio_work_packages(project_id,adoption_version,package_id,snapshot,digest,PRIMARY KEY(project_id,adoption_version,package_id));
         CREATE TABLE auth_audit(actor,project_id,action,outcome,created_at);""")
         sc.ensure_schema(self.c)
+        import wbs_dependency_extension as ext
+        ext.ensure_schema(self.c)
         self.snap=dict(deliverable_id='D',requirement='R',outcome='Outcome',package=dict(id='P',kind='implement',depends_on=[],action='Build'),acceptance=[dict(id='AC',text='Exact criterion')])
         self.digest=pp.digest(self.snap)
         import json

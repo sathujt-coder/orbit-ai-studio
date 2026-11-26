@@ -80,6 +80,28 @@ def build(pid,row,bundle,edges):
 def latest(c,pid,v):
     return c.execute('SELECT * FROM wbs_dependency_extensions WHERE project_id=? AND adoption_version=? ORDER BY version DESC LIMIT 1',(pid,v)).fetchone()
 
+def current(c,pid,v,w=None):
+    """No overlay is valid only when no row exists for this adoption.
+    A corrupt or stale current row MUST NOT fall back to the original graph.
+    """
+    saved=latest(c,pid,v)
+    if not saved:return None
+    row,bundle=base(c,pid,w)
+    snap=json.loads(saved['snapshot'])
+    if (row['version']!=v or pp.digest(snap)!=saved['digest']
+        or build(pid,row,bundle,snap['edges'])!=snap):
+        raise ValueError('Stale or invalid dependency extension')
+    return dict(version=saved['version'],digest=saved['digest'],snapshot=snap)
+
+def predecessors(c,pid,v,package,w=None):
+    overlay=current(c,pid,v,w)
+    if not overlay:return sorted(package['depends_on'])
+    graph=overlay['snapshot']['effective_graph']
+    nodes=[n for n in graph['nodes'] if n['id']==package['id']]
+    if len(nodes)!=1 or not set(package['depends_on'])<=set(nodes[0]['depends_on']):
+        raise ValueError('Invalid effective package identity')
+    return nodes[0]['depends_on']
+
 def approve(c,pid,actor,body,stamp):
     pp.check_role(c,pid,actor,'approve')
     pr.fields(body,('adoption_version','adoption_digest','expected_version','edges','confirmation'))

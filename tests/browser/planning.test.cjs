@@ -206,6 +206,18 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,engineeringPath,ebdy)).status(),400);
   const actual=(await get(owner,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===wp.id);
   assert.equal(actual.state,'CONFIRMED');assert.equal(actual.latest_version,1);
+  const dependentBindingResponse=await post(owner,csrf,base+'bind',{...bindingBody,package_id:edge.target});
+  assert.equal(dependentBindingResponse.status(),201);
+  const dependentBinding=(await dependentBindingResponse.json()).digest;
+  const blockedLegacy={adoption_version:1,package_id:edge.target,binding_digest:dependentBinding,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
+  const legacyBypass=await post(owner,csrf,base+'coding',blockedLegacy);
+  assert.equal(legacyBypass.status(),400);assert.match((await legacyBypass.json()).error,/Dependent/);
+  const dependentContract=(await get(owner,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===edge.target);
+  assert.equal(dependentContract.source.structural_eligibility,'DEPENDENT_IMPLEMENTATION');
+  assert.deepEqual(dependentContract.source.predecessors,[wp.id]);
+  assert.equal(dependentContract.source.extension_digest,extReceipt.digest);
+  assert.equal((await post(reviewer,rc,engineeringPath,{...ebdy,package_id:edge.target,source_digest:dependentContract.source_digest})).status(),201);
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const queueBody={adoption_version:1,package_id:wp.id,binding_digest:bound.digest,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
   assert.equal((await post(viewer,vc,base+'coding',queueBody)).status(),403);
   assert.equal((await post(reviewer,rc,base+'coding',queueBody)).status(),403);
@@ -270,6 +282,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(savedCompletion.state,'COMPLETION_EVIDENCE_CONFIRMED');
   assert.equal(savedCompletion.receipt.selected,'B');
   assert.equal(savedCompletion.latest_version,1);
+  const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
+  assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
+  assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
+  assert.equal(eligible.source.extension_digest,extReceipt.digest);
+  assert.equal((await post(owner,csrf,base+'coding',blockedLegacy)).status(),400);
   const dependentPath='/api/projects/'+pid+'/engineering/dependent-coding';
   const verifyPackage=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='verify'&&p.depends_on.includes(wp.id));
   assert.ok(verifyPackage);
@@ -288,6 +305,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const staleQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
   assert.equal(staleQA.state,'STALE');
   assert.equal((await completionState()).state,'STALE');
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();

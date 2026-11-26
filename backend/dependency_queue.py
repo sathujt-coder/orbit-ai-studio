@@ -1,9 +1,10 @@
 """P6.3c: explicit dependency-aware submission with pinned prerequisite receipts.
 
-Only implementation packages whose direct prerequisites are confirmed root
-implementations are supported. No verify-package or transitive unlock.
+Implementation prerequisites are recursively validated through their pinned
+queue sources and current completion receipts. Verification packages stay blocked.
 """
 import json
+from contextvars import ContextVar
 import product_requirements as pr
 import project_planning as pp
 import engineering_contract as ec
@@ -17,23 +18,46 @@ def ensure_schema(c):
         project_id TEXT NOT NULL REFERENCES projects(id),
         snapshot TEXT NOT NULL,digest TEXT NOT NULL)""")
 
+# Scope memoization to ONE synchronous validation, never across requests/transactions.
+_validation=ContextVar('dependency_validation',default=None)
+
 def source(c,pid,v,p,digest):
+    context=_validation.get()
+    token=None
+    if context is None:
+        context=dict(active=set(),cache={})
+        token=_validation.set(context)
+    key=(c,pid,v,p,digest)
+    try:
+        if key in context['active']:raise ValueError('Cyclic completion evidence')
+        if key in context['cache']:return context['cache'][key]
+        context['active'].add(key)
+        try:
+            result=_source(c,pid,v,p,digest)
+            context['cache'][key]=result
+            return result
+        finally:context['active'].remove(key)
+    finally:
+        if token is not None:_validation.reset(token)
+
+def _source(c,pid,v,p,digest):
     src=ec.source(c,pid,p)
     if src['adoption_version']!=v or src['binding_digest']!=digest:
         raise ValueError('Current package source required')
     if src['kind']!='implement' or not src['predecessors'] or src['reasons']!=['PREREQUISITE_EVIDENCE_REQUIRED']:
         raise ValueError('Dependent implementation required')
+    target_contract=ec.require_confirmed(c,pid,src)
     evidence=[]
     for dep in src['predecessors']:
         parent=ec.source(c,pid,dep)
-        if parent['adoption_version']!=v or parent['graph_digest']!=src['graph_digest'] or parent['structural_eligibility']!='ROOT_IMPLEMENTATION':
-            raise ValueError('Only confirmed root implementation prerequisites supported')
+        if parent['adoption_version']!=v or parent['graph_digest']!=src['graph_digest'] or not ec.confirmable(parent):
+            raise ValueError('Current implementation prerequisite required')
         row=dc.latest(c,pid,v,dep)
         if not row:raise ValueError('Missing prerequisite completion receipt')
         snap=json.loads(row['snapshot'])
         if pp.digest(snap)!=row['digest']:raise ValueError('Invalid prerequisite receipt')
         current=dc.source(c,pid,row['job_id'])
-        if current!=snap['source'] or current['package_id']!=dep or current['adoption_version']!=v or current['graph_digest']!=src['graph_digest']:
+        if current!=snap['source'] or current['project_id']!=pid or current['job_id']!=row['job_id'] or current['package_id']!=dep or current['adoption_version']!=v or current['graph_digest']!=src['graph_digest']:
             raise ValueError('Stale prerequisite receipt')
         decision=snap['decision']
         checked=dc.selection(c,pid,current,row['actor'],decision['selected'],decision['rationale'])
@@ -41,8 +65,8 @@ def source(c,pid,v,p,digest):
             raise ValueError('Invalid prerequisite selection')
         evidence.append(dict(package_id=dep,job_id=row['job_id'],version=row['version'],digest=row['digest'],selected_digest=decision['selected_digest']))
     return dict(schema='orbit.dependency-queue-source.v1',project_id=pid,adoption_version=v,package_id=p,
-        binding_digest=digest,contract_source_digest=pp.digest(src),graph_digest=src['graph_digest'],
-        spec_digest=src['spec_digest'],prerequisites=evidence,production_release_authorized=False)
+        binding_digest=digest,contract_source_digest=pp.digest(src),contract_version=target_contract['version'],graph_digest=src['graph_digest'],
+        spec_digest=src['spec_digest'],prerequisites=evidence,production_release_authorized=False,**({k:src[k] for k in ('extension_version','extension_digest')} if 'extension_version' in src else {}))
 
 def request(c,pid,actor,body):
     pp.check_role(c,pid,actor,'write')
