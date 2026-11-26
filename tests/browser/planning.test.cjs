@@ -600,6 +600,26 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,csrf,qcPath,{})).status(),404);
   assert.equal(qcPassed.remote_live_verified,false);
   assert.equal(qcPassed.execution_authorized,false);
+  const testPlanPath=engineering+'/test-plans/'+boundJob.job_id;
+  const planInitial=await get(owner,testPlanPath);
+  assert.equal(planInitial.state,'AWAITING_TEST_PLAN');
+  const planBody={source_digest:planInitial.source_digest,expected_version:0,
+   confirmation:'CONFIRM ACCEPTANCE TEST PLAN '+boundJob.job_id,
+   cases:planInitial.template.map(t=>({...t,scenario:'Fixture scenario '+t.id+' for '+t.criterion_id,
+    expected:'Fixture expected observable result '+t.id}))};
+  assert.equal((await post(dev,dc,testPlanPath,planBody)).status(),403);
+  assert.equal((await post(reviewer,'0'.repeat(64),testPlanPath,planBody)).status(),403);
+  assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,cases:planBody.cases.slice(1)})).status(),400);
+  assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,source_digest:'bad'})).status(),400);
+  const planResponse=await post(reviewer,rc,testPlanPath,planBody);
+  assert.equal(planResponse.status(),201,await planResponse.text());
+  const planReceipt=await planResponse.json();
+  assert.equal((await post(reviewer,rc,testPlanPath,planBody)).status(),400);
+  const planPassed=await get(owner,testPlanPath);
+  assert.equal(planPassed.state,'TEST_PLAN_COVERAGE_PASS');
+  assert.equal(planPassed.execution_status,'NOT_EXECUTED');
+  assert.equal(planPassed.history[0].digest,planReceipt.digest);
+  assert.deepEqual(await get(viewer,testPlanPath),planPassed);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -791,6 +811,17 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_inference_real_git_docker_http',
    open:qcOpen,passed:qcPassed,stale:qcStale,read_only:true
   }),{flag:'wx'});
+  const planStale=await get(owner,testPlanPath);
+  assert.equal(planStale.state,'STALE');
+  assert.deepEqual(planStale.history,planPassed.history);
+  assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,expected_version:1})).status(),400);
+  fsSandbox.writeFileSync(process.env.ORBIT_TEST_PLAN_EVIDENCE,JSON.stringify({
+    schema:'orbit.acceptance-test-plan-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'synthetic_test_plan_real_http',
+    initial:planInitial,passed:planPassed,stale:planStale,rbac_rejected:true,csrf_rejected:true,
+    incomplete_rejected:true,duplicate_version_rejected:true,stale_write_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4b acceptance test plan traceability and stale rejection PASS');
   console.log('P6.4a deterministic QC evidence, open/stale block and read-only HTTP PASS');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
   const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
