@@ -260,7 +260,60 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    await qaForm.getByLabel('Rationale '+criterion.id,{exact:true}).fill('Synthetic acceptance fixture only; not real functional verification.');
   }
   await qaForm.locator('input[name=confirmation]').fill('ATTEST WORK PACKAGE QA');
-  await qaForm.locator('button[type=submit]').click();
+  const stateUrl=ORIGIN+'/api/projects/'+pid+'/state';
+  const qaUrl=ORIGIN+base+'qa';
+  // Trigger a real read with an unrelated projection-only change; same source must preserve the form.
+  await qaForm.evaluate(form=>{form.dataset.fixtureDraft='retained'});
+  const projectionRoute=async route=>{
+   const response=await route.fetch();
+   const state=await response.json();
+   state.workflow.queue.fixture_projection_marker='unrelated poll';
+   await route.fulfill({response,json:state});
+  };
+  await studio.route(stateUrl,projectionRoute,{times:1});
+  await studio.waitForFunction(()=>document.querySelector('#studioWorkflow').dataset.signature?.includes('unrelated poll'),null,{timeout:15000});
+  assert.equal(await qaForm.getAttribute('data-fixture-draft'),'retained');
+  assert.equal(await qaForm.locator('input[name=confirmation]').inputValue(),'ATTEST WORK PACKAGE QA');
+  for(const criterion of currentQA.source.acceptance){
+   assert.equal(await qaForm.getByLabel('Verdict '+criterion.id,{exact:true}).inputValue(),'PASS');
+   assert.equal(await qaForm.getByLabel('Rationale '+criterion.id,{exact:true}).inputValue(),'Synthetic acceptance fixture only; not real functional verification.');
+  }
+  assert.equal(await qaForm.evaluate(form=>form.checkValidity()),true);
+  let releaseOld,markHeld;
+  const oldGate=new Promise(resolve=>{releaseOld=resolve});
+  const held=new Promise(resolve=>{markHeld=resolve});
+  let firstRead=true;
+  const oldPoll=async route=>{
+   if(!firstRead){await route.continue();return}
+   firstRead=false;
+   const response=await route.fetch();
+   const state=await response.json();
+   assert.equal(state.workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa.state,'AWAITING_HUMAN_QA');
+   markHeld();
+   await oldGate;
+   await route.fulfill({response});
+  };
+  await studio.route(stateUrl,oldPoll);
+  let timer;
+  try{
+   await Promise.race([held,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('No pre-submit poll captured')),15000)})]);
+   clearTimeout(timer);
+   const [qaResponse]=await Promise.all([
+    studio.waitForResponse(r=>r.url()===qaUrl&&r.request().method()==='POST',{timeout:15000}),
+    qaForm.locator('button[type=submit]').click()
+   ]);
+   assert.equal(qaResponse.status(),201,await qaResponse.text());
+   const posted=qaResponse.request().postDataJSON(),receipt=await qaResponse.json();
+   assert.equal(posted.source_digest,currentQA.source_digest);
+   assert.equal(posted.expected_version,currentQA.latest_version);
+   assert.equal(receipt.version,1);
+   const persisted=JSON.parse(evidenceFixture('qa-receipt',pid,boundJob.job_id).toString());
+   assert.equal(persisted.digest,receipt.digest);
+   assert.equal(persisted.source_digest,posted.source_digest);
+   assert.deepEqual(persisted.criteria,posted.criteria);
+   // Fresh committed state must render even while the old request is still held.
+   await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
+  }finally{clearTimeout(timer);releaseOld();await studio.unroute(stateUrl,oldPoll)}
   await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
   currentQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
   assert.equal(currentQA.receipt.version,1);

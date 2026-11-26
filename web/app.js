@@ -44,8 +44,15 @@ async function submitStudioAction(pid,kind,body,signature){
  studioActionPending=true;
  try{
   await api('/api/projects/'+encodeURIComponent(pid)+'/studio/work-packages/'+kind,'POST',body);
-  if(generation===stateGeneration&&pid===projectId){holder.replaceChildren();delete holder.dataset.signature;delete holder.dataset.projectId;toast('Đã ghi nhận yêu cầu. Kiểm tra trạng thái backend.');await loadState()}
- }catch(err){if(generation===stateGeneration&&pid===projectId){holder.replaceChildren();delete holder.dataset.signature;delete holder.dataset.projectId;await loadState();toast(err.message,true)}throw err}
+  if(generation===stateGeneration&&pid===projectId){
+   ++stateGeneration;loading=false;
+   toast('Đã ghi nhận yêu cầu. Kiểm tra trạng thái backend.');
+   await loadState();
+  }
+ }catch(err){
+  if(generation===stateGeneration&&pid===projectId){++stateGeneration;loading=false;await loadState();toast(err.message,true)}
+  throw err
+ }
  finally{studioActionPending=false}
 }
 function renderStudioLine(){if(!current)return;const holder=$('studioLine');holder.dataset.ready='false';if(!window.StudioLine)throw Error('Studio Generator module unavailable');window.StudioLine.render(holder,bootstrap.stages,current.tasks,selectedDept,id=>{selectDept(id);$('officeDetails').open=true;$('roleWorkspaceSection').scrollIntoView({behavior:'smooth',block:'nearest'})},current.handoff?.project_id===current.project.id?current.handoff:null,current.activity?.project_id===current.project.id?current.activity:null,current.quality?.project_id===current.project.id?current.quality:null);window.StudioLine.renderWorkflow($('studioWorkflow'),current,submitStudioAction);holder.dataset.projectId=current.project.id;holder.dataset.ready='true'}

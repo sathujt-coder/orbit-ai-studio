@@ -187,6 +187,9 @@ function renderWorkflow(holder,state,submit){
  const w=state.workflow;
  const rights=workflowControls(state),signature=JSON.stringify([w,rights,state.engineering,state.dependency_completion]);
  if(holder.dataset.projectId===state.project?.id&&holder.dataset.signature===signature)return;
+ const priorForms=new Map(),focused=holder.contains(document.activeElement)?document.activeElement:null;
+ if(holder.dataset.projectId===state.project?.id)
+  for(const form of holder.querySelectorAll('form[data-action-key]'))priorForms.set(form.dataset.actionKey,form);
  holder.replaceChildren();delete holder.dataset.projectId;delete holder.dataset.signature;
  if(!w||w.project_id!==state.project?.id){holder.append(el('p','line-notice','Unified workflow chưa xác minh'));return}
  holder.dataset.projectId=w.project_id;holder.dataset.signature=signature;
@@ -208,12 +211,15 @@ function renderWorkflow(holder,state,submit){
   const button=el('button','btn primary','Xác nhận '+kind);button.type='submit';
   const status=el('p','line-notice');status.setAttribute('role','status');
   form.append(label,button,status);
+  // Includes exact source/version/identity and empty criterion field values.
+  // A changed source or lost permission creates no reusable action.
+  form.dataset.actionKey=JSON.stringify([w.project_id,kind,token,build()]);
   form.addEventListener('submit',async ev=>{
    ev.preventDefault();
    if(confirm.value!==token){status.textContent='Xác nhận không khớp.';return}
-   if(!form.isConnected||holder.dataset.signature!==signature||holder.dataset.projectId!==w.project_id){status.textContent='Nguồn đã thay đổi.';return}
+   if(!holder.contains(form)||holder.dataset.projectId!==w.project_id){status.textContent='Nguồn đã thay đổi.';return}
    button.disabled=true;
-   try{await submit(w.project_id,kind,{...build(),confirmation:token},signature);status.textContent='Đã gửi yêu cầu.'}
+   try{await submit(w.project_id,kind,{...build(),confirmation:token},holder.dataset.signature);status.textContent='Đã gửi yêu cầu.'}
    catch(err){status.textContent=err.message;button.disabled=false}
   });
   parent.append(form);return form;
@@ -276,6 +282,11 @@ function renderWorkflow(holder,state,submit){
 
  panel('Agent Queue',w.queue.truncated?'Recent 100 · truncated':'Recent jobs',w.queue.tasks.map(q=>q.kind+' · '+q.id+' · '+q.status+' · dependency '+(q.dependency_id||'none'))).dataset.workflowStage='queue';
  holder.append(el('p','line-notice','Next checkpoint: '+w.next_checkpoint+' · Execution NOT AUTHORIZED. Không tự dispatch hoặc release.'));
+ for(const form of holder.querySelectorAll('form[data-action-key]')){
+  const prior=priorForms.get(form.dataset.actionKey);
+  if(prior)form.replaceWith(prior);
+ }
+ if(focused&&holder.contains(focused))focused.focus({preventScroll:true});
 }
 root.StudioLine={model,render,workspaceModel,renderWorkspace,renderWorkflow};
 if(typeof module!=='undefined')module.exports={model,workspaceModel,workflowControls};

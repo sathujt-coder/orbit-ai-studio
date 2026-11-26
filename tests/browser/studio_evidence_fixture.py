@@ -1,5 +1,6 @@
 """Test-only CLI: synthetic sandbox transport, production report and compare logic."""
 import os
+import json
 import sys
 import sqlite3
 from pathlib import Path
@@ -42,6 +43,15 @@ def main():
             assert report['gate']=='PASS'
             compare(job,report)
             vf.store_report(c,report)
+        elif action=='qa-receipt':
+            row=c.execute('SELECT version,digest,snapshot FROM studio_qa_receipts WHERE project_id=? AND job_id=? ORDER BY version DESC LIMIT 1',(pid,identifier)).fetchone()
+            assert row and row['version']==1
+            import project_planning as pp
+            snap=json.loads(row['snapshot'])
+            assert pp.digest(snap)==row['digest']
+            state=qa.view(c,pid,identifier)
+            assert state['state']=='HUMAN_QA_PASS' and state['receipt']['digest']==row['digest']
+            print(json.dumps(dict(version=row['version'],digest=row['digest'],source_digest=pp.digest(snap['source']),criteria=snap['criteria'])))
         elif action=='reopen-check':
             # New process and connection; invoke startup queue recovery only
             # when no task is in flight. Not a live-server restart.
