@@ -1,10 +1,44 @@
 """Explicit coding queue submission for current adopted implementation packages."""
 import json
+import re
 import product_requirements as pr
 import project_planning as pp
 import work_package_binding as binding
 import coding_factory
 import agent_queue
+
+def migrate_retry_bindings(c):
+    """Startup-only, transactional rebuild preserving all historical FK targets."""
+    old=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='studio_coding_bindings'").fetchone()
+    if not old:return
+    pattern=r'\s*UNIQUE\s*\(\s*project_id\s*,\s*adoption_version\s*,\s*package_id\s*\)\s*,'
+    matches=list(re.finditer(pattern,old[0],re.IGNORECASE))
+    if not matches:
+        if any(row[2] and [x[2] for x in c.execute('PRAGMA index_info("'+row[1].replace('"','""')+'")')]==['project_id','adoption_version','package_id']
+               for row in c.execute('PRAGMA index_list(studio_coding_bindings)')):
+            raise RuntimeError('Unrecognized binding uniqueness constraint; migration blocked')
+        return
+    if len(matches)!=1 or c.in_transaction:raise RuntimeError('Binding migration requires recognized idle schema')
+    sql=re.sub(pattern,'\n        ',old[0],count=1,flags=re.IGNORECASE)
+    sql=re.sub(r'^CREATE TABLE (?:IF NOT EXISTS )?"?studio_coding_bindings"?\s*\(',
+               'CREATE TABLE studio_coding_bindings_new(',sql,count=1,flags=re.IGNORECASE)
+    if not sql.startswith('CREATE TABLE studio_coding_bindings_new('):raise RuntimeError('Unknown binding schema')
+    objects=[x[0] for x in c.execute("SELECT sql FROM sqlite_master WHERE tbl_name='studio_coding_bindings' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name")]
+    fk=c.execute('PRAGMA foreign_keys').fetchone()[0]
+    c.execute('PRAGMA foreign_keys=OFF')
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute(sql)
+        c.execute('INSERT INTO studio_coding_bindings_new(rowid,job_id,project_id,queue_id,adoption_version,package_id,binding_digest,spec_digest,actor,created_at) SELECT rowid,job_id,project_id,queue_id,adoption_version,package_id,binding_digest,spec_digest,actor,created_at FROM studio_coding_bindings')
+        c.execute('DROP TABLE studio_coding_bindings')
+        c.execute('ALTER TABLE studio_coding_bindings_new RENAME TO studio_coding_bindings')
+        for statement in objects:c.execute(statement)
+        if c.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Binding migration foreign key violation')
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:c.execute('PRAGMA foreign_keys='+('ON' if fk else 'OFF'))
 
 def ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS studio_coding_bindings(
@@ -14,7 +48,6 @@ def ensure_schema(c):
         adoption_version INTEGER NOT NULL, package_id TEXT NOT NULL,
         binding_digest TEXT NOT NULL, spec_digest TEXT NOT NULL,
         actor TEXT NOT NULL, created_at TEXT NOT NULL,
-        UNIQUE(project_id,adoption_version,package_id),
         FOREIGN KEY(project_id,adoption_version,package_id)
         REFERENCES studio_work_packages(project_id,adoption_version,package_id))""")
 
@@ -83,6 +116,9 @@ def validate(c,pid,jid,qid):
         raise ValueError('Coding queue binding mismatch')
     pp.check_role(c,pid,row['actor'],'write')
     snap=checked_job_package(c,pid,row)
+    if 'retry_of' in q.keys() and q['retry_of']:
+        import bound_recovery
+        bound_recovery.validate_retry(c,pid,row,q)
     job=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()
     if not job or job['spec']!=spec_for(snap) or pp.digest(job['spec'])!=row['spec_digest']:
         raise ValueError('Coding specification digest mismatch')
@@ -98,10 +134,13 @@ def evidence(c,pid,jid):
         job=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()
         q=agent_queue.get(c,pid,row['queue_id'])
         if job and job['spec']==spec_for(snap) and pp.digest(job['spec'])==row['spec_digest'] and q['coding_job_id']==jid and q['kind']=='coding' and q['actor']==row['actor']:
-            result['state']='BOUND'
+            if 'retry_of' in q.keys() and q['retry_of']:
+                import bound_recovery
+                bound_recovery.validate_retry(c,pid,row,q)
             if effective_predecessors(c,pid,row['adoption_version'],snap):
                 pinned=c.execute('SELECT digest FROM engineering_queue_sources WHERE job_id=? AND project_id=?',(jid,pid)).fetchone()
                 if not pinned:raise ValueError('Missing pinned prerequisite evidence')
                 result['dependency_source_digest']=pinned['digest']
+            result['state']='BOUND'
     except (ValueError,KeyError,TypeError,PermissionError):pass
     return result

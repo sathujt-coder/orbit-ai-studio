@@ -57,11 +57,12 @@ def fixture_chat(lane,system,user,*,usage_observer=None,schema=None,**kwargs):
     if usage_observer:usage_observer(dict(input_tokens=20,output_tokens=30,total_tokens=50,coverage='complete',source='fixture',status='ok',elapsed_ms=1))
     return json.dumps(result)
 
-mp.chat=fixture_chat
-import server
-import auth_store
-server.init_db()
-with server.db() as c:
-    for user in ('ci-browser-user','ci-viewer','ci-reviewer','ci-developer'):
-        auth_store.create_user(c,user,'local-ci-fixture-password')
-server.main()
+if __name__=='__main__':
+    mp.chat=fixture_chat
+    import server
+    import auth_store
+    server.init_db()
+    with server.db() as c:
+        for user in ('ci-browser-user','ci-viewer','ci-reviewer','ci-developer'):
+            auth_store.create_user(c,user,'local-ci-fixture-password')
+    server.main()

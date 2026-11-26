@@ -14,6 +14,7 @@ import studio_quality
 import studio_workflow
 import work_package_binding
 import studio_coding
+import bound_recovery
 import studio_verification
 import engineering_contract
 import dependency_completion
@@ -110,6 +111,8 @@ def db(): return ManagedConnection()
 
 
 def init_db():
+    # Main owns the dispatcher lock before startup; migrate on an idle connection.
+    with LOCK, db() as c:studio_coding.migrate_retry_bindings(c)
     with LOCK, db() as c:
         auth_store.ensure_schema(c)
         acceptance_store.ensure_schema(c)
@@ -147,6 +150,7 @@ def init_db():
         engineering_contract.ensure_schema(c)
         dependency_completion.ensure_schema(c)
         dependency_queue.ensure_schema(c)
+        bound_recovery.ensure_schema(c)
         wbs_dependency_extension.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
@@ -452,6 +456,24 @@ def enqueue_dependent_coding(pid,actor,body):
         jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
     QUEUE_WAKE.set()
     return dict(job_id=jid,queue_id=task['id'],status='queued',production_release_authorized=False)
+
+def enqueue_bound_retry(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:
+            src,spec=bound_recovery.request(c,pid,actor,body)
+            old=agent_queue.get(c,pid,src['previous_queue_id'])
+            if revision!=old['provider_revision'] or agent_queue.fingerprint(lanes,ROUTING['fingerprint'])!=old['provider_fingerprint']:
+                raise ValueError('Original provider configuration required for bound retry')
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,
+                priority=old['priority'],dependency_id=old['dependency_id'],retry_of=old['id'],routing=ROUTING['fingerprint'])
+            task['digest']=bound_recovery.record(c,pid,actor,body,jid,task['id'],now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],retry_of=src['previous_queue_id'],receipt_digest=task['digest'],
+                status='queued',production_release_authorized=False)
 
 def enqueue_bound_coding(pid,actor,body):
     with LOCK:
@@ -991,6 +1013,9 @@ class Handler(SimpleHTTPRequestHandler):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=studio_verification.attest(c,pid,actor,body,now())
                 self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/retry',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_bound_retry(pid,actor,body));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/coding',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_bound_coding(pid,actor,body));return

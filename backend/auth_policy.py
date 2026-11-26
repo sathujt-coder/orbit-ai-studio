@@ -46,7 +46,7 @@ def scope(c,method,path,query='',body=None):
         if m:return (m.group(1),'approve')
         m=re.fullmatch(r'/api/projects/('+ID+r')/studio/work-packages/qa',path)
         if m:return (m.group(1),'approve')
-        m=re.fullmatch(r'/api/projects/('+ID+r')/studio/work-packages/(?:bind|coding)',path)
+        m=re.fullmatch(r'/api/projects/('+ID+r')/studio/work-packages/(?:bind|coding|retry)',path)
         if m:return (m.group(1),'write')
         m=re.fullmatch(r'/api/projects/('+ID+r')/planning/wbs/adopt',path)
         if m:return (m.group(1),'approve')

@@ -8,6 +8,7 @@ import project_planning
 import work_breakdown
 import work_package_binding
 import studio_coding
+import bound_recovery
 import studio_verification
 from web_candidate_selection import compare
 
@@ -58,7 +59,10 @@ def view(c,pid):
                 rec['verification'].update(state='VERIFIED_CANDIDATES',candidates={k:contract(v,('digest','test_count')) for k,v in result['candidates'].items()})
         except (ValueError,TypeError,KeyError,AttributeError,PermissionError):
             if rec['verification']:rec['verification']['state']='BLOCK'
-        if binding:rec['qa']=studio_verification.view(c,pid,jid)
+        if binding:
+            rec['qa']=studio_verification.view(c,pid,jid)
+            if q and q['status'] in bound_recovery.TERMINAL:
+                rec['recovery']=bound_recovery.view(c,pid,q['id'])
         jobs.append(rec)
     return dict(schema='orbit.studio-workflow.v1',project_id=pid,requirements=requirements,planning=planning,
         coding_jobs=jobs,queue=queue,work_packages=packages,next_checkpoint='APPROVE_PRD' if not approved else 'ADOPT_PLANNING' if planning['state']!='adopted' else 'CODING_QUEUE_BINDING_REQUIRED' if any(x['state']=='BOUND' for x in packages['bindings']) else 'WORK_PACKAGE_BINDING_REQUIRED',

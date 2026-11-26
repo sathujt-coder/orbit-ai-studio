@@ -97,8 +97,17 @@ def view(c,pid):
             if row:
                 snap=json.loads(row['snapshot'])
                 item['receipt']={k:row[k] for k in ('version','digest','actor','created_at')}
-                if pp.digest(snap)!=row['digest'] or row['job_id']!=jid:
+                if pp.digest(snap)!=row['digest']:
                     item['state']='INVALID';out['items'].append(item);continue
+                if row['job_id']!=jid:
+                    # Only verified lineage may classify a historical job as superseded.
+                    retry_table=c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='studio_bound_retries'").fetchone()
+                    linked=retry_table and c.execute("""WITH RECURSIVE lineage(job_id) AS (
+                        SELECT ? UNION SELECT r.job_id FROM studio_bound_retries r JOIN lineage l
+                        ON r.previous_job_id=l.job_id WHERE r.project_id=?)
+                        SELECT 1 FROM lineage WHERE job_id=?""",(jid,pid,row['job_id'])).fetchone()
+                    item.update(state='SUPERSEDED' if linked else 'INVALID',receipt=None)
+                    out['items'].append(item);continue
             src=source(c,pid,jid)
             item.update(source=src,source_digest=pp.digest(src))
             if not row:item['state']='AWAITING_CONFIRMATION'

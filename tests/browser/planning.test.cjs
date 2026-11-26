@@ -495,6 +495,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(staleDispatch,['before_claim','after_routing'].map(scenario=>({scenario,queue:'dead',reason:'coding_source_invalid',job:'failed',model_calls:0,pin_unchanged:true})));
   console.log('Stale dispatch protection verified before claim and after routing: zero model calls; immutable pins; no bound retry');
   checkpoint('stale_dispatch_zero_calls');
+  const recoveredAttempt=JSON.parse(evidenceFixture('bound-retry-copy',pid,boundJob.job_id).toString());
+  assert.deepEqual(recoveredAttempt,{interrupted:true,rollback:true,immutable_history:true,duplicate_rejected:true,dispatcher:'succeeded',qa:'BLOCK',model_calls:4});
+  console.log('Bound recovery verified: interrupted attempt, atomic rollback, immutable history, duplicate rejection, fresh dispatcher and QA BLOCK');
+  const recoveryPath=base+'retry';
+  const invalidRetry={queue_id:boundJob.queue.id,source_digest:'wrong',rationale:'Explicit recovery test with an invalid source.',confirmation:'RETRY BOUND WORK PACKAGE'};
+  assert.equal((await post(viewer,vc,recoveryPath,invalidRetry)).status(),403);
+  assert.equal((await post(reviewer,rc,recoveryPath,invalidRetry)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),recoveryPath,invalidRetry)).status(),403);
+  assert.equal((await post(dev,dc,recoveryPath,invalidRetry)).status(),400);
   const dependentSubmitted=await post(dev,dc,dependentPath,dependentBody);
   assert.equal(dependentSubmitted.status(),202,await dependentSubmitted.text());
   const dependentJob=await dependentSubmitted.json();
