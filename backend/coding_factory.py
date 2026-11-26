@@ -224,9 +224,10 @@ def begin(conn_factory, lock, pid, spec, new_id, now, log_fn, runner, *, enqueue
     return jid
 
 
-def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn, *, repair=None):
+def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn, *, repair=None, source_guard=None):
     def update(status, **values):
         with lock, conn_factory() as c:
+            if source_guard is not None and status!='failed':source_guard(c)
             cols = ['status=?', 'updated_at=?'] + [f'{name}=?' for name in values]
             c.execute('UPDATE coding_jobs SET ' + ','.join(cols) + ' WHERE id=? AND project_id=?',
                       (status, now(), *values.values(), jid, pid))
@@ -242,7 +243,11 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn, *, r
         spec = row['spec']
         context = context_fn(pid, 'dev')
         if repair is not None and (model_call is None or set(repair)!={'A','B'}):raise ValueError('Invalid repair plan')
+        def guard():
+            if source_guard is not None:
+                with lock,conn_factory() as c:source_guard(c)
         def candidate(lane):
+            guard()
             if repair is None:return generate_proposal(model_call,project,spec,context,lane)
             previous=repair[lane]
             prior=validate_proposal(previous['proposal'])
@@ -262,9 +267,11 @@ def work(conn_factory, lock, jid, pid, model_call, now, log_fn, context_fn, *, r
         b = candidate('B')
         update('reviewing',proposal_b=json.dumps(b,ensure_ascii=False))
         phase='review_A'
+        guard()
         ra = review_proposal(model_call, project, spec, b, 'A', 'B')
         update('reviewing',review_a=json.dumps(ra,ensure_ascii=False))
         phase='review_B'
+        guard()
         rb = review_proposal(model_call, project, spec, a, 'B', 'A')
         phase='finalize'
         approved = all(v['verdict'] == 'APPROVE' and v['score'] >= 80 for v in (ra, rb))

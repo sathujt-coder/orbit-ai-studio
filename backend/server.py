@@ -13,6 +13,7 @@ import studio_activity
 import studio_quality
 import studio_workflow
 import work_package_binding
+import studio_coding
 import coding_factory
 import verification_factory
 import auth_store
@@ -136,6 +137,7 @@ def init_db():
         studio_handoff.ensure_schema(c)
         studio_activity.ensure_schema(c)
         work_package_binding.ensure_schema(c)
+        studio_coding.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -419,6 +421,18 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
 
+def enqueue_bound_coding(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:spec=studio_coding.request(c,pid,actor,body)
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,routing=ROUTING['fingerprint'])
+            studio_coding.record(c,pid,actor,body,jid,task['id'],spec,now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],status='queued',production_release_authorized=False)
+
 def enqueue_requirements(pid,actor,priority=5,dependency_id=None,retry_of=None,scope_contract=None):
     with LOCK,db() as c:
         revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
@@ -579,16 +593,30 @@ def dispatch_one():
         else:
             jid=row['coding_job_id']
             with LOCK,db() as c:
-                spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
+                spec=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()[0]
+                bound=studio_coding.lookup(c,pid,jid)
+                if bound:
+                    try:studio_coding.validate(c,pid,jid,identifier)
+                    except (ValueError,KeyError,TypeError,PermissionError):
+                        agent_queue.fail(c,row,'coding_source_invalid',int(time.time()),now());return True
             lanes=route_pair(lanes,pid,jid,'dev','coding',len(spec)+len(get_preceding(pid,'dev')))
             mode=model_provider.mode(lanes)
             llm=None if mode=='demo' else snapshot_call(lanes,project_id=pid,department='dev',purpose='coding',run_id=jid)
-            coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
+            if bound:
+                def source_guard(c):studio_coding.validate(c,pid,jid,identifier)
+                coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding,source_guard=source_guard)
+            else:
+                coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
             with LOCK,db() as c:
                 result=c.execute('SELECT status FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
             if result not in ('ready','needs_revision','failed'):result='failed'
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
+            if current['kind']=='coding' and studio_coding.lookup(c,pid,current['coding_job_id']):
+                try:studio_coding.validate(c,pid,current['coding_job_id'],identifier)
+                except (ValueError,KeyError,TypeError,PermissionError):
+                    c.execute("UPDATE coding_jobs SET status='failed',error='coding_source_invalid',updated_at=? WHERE id=? AND project_id=?",(now(),current['coding_job_id'],pid))
+                    agent_queue.fail(c,current,'coding_source_invalid',int(time.time()),now());return True
             agent_queue.boundary(c,current,result,int(time.time()),now(),stage)
     except Exception as error:
         # Do not log raw prompts/errors or automatically replay uncertain execution.
@@ -623,6 +651,7 @@ def retry_queue(pid,identifier,actor,confirmation):
             if not agent_queue.permitted(c,actor,pid):raise PermissionError('Project write permission required')
             dep=old['dependency_id']
             if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
+            if old['kind']=='coding' and studio_coding.lookup(c,pid,old['coding_job_id']):raise ValueError('Bound coding retry requires explicit future recovery workflow')
             spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
         if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
         if old['kind']=='planning_review':
@@ -911,6 +940,9 @@ class Handler(SimpleHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/coding',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_bound_coding(pid,actor,body));return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/bind',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:data=work_package_binding.bind(c,pid,actor,body,now())

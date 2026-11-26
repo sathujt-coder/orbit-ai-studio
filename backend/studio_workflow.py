@@ -7,6 +7,7 @@ import product_requirements
 import project_planning
 import work_breakdown
 import work_package_binding
+import studio_coding
 from web_candidate_selection import compare
 
 def contract(row,keys):
@@ -39,6 +40,8 @@ def view(c,pid):
         q=c.execute("SELECT id,status,dependency_id,retry_of FROM agent_queue WHERE project_id=? AND coding_job_id=? AND kind='coding'",(pid,jid)).fetchone()
         rec=dict(job_id=jid,status=item['status'],queue=dict(q) if q else None,
                  planning_binding='NOT_RECORDED',manifest_digest=None,verification=None,execution_authorized=False)
+        binding=studio_coding.evidence(c,pid,jid)
+        if binding:rec.update(planning_binding=binding['state'],source_binding=binding)
         report=c.execute("SELECT id,verdict,report_json,created_at FROM coding_verifications WHERE project_id=? AND job_id=? ORDER BY rowid DESC LIMIT 1",(pid,jid)).fetchone()
         try:
             job=coding_factory.detail(c,jid)
@@ -58,4 +61,4 @@ def view(c,pid):
     return dict(schema='orbit.studio-workflow.v1',project_id=pid,requirements=requirements,planning=planning,
         coding_jobs=jobs,queue=queue,work_packages=packages,next_checkpoint='APPROVE_PRD' if not approved else 'ADOPT_PLANNING' if planning['state']!='adopted' else 'CODING_QUEUE_BINDING_REQUIRED' if any(x['state']=='BOUND' for x in packages['bindings']) else 'WORK_PACKAGE_BINDING_REQUIRED',
         execution_authorized=False,automatic_dispatch=False,production_release_authorized=False,
-        note='Existing coding jobs are not bound to adopted work packages. Verification is not release approval.')
+        note='Standalone coding jobs remain unbound. Bound jobs require explicit submission. Verification is not release approval.')
