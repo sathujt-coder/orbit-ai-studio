@@ -283,8 +283,15 @@ test('Studio orchestration controls fail closed without adopted source and prese
   const page=await browser.newPage({viewport:{width:390,height:844}});const csrf=await login(page);
   const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'SG6e '+Date.now(),idea:'Studio orchestration permission and missing source fixture',platform:'Web app'}});
   assert.equal(created.status(),201);const pid=(await created.json()).project_id;
-  await page.goto(ORIGIN+'/');await page.locator('#projectSide [data-pid="'+pid+'"]').click();
+  // Mobile CSS intentionally hides .project-side at <=760px. Restore the
+  // existing persisted project selection before application bootstrap.
+  await page.addInitScript(({origin,id})=>{if(location.origin===origin)localStorage.setItem('orbit-project',id)},{origin:ORIGIN,id:pid});
+  await page.goto(ORIGIN+'/');
+  await page.locator('#studioLine[data-project-id="'+pid+'"][data-ready="true"]').waitFor({timeout:15000});
   await page.locator('#studioWorkflow[data-project-id="'+pid+'"]').waitFor();
+  assert.equal(await page.locator('#projectSide').isVisible(),false);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('orbit-project')),pid);
+  assert.equal(await page.locator('#projectSide [data-pid="'+pid+'"].active').count(),1);
   const state=await (await page.request.get(ORIGIN+'/api/projects/'+pid+'/state')).json();
   assert.deepEqual(state.workflow_permissions,{project_id:pid,can_write:true,can_approve:true});
   assert.equal(await page.locator('#studioWorkflow [data-workflow-stage="qa"]').count(),1);
