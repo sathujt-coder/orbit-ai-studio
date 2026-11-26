@@ -43,6 +43,35 @@ def main():
             assert report['gate']=='PASS'
             compare(job,report)
             vf.store_report(c,report)
+        elif action=='dependency-pin':
+            import dependency_queue as dq
+            import studio_coding as sc
+            import project_planning as pp
+            bound=sc.lookup(c,pid,identifier)
+            assert bound and aq.get(c,pid,bound['queue_id'])['status']=='succeeded'
+            pinned=c.execute('SELECT snapshot,digest FROM engineering_queue_sources WHERE project_id=? AND job_id=?',(pid,identifier)).fetchone()
+            assert pinned
+            snap=json.loads(pinned['snapshot'])
+            assert pp.digest(snap)==pinned['digest']
+            assert dq.source(c,pid,bound['adoption_version'],bound['package_id'],bound['binding_digest'])==snap
+            assert sc.spec_for(dq.checked_package(c,pid,bound))==job['spec']
+            assert pp.digest(job['spec'])==bound['spec_digest']==snap['spec_digest']
+            assert not c.execute('PRAGMA foreign_key_check').fetchall()
+            print(json.dumps(dict(source=snap,digest=pinned['digest'],queue_id=bound['queue_id'],actor=bound['actor'])))
+        elif action=='dependency-completion':
+            import dependency_completion as dc
+            import studio_coding as sc
+            import project_planning as pp
+            bound=sc.lookup(c,pid,identifier)
+            row=dc.latest(c,pid,bound['adoption_version'],bound['package_id'])
+            assert row and row['job_id']==identifier and row['version']==1
+            snap=json.loads(row['snapshot'])
+            assert pp.digest(snap)==row['digest']
+            assert dc.source(c,pid,identifier)==snap['source']
+            decision=snap['decision']
+            checked=dc.selection(c,pid,snap['source'],row['actor'],decision['selected'],decision['rationale'])
+            assert {k:v for k,v in checked.items() if k!='decided_at'}=={k:v for k,v in decision.items() if k!='decided_at'}
+            print(json.dumps(dict(digest=row['digest'],source_digest=pp.digest(snap['source']),dependency_source_digest=snap['source']['dependency_source_digest'],selected_digest=decision['selected_digest'])))
         elif action=='qa-receipt':
             row=c.execute('SELECT version,digest,snapshot FROM studio_qa_receipts WHERE project_id=? AND job_id=? ORDER BY version DESC LIMIT 1',(pid,identifier)).fetchone()
             assert row and row['version']==1

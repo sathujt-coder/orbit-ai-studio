@@ -210,6 +210,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(dependentBindingResponse.status(),201);
   const dependentBinding=(await dependentBindingResponse.json()).digest;
   const blockedLegacy={adoption_version:1,package_id:edge.target,binding_digest:dependentBinding,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
+  const dependentPath='/api/projects/'+pid+'/engineering/dependent-coding';
   const legacyBypass=await post(owner,csrf,base+'coding',blockedLegacy);
   assert.equal(legacyBypass.status(),400);assert.match((await legacyBypass.json()).error,/Dependent/);
   const dependentContract=(await get(owner,'/api/projects/'+pid+'/state')).engineering.contracts.find(x=>x.package_id===edge.target);
@@ -218,6 +219,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(dependentContract.source.extension_digest,extReceipt.digest);
   assert.equal((await post(reviewer,rc,engineeringPath,{...ebdy,package_id:edge.target,source_digest:dependentContract.source_digest})).status(),201);
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
+  const missingPrerequisite={adoption_version:1,package_id:edge.target,binding_digest:dependentBinding,source_digest:'missing',confirmation:'QUEUE DEPENDENT WORK PACKAGE'};
+  const deniedDependency=await post(owner,csrf,dependentPath,missingPrerequisite);
+  assert.equal(deniedDependency.status(),400,await deniedDependency.text());
+  assert.match((await deniedDependency.json()).error,/Missing prerequisite completion receipt/);
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.some(j=>j.source_binding?.package_id===edge.target),false);
+  console.log('Dependent HTTP submission blocked before prerequisite completion');
   const queueBody={adoption_version:1,package_id:wp.id,binding_digest:bound.digest,confirmation:'QUEUE ADOPTED WORK PACKAGE'};
   assert.equal((await post(viewer,vc,base+'coding',queueBody)).status(),403);
   assert.equal((await post(reviewer,rc,base+'coding',queueBody)).status(),403);
@@ -383,7 +390,114 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
   assert.equal(eligible.source.extension_digest,extReceipt.digest);
   assert.equal((await post(owner,csrf,base+'coding',blockedLegacy)).status(),400);
-  const dependentPath='/api/projects/'+pid+'/engineering/dependent-coding';
+  // Positive dependent path through real authenticated HTTP, actual dispatcher and
+  // durable SQLite pins. Only inference and sandbox transport are synthetic.
+  const dependentBody={...missingPrerequisite,source_digest:eligible.source_digest};
+  for(const [page,token] of [[viewer,vc],[reviewer,rc]])
+   assert.equal((await post(page,token,dependentPath,dependentBody)).status(),403);
+  assert.equal((await post(owner,'0'.repeat(64),dependentPath,dependentBody)).status(),403);
+  for(const change of [{source_digest:'wrong'},{binding_digest:'wrong'},{confirmation:'yes'},{adoption_version:2}]){
+   const bad=await post(owner,csrf,dependentPath,{...dependentBody,...change});
+   assert.equal(bad.status(),400,await bad.text());
+  }
+  assert.equal((await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.some(j=>j.source_binding?.package_id===edge.target),false);
+  const dependentSubmitted=await post(dev,dc,dependentPath,dependentBody);
+  assert.equal(dependentSubmitted.status(),202,await dependentSubmitted.text());
+  const dependentJob=await dependentSubmitted.json();
+  assert.equal(dependentJob.status,'queued');
+  assert.equal(dependentJob.production_release_authorized,false);
+  assert.ok(dependentJob.job_id&&dependentJob.queue_id);
+  assert.notEqual(dependentJob.job_id,boundJob.job_id);
+  assert.notEqual(dependentJob.queue_id,boundJob.queue.id);
+  const dependentState=()=>get(owner,'/api/projects/'+pid+'/state');
+  let dependentReady;
+  const dependentDeadline=Date.now()+30000;
+  while(Date.now()<dependentDeadline){
+   const state=await dependentState();
+   dependentReady=state.workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
+   if(dependentReady?.queue?.status==='succeeded')break;
+   if(['dead','cancelled','interrupted'].includes(dependentReady?.queue?.status))
+    assert.fail('Dependent coding queue failed: '+JSON.stringify(state.workflow.queue.tasks.find(q=>q.id===dependentJob.queue_id)));
+   await new Promise(r=>setTimeout(r,200));
+  }
+  assert.equal(dependentReady?.queue?.status,'succeeded',JSON.stringify(dependentReady));
+  assert.equal(dependentReady.status,'ready');
+  assert.equal(dependentReady.planning_binding,'BOUND');
+  assert.equal(dependentReady.queue.id,dependentJob.queue_id);
+  assert.equal(dependentReady.source_binding.package_id,edge.target);
+  assert.equal(dependentReady.source_binding.adoption_version,1);
+  assert.equal(dependentReady.source_binding.binding_digest,dependentBinding);
+  assert.equal(dependentReady.source_binding.spec_digest,eligible.source.spec_digest);
+  assert.equal(dependentReady.source_binding.dependency_source_digest,eligible.source_digest);
+  assert.equal(dependentReady.qa.state,'BLOCK');
+  const pin=JSON.parse(evidenceFixture('dependency-pin',pid,dependentJob.job_id).toString());
+  assert.equal(pin.digest,eligible.source_digest);
+  assert.deepEqual(pin.source,eligible.source);
+  assert.equal(pin.queue_id,dependentJob.queue_id);
+  assert.equal(pin.actor,'ci-developer');
+  assert.equal(pin.source.prerequisites[0].job_id,boundJob.job_id);
+  assert.equal(pin.source.prerequisites[0].selected_digest,savedCompletion.receipt.selected_digest);
+  assert.equal((await dependentState()).dependency_queue.items.find(x=>x.package_id===edge.target).state,'SUBMITTED');
+  assert.equal((await post(owner,csrf,dependentPath,dependentBody)).status(),400);
+  assert.equal((await post(owner,csrf,base+'coding',blockedLegacy)).status(),400);
+  console.log('Dependent HTTP 202; real dispatcher succeeded; immutable prerequisite and contract pin verified');
+  // QA cannot be attested using a successful queue alone.
+  assert.equal((await post(reviewer,rc,base+'qa',{...qaBody,job_id:dependentJob.job_id})).status(),400);
+  evidenceFixture('report',pid,dependentJob.job_id);
+  let dependentQA=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id).qa;
+  assert.equal(dependentQA.state,'AWAITING_HUMAN_QA');
+  assert.equal(dependentQA.source.dependency_source_digest,pin.digest);
+  assert.equal(dependentQA.source.binding_digest,dependentBinding);
+  assert.equal(dependentQA.latest_version,0);
+  assert.ok(dependentQA.source.acceptance.length);
+  assert.deepEqual(Object.keys(dependentQA.source.candidates).sort(),['A','B']);
+  const dependentQARequest={job_id:dependentJob.job_id,source_digest:dependentQA.source_digest,expected_version:0,
+   criteria:dependentQA.source.acceptance.map(c=>({id:c.id,verdict:'PASS',rationale:'Synthetic dependent acceptance fixture; not functional product certification.'})),
+   confirmation:'ATTEST WORK PACKAGE QA'};
+  assert.equal((await post(dev,dc,base+'qa',dependentQARequest)).status(),403);
+  assert.equal((await post(reviewer,rc,base+'qa',{...dependentQARequest,source_digest:'wrong'})).status(),400);
+  const dependentAttest=await post(reviewer,rc,base+'qa',dependentQARequest);
+  assert.equal(dependentAttest.status(),201,await dependentAttest.text());
+  const dependentReceipt=await dependentAttest.json();
+  assert.equal(dependentReceipt.version,1);
+  assert.equal(dependentReceipt.execution_authorized,false);
+  const dependentPersisted=JSON.parse(evidenceFixture('qa-receipt',pid,dependentJob.job_id).toString());
+  assert.equal(dependentPersisted.digest,dependentReceipt.digest);
+  assert.equal(dependentPersisted.source_digest,dependentQARequest.source_digest);
+  assert.deepEqual(dependentPersisted.criteria,dependentQARequest.criteria);
+  dependentQA=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id).qa;
+  assert.equal(dependentQA.state,'HUMAN_QA_PASS');
+  assert.equal(dependentQA.dependency_completed,false);
+  assert.equal(dependentQA.production_release_authorized,false);
+  console.log('Dependent QA HTTP 201; A/B sandbox evidence and persisted criterion receipt verified');
+  const dependentCompletionState=async()=> (await dependentState()).dependency_completion.items.find(x=>x.job_id===dependentJob.job_id);
+  const dependentCandidate=await dependentCompletionState();
+  assert.equal(dependentCandidate.state,'AWAITING_CONFIRMATION');
+  assert.equal(dependentCandidate.source.dependency_source_digest,pin.digest);
+  assert.equal(dependentCandidate.source.qa_digest,dependentReceipt.digest);
+  const dependentCompletionBody={job_id:dependentJob.job_id,source_digest:dependentCandidate.source_digest,expected_version:0,selected:'A',
+   rationale:'Synthetic dependent candidate reviewed explicitly for development evidence only.',
+   confirmation:'CONFIRM DEPENDENCY COMPLETION DEV-A '+dependentJob.job_id};
+  assert.equal((await post(dev,dc,completionPath,dependentCompletionBody)).status(),403);
+  assert.equal((await post(reviewer,rc,completionPath,{...dependentCompletionBody,source_digest:'wrong'})).status(),400);
+  const dependentCompleted=await post(reviewer,rc,completionPath,dependentCompletionBody);
+  assert.equal(dependentCompleted.status(),201,await dependentCompleted.text());
+  const dependentCompletedReceipt=await dependentCompleted.json();
+  assert.equal(dependentCompletedReceipt.version,1);
+  assert.equal(dependentCompletedReceipt.execution_authorized,false);
+  assert.equal(dependentCompletedReceipt.automatic_dispatch,false);
+  assert.equal(dependentCompletedReceipt.production_release_authorized,false);
+  const dependentSaved=await dependentCompletionState();
+  assert.equal(dependentSaved.state,'COMPLETION_EVIDENCE_CONFIRMED');
+  assert.equal(dependentSaved.receipt.selected,'A');
+  assert.equal(dependentSaved.receipt.digest,dependentCompletedReceipt.digest);
+  const persistedCompletion=JSON.parse(evidenceFixture('dependency-completion',pid,dependentJob.job_id).toString());
+  assert.equal(persistedCompletion.digest,dependentCompletedReceipt.digest);
+  assert.equal(persistedCompletion.source_digest,dependentCompletionBody.source_digest);
+  assert.equal(persistedCompletion.dependency_source_digest,pin.digest);
+  assert.equal(persistedCompletion.selected_digest,dependentSaved.receipt.selected_digest);
+  assert.equal((await post(reviewer,rc,completionPath,dependentCompletionBody)).status(),400);
+  console.log('Dependent completion HTTP 201; selected candidate and upstream evidence pinned');
   const verifyPackage=adopted.current.snapshot.bundle.wbs.document.deliverables.flatMap(d=>d.packages).find(p=>p.kind==='verify'&&p.depends_on.includes(wp.id));
   assert.ok(verifyPackage);
   const vb=await post(owner,csrf,base+'bind',{...bindingBody,package_id:verifyPackage.id});
@@ -402,6 +516,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(staleQA.state,'STALE');
   assert.equal((await completionState()).state,'STALE');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');
+  const staleDependent=(await dependentState()).workflow.coding_jobs.find(j=>j.job_id===dependentJob.job_id);
+  assert.equal(staleDependent.planning_binding,'STALE');
+  assert.equal(staleDependent.qa.state,'STALE');
+  assert.equal((await dependentCompletionState()).state,'STALE');
+  assert.equal((await post(reviewer,rc,completionPath,{...dependentCompletionBody,expected_version:1})).status(),400);
+  assert.equal((await post(reviewer,rc,base+'qa',{...dependentQARequest,expected_version:1})).status(),400);
+  console.log('Upstream report replacement invalidates dependent pin, QA and completion evidence');
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();

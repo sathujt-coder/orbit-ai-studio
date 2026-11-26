@@ -156,7 +156,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.3c.1b.2 — Engineering system acceptance
+    name: P6.3c.1c — Engineering system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -173,9 +173,9 @@ jobs:
           checks = {key: actual.get(key, {}).get('result', 'missing') for key in required}
           passed = set(actual) == set(required) and all(value == 'success' for value in checks.values())
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.3c.1b.2', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.3c.1c', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.3c.1c' if passed else None,
+                        development_next_phase='P6.3c.1d' if passed else None,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
                         automatic_adoption=False, automatic_dispatch=False,
