@@ -1,6 +1,8 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
+const {execFileSync}=require('node:child_process');
+const evidenceFixture=(action,pid,id)=>execFileSync('python',['tests/browser/studio_evidence_fixture.py',action,pid,id],{stdio:'pipe'});
 const {login,headers,ORIGIN}=require('./auth-helper.cjs');
 
 test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',async()=>{
@@ -174,6 +176,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(reviewer,rc,base+'coding',queueBody)).status(),403);
   assert.equal((await post(owner,'0'.repeat(64),base+'coding',queueBody)).status(),403);
   assert.equal((await post(owner,csrf,base+'coding',{...queueBody,binding_digest:'wrong'})).status(),400);
+  evidenceFixture('fault-on',pid,wp.id);
+  try{
+   const failed=await post(owner,csrf,base+'coding',queueBody);
+   assert.ok(failed.status()>=400);
+  }finally{evidenceFixture('fault-off',pid,wp.id)}
   await queueForm.locator('input[name=confirmation]').fill(queueBody.confirmation);
   await queueForm.locator('button[type=submit]').click();
   let boundJob;
@@ -195,6 +202,28 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(owner,'0'.repeat(64),base+'qa',qaBody)).status(),403);
   assert.equal((await post(reviewer,rc,base+'qa',qaBody)).status(),400);
   assert.equal((await post(viewer,vc,'/api/projects/'+other+'/studio/work-packages/bind',bindingBody)).status(),403);
+  evidenceFixture('report',pid,boundJob.job_id);
+  const qaForm=studio.locator('#studioWorkflow [data-qa-job="'+boundJob.job_id+'"] form[data-studio-action="qa"]');
+  await qaForm.waitFor({timeout:15000});
+  let currentQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
+  assert.equal(currentQA.state,'AWAITING_HUMAN_QA');
+  assert.equal(currentQA.latest_version,0);
+  for(const criterion of currentQA.source.acceptance){
+   await qaForm.getByLabel('Verdict '+criterion.id,{exact:true}).selectOption('PASS');
+   await qaForm.getByLabel('Rationale '+criterion.id,{exact:true}).fill('Synthetic acceptance fixture only; not real functional verification.');
+  }
+  await qaForm.locator('input[name=confirmation]').fill('ATTEST WORK PACKAGE QA');
+  await qaForm.locator('button[type=submit]').click();
+  await studio.waitForFunction(id=>document.querySelector('[data-qa-job="'+id+'"] h4')?.textContent.includes('HUMAN_QA_PASS'),boundJob.job_id,{timeout:15000});
+  currentQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
+  assert.equal(currentQA.receipt.version,1);
+  assert.equal(currentQA.dependency_completed,false);
+  assert.equal(currentQA.production_release_authorized,false);
+  evidenceFixture('reopen-check',pid,boundJob.job_id);
+  evidenceFixture('report',pid,boundJob.job_id);
+  const staleQA=(await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.find(j=>j.job_id===boundJob.job_id).qa;
+  assert.equal(staleQA.state,'STALE');
+  assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
   await studio.close();
   await owner.locator('#seed').click();await owner.waitForFunction(()=>document.querySelector('#plan-state').textContent.includes('Plan v1'));
   let data=await get(owner,pp);assert.equal(data.execution_ready,false);assert.equal(data.analysis.task_count,4);
