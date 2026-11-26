@@ -403,6 +403,29 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
    assert.equal(bad.status(),400,await bad.text());
   }
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).workflow.coding_jobs.some(j=>j.source_binding?.package_id===edge.target),false);
+  // Inject failure after the real pin INSERT and again after the real audit
+  // INSERT. All transaction-owned rows must match exactly before and after.
+  for(const [fault,message] of [
+   ['dependency-pin-fault-on','fixture dependency pin persistence fault'],
+   ['dependency-audit-fault-on','fixture dependency audit persistence fault']
+  ]){
+   const before=JSON.parse(evidenceFixture(fault,pid,edge.target).toString());
+   let failure;
+   try{failure=await post(dev,dc,dependentPath,dependentBody)}
+   finally{
+    const after=JSON.parse(evidenceFixture('dependency-fault-off',pid,edge.target).toString());
+    assert.deepEqual(after,before);
+   }
+   assert.equal(failure.status(),400,await failure.text());
+   assert.equal((await failure.json()).error,message);
+   const restored=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
+   assert.equal(restored.state,'READY_FOR_EXPLICIT_SUBMISSION');
+   assert.equal(restored.source_digest,eligible.source_digest);
+   console.log('Dependent atomic rollback verified: '+fault+'; exact job/queue/pin/audit/event/usage rows unchanged');
+  }
+  const staleDispatch=JSON.parse(evidenceFixture('stale-dispatch-copy',pid,boundJob.job_id).toString());
+  assert.deepEqual(staleDispatch,['before_claim','after_routing'].map(scenario=>({scenario,queue:'dead',reason:'coding_source_invalid',job:'failed',model_calls:0,pin_unchanged:true})));
+  console.log('Stale dispatch protection verified before claim and after routing: zero model calls; immutable pins; no bound retry');
   const dependentSubmitted=await post(dev,dc,dependentPath,dependentBody);
   assert.equal(dependentSubmitted.status(),202,await dependentSubmitted.text());
   const dependentJob=await dependentSubmitted.json();
