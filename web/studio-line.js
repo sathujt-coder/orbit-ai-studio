@@ -185,7 +185,7 @@ function workflowControls(state){
 }
 function renderWorkflow(holder,state,submit){
  const w=state.workflow;
- const rights=workflowControls(state),signature=JSON.stringify([w,rights,state.engineering]);
+ const rights=workflowControls(state),signature=JSON.stringify([w,rights,state.engineering,state.dependency_completion]);
  if(holder.dataset.projectId===state.project?.id&&holder.dataset.signature===signature)return;
  holder.replaceChildren();delete holder.dataset.projectId;delete holder.dataset.signature;
  if(!w||w.project_id!==state.project?.id){holder.append(el('p','line-notice','Unified workflow chưa xác minh'));return}
@@ -240,6 +240,12 @@ function renderWorkflow(holder,state,submit){
    section.append(el('p','role-evidence-item',item.package_id+' · '+item.state+' · v'+item.latest_version+' · '+(item.source_digest||'unavailable')));
    if(item.source)section.append(el('p','line-notice','Graph '+item.source.graph_digest+' · prerequisites '+(item.source.predecessors.join(', ')||'none')+' · '+item.source.reasons.join(', ')));
   }
+ }
+ const completion=state.dependency_completion;
+ if(completion?.project_id===w.project_id){
+  const section=panel('Dependency Completion Evidence','Development evidence only · không tự mở khóa dependency',[]);
+  section.dataset.workflowStage='dependency-completion';
+  for(const item of completion.items)section.append(el('p','role-evidence-item',item.package_id+' · '+item.state+' · v'+item.latest_version+' · '+(item.receipt?.selected?'DEV-'+item.receipt.selected+' · ':'')+(item.source_digest||'unavailable')));
  }
  const jobs=w.coding_jobs.flatMap(j=>['Job '+j.job_id+' · '+j.status+' · '+j.planning_binding+(j.source_binding?' · '+j.source_binding.package_id+' · '+j.source_binding.binding_digest:''),'Queue '+(j.queue?.id||'unlinked')+' · '+(j.queue?.status||'unknown'), 'Manifest '+(j.manifest_digest||'unknown'), 'Verification '+(j.verification?j.verification.id+' · '+j.verification.state+' · '+j.verification.digest:'NOT_RECORDED'), 'QA '+(j.qa?j.qa.state+' · '+(j.qa.source_digest||'unavailable'):'NOT_RECORDED')]);
  const coding=panel('Coding & Verification',w.coding_jobs.length+' recent jobs',jobs,'#codingSection');coding.dataset.workflowStage='coding';
