@@ -451,6 +451,10 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(currentQA.receipt.version,1);
   assert.equal(currentQA.dependency_completed,false);
   assert.equal(currentQA.production_release_authorized,false);
+  // The Studio-specific live polling / stale response / QA UI checks are
+  // complete. Retire that renderer before the independent HTTP lifecycle
+  // so it cannot continuously rebuild the expensive project evidence graph.
+  await studio.close();
   const completionPath='/api/projects/'+pid+'/engineering/completions/confirm';
   const completionState=async()=> (await get(owner,'/api/projects/'+pid+'/state')).dependency_completion.items.find(x=>x.job_id===boundJob.job_id);
   const candidate=await completionState();
@@ -1176,7 +1180,6 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   checkpoint('upstream_stale_propagation');
   assert.equal((await post(owner,csrf,completionPath,{...cbdy,expected_version:1})).status(),400);
   assert.equal((await post(owner,csrf,base+'qa',{...qaBody,source_digest:currentQA.source_digest,expected_version:1,criteria:currentQA.receipt.criteria})).status(),400);
-  await studio.close();
   // Compare renderer cadence before retiring the long-lived page and after
   // creating a fresh page. The 1s sampling window is diagnostic, not a retry
   // or increase of any existing assertion/action timeout.

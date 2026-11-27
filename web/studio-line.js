@@ -150,8 +150,24 @@ function model(stages,tasks){
 function el(tag,cls,text){
  const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;
 }
+const lineRenderCache=new WeakMap();
 function render(holder,stages,tasks,selected,onSelect,handoff,activity,quality){
- const cards=model(stages,tasks);const active=document.activeElement;
+ const cards=model(stages,tasks);
+ // The visible projection is all that can affect this line. Do not replace
+ // identical buttons during polling (pointer down/up may span a poll).
+ // Cache belongs to this DOM node and is invalidated on project reset.
+ const projection=cards.map(card=>({
+  card,lanes:['A','B'].map(lane=>activity?.roles?.find(r=>r.stage_id===card.id)?.agents?.find(a=>a.lane===lane)?.state||'NO_EVIDENCE'),
+  gate:quality?.roles?.find(r=>r.stage_id===card.id)?.state||'PENDING',
+  handoff:handoff?.roles?.find(r=>r.stage_id===card.id)?.output?.status||null
+ }));
+ const signature=JSON.stringify([holder.dataset.projectId||null,selected,projection]);
+ const prior=lineRenderCache.get(holder);
+ if(prior&&prior.signature===signature&&holder.childElementCount){
+  prior.onSelect=onSelect;return;
+ }
+ const entry={signature,onSelect};lineRenderCache.set(holder,entry);
+ const active=document.activeElement;
  const focusId=holder.contains(active)?active.closest('[data-role-id]')?.dataset.roleId:null;
  const hadFocus=active?.classList.contains('line-select');
  holder.replaceChildren();
@@ -163,7 +179,7 @@ function render(holder,stages,tasks,selected,onSelect,handoff,activity,quality){
    const article=el('article','line-role '+card.tone+(selected===id?' selected':''));article.dataset.roleId=id;article.dataset.status=card.status;
    const button=el('button','line-select');button.type='button';button.setAttribute('aria-pressed',String(selected===id));
    button.append(el('span','line-role-code',card.short),el('strong','line-role-name',card.name),el('span','line-status',card.label));
-   button.addEventListener('click',()=>onSelect(id));article.append(button);
+   button.addEventListener('click',()=>{if(lineRenderCache.get(holder)===entry)entry.onSelect(id)});article.append(button);
    article.append(el('p','line-input','← '+card.input));
    const lanes=el('div','line-lanes');
    for(const lane of ['A','B']){const agent=activity?.roles?.find(r=>r.stage_id===id)?.agents?.find(a=>a.lane===lane);const node=el('span','line-lane',card.short+'-'+lane+' · '+(agent?.state||'NO_EVIDENCE'));node.dataset.agentId=id+'-'+lane;node.dataset.activityState=agent?.state||'NO_EVIDENCE';lanes.append(node)}

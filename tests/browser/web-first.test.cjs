@@ -205,6 +205,7 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'Handoff E2E '+Date.now(),idea:'Verify real queued demo handoff and durable source binding',platform:'Web app'}});
   assert.equal(created.status(),201);
   const pid=(await created.json()).project_id;
+  await page.addInitScript(({origin,id})=>{if(location.origin===origin)localStorage.setItem('orbit-project',id)},{origin:ORIGIN,id:pid});
   await page.goto(ORIGIN+'/');
   await page.locator('#projectSide [data-pid="'+pid+'"]').click();
   await page.waitForFunction(id=>document.querySelector('#studioLine').dataset.projectId===id&&document.querySelector('#studioLine').dataset.ready==='true',pid,{timeout:15000});
@@ -254,8 +255,20 @@ test('Studio handoff shows actual queued demo source and durable downstream rece
   assert.deepEqual(target.receipt.sources,[source]);
   assert.match(target.receipt.context_digest,/^[a-f0-9]{64}$/);
   assert.equal(second.handoff.production_release_authorized,false);
-  await page.locator('[data-role-id="research"] .line-select').click();
-  await page.locator('#roleWorkspace .role-handoff[data-consumption-status="DEMO_DRAFTS"][data-output-status="reviewed_output"]').waitFor({timeout:15000});
+  const researchButton=page.locator('[data-role-id="research"] .line-select');
+  await researchButton.click();
+  try{
+   assert.equal(await researchButton.getAttribute('aria-pressed'),'true','Research selection was lost during polling');
+   await page.locator('#roleWorkspace[data-project-id="'+pid+'"][data-role="research"] .role-handoff[data-consumption-status="DEMO_DRAFTS"][data-output-status="reviewed_output"]').waitFor({timeout:15000});
+  }catch(err){
+   console.error('Handoff renderer diagnostic: '+JSON.stringify(await page.evaluate(()=>{
+    const line=document.querySelector('#studioLine'),role=document.querySelector('#roleWorkspace'),h=role?.querySelector('.role-handoff');
+    return {project:line?.dataset.projectId,ready:line?.dataset.ready,role:role?.dataset.role,roleProject:role?.dataset.projectId,
+      stale:role?.dataset.stale,selected:line?.querySelector('[aria-pressed="true"]')?.closest('[data-role-id]')?.dataset.roleId,
+      consumption:h?.dataset.consumptionStatus,output:h?.dataset.outputStatus};
+   })));
+   throw err;
+  }
   assert.equal(await page.locator('#roleWorkspace [data-activity-agent][data-activity-state="DEMO_DRAFT_RECORDED"]').count(),2);
   await page.locator('#roleWorkspace .role-quality[data-quality-state="REVIEWED_OUTPUT"]').waitFor();
   assert.equal(await page.locator('#roleWorkspace .role-quality [data-review-id]').count(),2);
