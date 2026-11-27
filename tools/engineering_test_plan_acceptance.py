@@ -15,7 +15,7 @@ def main():
         assert v['execution_status']=='NOT_EXECUTED' and all(v[k] is False for k in tp.FLAGS)
     assert a['state']=='AWAITING_TEST_PLAN' and a['history']==[]
     assert p['state']=='TEST_PLAN_COVERAGE_PASS' and p['latest_version']==1
-    assert s['state']=='STALE' and s['history']==p['history']
+    assert s['state']=='STALE' and s['history'][:len(p['history'])]==p['history']
     assert len(p['history'])==1
     r=p['history'][0];e=r['snapshot'];src=e['source']
     assert tp.pp.digest(e)==r['digest'] and e['previous_digest'] is None and e['version']==1

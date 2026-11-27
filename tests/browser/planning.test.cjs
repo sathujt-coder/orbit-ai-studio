@@ -620,6 +620,22 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(planPassed.execution_status,'NOT_EXECUTED');
   assert.equal(planPassed.history[0].digest,planReceipt.digest);
   assert.deepEqual(await get(viewer,testPlanPath),planPassed);
+  assert.equal(planPassed.assertion_status,'NOT_READY');
+  const executableBody={...planBody,expected_version:1,cases:planBody.cases.map(t=>({...t,
+   execution:{runtime:'python',module:'main',function:'add',
+    arguments:t.kind==='POSITIVE'?[2,3]:t.kind==='NEGATIVE'?[2,'bad']:[0,0],
+    assertion:t.kind==='NEGATIVE'?{operator:'raises',exception:'TypeError'}:{operator:'equals',value:t.kind==='POSITIVE'?5:0}}
+  }))};
+  const invalidExecution={...executableBody,cases:executableBody.cases.map((t,i)=>i===0?{...t,execution:{...t.execution,command:'echo forbidden'}}:t)};
+  assert.equal((await post(reviewer,rc,testPlanPath,invalidExecution)).status(),400);
+  assert.equal((await post(dev,dc,testPlanPath,executableBody)).status(),403);
+  assert.equal((await post(reviewer,rc,testPlanPath,executableBody)).status(),201);
+  const executablePlan=await get(owner,testPlanPath);
+  assert.equal(executablePlan.assertion_status,'ASSERTION_CONTRACT_READY');
+  assert.equal(executablePlan.execution_status,'NOT_EXECUTED');
+  assert.equal(executablePlan.latest_version,2);
+  assert.deepEqual(executablePlan.history[0],planPassed.history[0]);
+  assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,expected_version:2})).status(),400);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -813,7 +829,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   }),{flag:'wx'});
   const planStale=await get(owner,testPlanPath);
   assert.equal(planStale.state,'STALE');
-  assert.deepEqual(planStale.history,planPassed.history);
+  assert.deepEqual(planStale.history,executablePlan.history);
+  assert.equal(planStale.assertion_status,'NOT_READY');
+  assert.equal(planStale.assertion_contract_digest,null);
   assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,expected_version:1})).status(),400);
   fsSandbox.writeFileSync(process.env.ORBIT_TEST_PLAN_EVIDENCE,JSON.stringify({
     schema:'orbit.acceptance-test-plan-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
@@ -821,6 +839,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     initial:planInitial,passed:planPassed,stale:planStale,rbac_rejected:true,csrf_rejected:true,
     incomplete_rejected:true,duplicate_version_rejected:true,stale_write_rejected:true
   }),{flag:'wx'});
+  fsSandbox.writeFileSync(process.env.ORBIT_ASSERTION_CONTRACT_EVIDENCE,JSON.stringify({
+    schema:'orbit.assertion-contract-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,legacy:planPassed,upgraded:executablePlan,stale:planStale,
+    shell_rejected:true,downgrade_rejected:true,rbac_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4c.1 executable assertion contract and immutable legacy upgrade PASS');
   console.log('P6.4b acceptance test plan traceability and stale rejection PASS');
   console.log('P6.4a deterministic QC evidence, open/stale block and read-only HTTP PASS');
   assert.equal((await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target).state,'BLOCK');

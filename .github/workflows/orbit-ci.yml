@@ -120,6 +120,7 @@ jobs:
       workflow_evidence_sha256: ${{ steps.engineering-workflow-evidence.outputs.evidence_sha256 }}
       qc_evidence_sha256: ${{ steps.engineering-qc-evidence.outputs.evidence_sha256 }}
       test_plan_evidence_sha256: ${{ steps.test-plan-evidence.outputs.evidence_sha256 }}
+      assertion_evidence_sha256: ${{ steps.assertion-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,6 +169,7 @@ jobs:
           ORBIT_ENGINEERING_WORKFLOW_EVIDENCE: ${{ runner.temp }}/engineering-workflow-evidence.json
           ORBIT_ENGINEERING_QC_EVIDENCE: ${{ runner.temp }}/engineering-qc-evidence.json
           ORBIT_TEST_PLAN_EVIDENCE: ${{ runner.temp }}/engineering-test-plan-evidence.json
+          ORBIT_ASSERTION_CONTRACT_EVIDENCE: ${{ runner.temp }}/engineering-assertion-contract-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
@@ -192,6 +194,16 @@ jobs:
       - name: Validate acceptance test plan evidence
         id: test-plan-evidence
         run: python tools/engineering_test_plan_acceptance.py "$RUNNER_TEMP/engineering-test-plan-evidence.json" "$RUNNER_TEMP/engineering-qc-evidence.json"
+      - name: Validate executable assertion contract
+        id: assertion-evidence
+        run: python tools/engineering_assertion_acceptance.py "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-test-plan-evidence.json"
+      - name: Retain executable assertion evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-assertion-contract-evidence
+          path: ${{ runner.temp }}/engineering-assertion-contract-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain acceptance test plan evidence
         uses: actions/upload-artifact@v4
         with:
@@ -256,7 +268,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4b — Acceptance test planning evidence
+    name: P6.4c.1 — Executable assertion contract acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -286,9 +298,11 @@ jobs:
           qc_valid = isinstance(qc_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',qc_sha256)) and checks['requirements-browser']=='success'
           test_plan_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('test_plan_evidence_sha256', '')
           test_plan_valid = isinstance(test_plan_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',test_plan_sha256)) and checks['requirements-browser']=='success'
-          passed = engineering_passed and qc_valid and test_plan_valid
+          assertion_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('assertion_evidence_sha256', '')
+          assertion_valid = isinstance(assertion_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',assertion_sha256)) and checks['requirements-browser']=='success'
+          passed = engineering_passed and qc_valid and test_plan_valid and assertion_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4b', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4c.1', source_commit=os.environ['GITHUB_SHA'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
                         engineering_sandbox_acceptance='PASS' if sandbox_valid else 'BLOCK',
@@ -303,8 +317,10 @@ jobs:
                         engineering_qc_evidence_sha256=qc_sha256 if qc_valid else None,
                         acceptance_test_plan_acceptance='PASS' if test_plan_valid else 'BLOCK',
                         acceptance_test_plan_evidence_sha256=test_plan_sha256 if test_plan_valid else None,
+                        assertion_contract_acceptance='PASS' if assertion_valid else 'BLOCK',
+                        assertion_contract_evidence_sha256=assertion_sha256 if assertion_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4c' if passed else None,
+                        development_next_phase='P6.4c.2' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
