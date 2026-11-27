@@ -49,7 +49,10 @@ class DetectedRegistryTests(unittest.TestCase):
             with self.assertRaises(sqlite3.IntegrityError):self.c.execute(sql)
     def test_recovery_does_not_close(self):
         self.register();old=self.view()['history']
-        self.f.f.f.setup_result(True);self.f.v=self.f.f.detect()
+        detection_fixture=self.f.f.f
+        detection_fixture.f.setup_result(True)
+        self.f.v=detection_fixture.detect()
+        self.assertEqual(self.f.v['state'],'NO_FINDINGS')
         v=self.view()
         self.assertEqual(v['state'],'NO_CURRENT_FINDINGS')
         self.assertEqual(v['history'],old)
