@@ -109,7 +109,9 @@ jobs:
   requirements-browser:
     name: P6.1 Browser E2E — isolated synthetic inference
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    # Cumulative real Git/Docker and dependency evidence checks need CI headroom.
+    # Keep individual test, HTTP, inference and Docker deadlines unchanged.
+    timeout-minutes: 20
     permissions:
       contents: read
     outputs:
