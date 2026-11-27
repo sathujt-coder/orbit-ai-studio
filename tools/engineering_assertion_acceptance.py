@@ -15,7 +15,7 @@ def main():
     assert a['assertion_status']=='NOT_READY' and a['latest_version']==1
     assert b['state']=='TEST_PLAN_COVERAGE_PASS' and b['assertion_status']=='ASSERTION_CONTRACT_READY' and b['latest_version']==2
     assert s['state']=='STALE' and s['assertion_status']=='NOT_READY' and s['assertion_contract_digest'] is None
-    assert b['history'][:1]==a['history'] and len(b['history'])==2 and s['history']==b['history']
+    assert b['history'][:1]==a['history'] and len(b['history'])==2 and s['history'][:2]==b['history']
     for v in (a,b,s):
         assert v['project_id']==a['project_id'] and v['job_id']==a['job_id']
         assert v['execution_status']=='NOT_EXECUTED' and all(v[k] is False for k in tp.FLAGS)
