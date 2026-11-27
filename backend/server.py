@@ -26,6 +26,7 @@ import engineering_qc
 import engineering_test_plan
 import engineering_assertion_registry
 import execution_quality_gate
+import engineering_git_changes
 import dependency_completion
 import dependency_queue
 import wbs_dependency_extension
@@ -883,6 +884,13 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/git-changes/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_git_changes.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/execution-quality/[A-Za-z0-9_-]{1,100}',path):
                 actor,pid,_=self.auth_context
                 jid=path.rsplit('/',1)[1]

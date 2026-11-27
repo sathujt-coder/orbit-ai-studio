@@ -638,6 +638,18 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,expected_version:2})).status(),400);
   const runnerSandbox=await get(owner,sandboxPath);
   assert.equal(runnerSandbox.state,'PASS');
+  const gitChangesPath=engineering+'/git-changes/'+boundJob.job_id;
+  const gitChanges=await get(owner,gitChangesPath);
+  assert.equal(gitChanges.state,'GIT_CHANGE_EVIDENCE_READY',JSON.stringify(gitChanges));
+  assert.equal(gitChanges.source.selected,'B');
+  assert.deepEqual(gitChanges.source.git,runnerSandbox.receipt.git);
+  assert.equal(gitChanges.source.sandbox_digest,runnerSandbox.receipt.digest);
+  assert.deepEqual(gitChanges.comparisons.baseline_to_B.changes.map(x=>x.path),['main.py','test_main.py']);
+  assert.deepEqual(gitChanges.comparisons.baseline_to_B.counts,{ADDED:2,MODIFIED:0,DELETED:0});
+  assert.deepEqual(gitChanges.comparisons.A_to_B.changes,[]);
+  assert.equal(gitChanges.comparisons.A_to_B.unchanged_count,2);
+  assert.deepEqual(await get(viewer,gitChangesPath),gitChanges);
+  assert.equal((await post(owner,csrf,gitChangesPath,{})).status(),404);
   const runnerArgs=['tools/run_acceptance_assertions.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,
    '--actor','ci-reviewer','--plan-digest',executablePlan.history[1].digest,'--source-digest',executablePlan.source_digest,
    '--assertion-digest',executablePlan.assertion_contract_digest,'--sandbox-digest',runnerSandbox.receipt.digest,
@@ -992,6 +1004,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     stale:{plan:planStale,registry:registryStale,gate:executionGateStale},
     stale_authorization_rejected:true,old_gate_digest_rejected:true,stale_guard_rejected:true
   }),{flag:'wx'});
+  const gitChangesStale=await get(owner,gitChangesPath);
+  assert.equal(gitChangesStale.state,'BLOCK');
+  assert.deepEqual(gitChangesStale.comparisons,{});
+  fsSandbox.writeFileSync(process.env.ORBIT_GIT_CHANGE_EVIDENCE,JSON.stringify({
+    schema:'orbit.git-change-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,current:gitChanges,stale:gitChangesStale,
+    viewer_read:true,post_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4d.1 exact Git tree change detection PASS');
   console.log('P6.4c.5 real assertion failure, durable BLOCK, explicit recovery and stale guard PASS');
   console.log('P6.4c.4 execution quality gate PASS');
   console.log('P6.4c.3 immutable assertion registry PASS');

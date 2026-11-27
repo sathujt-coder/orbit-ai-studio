@@ -125,6 +125,7 @@ jobs:
       registry_evidence_sha256: ${{ steps.registry-evidence.outputs.evidence_sha256 }}
       execution_gate_evidence_sha256: ${{ steps.execution-gate-evidence.outputs.evidence_sha256 }}
       final_execution_evidence_sha256: ${{ steps.final-execution-evidence.outputs.evidence_sha256 }}
+      git_change_evidence_sha256: ${{ steps.git-change-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -178,6 +179,7 @@ jobs:
           ORBIT_ASSERTION_REGISTRY_EVIDENCE: ${{ runner.temp }}/engineering-assertion-registry-evidence.json
           ORBIT_EXECUTION_GATE_EVIDENCE: ${{ runner.temp }}/engineering-execution-gate-evidence.json
           ORBIT_FINAL_EXECUTION_EVIDENCE: ${{ runner.temp }}/engineering-final-execution-evidence.json
+          ORBIT_GIT_CHANGE_EVIDENCE: ${{ runner.temp }}/engineering-git-change-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
@@ -221,6 +223,16 @@ jobs:
       - name: Validate final real assertion failure and recovery evidence
         id: final-execution-evidence
         run: python tools/engineering_final_execution_acceptance.py "$RUNNER_TEMP/engineering-final-execution-evidence.json" "$RUNNER_TEMP/engineering-qc-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-registry-evidence.json" "$RUNNER_TEMP/engineering-execution-gate-evidence.json"
+      - name: Validate exact Git change evidence
+        id: git-change-evidence
+        run: python tools/engineering_git_change_acceptance.py "$RUNNER_TEMP/engineering-git-change-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Retain Git change evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-git-change-evidence
+          path: ${{ runner.temp }}/engineering-git-change-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain final automated execution evidence
         uses: actions/upload-artifact@v4
         with:
@@ -320,7 +332,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4c.5 — Final automated test execution acceptance
+    name: P6.4d.1 — Git change detection acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -360,9 +372,12 @@ jobs:
           execution_gate_valid = isinstance(execution_gate_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',execution_gate_sha256)) and checks['requirements-browser']=='success'
           final_execution_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_execution_evidence_sha256', '')
           final_execution_valid = isinstance(final_execution_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',final_execution_sha256)) and checks['requirements-browser']=='success'
-          passed = engineering_passed and qc_valid and test_plan_valid and assertion_valid and runner_valid and registry_valid and execution_gate_valid and final_execution_valid
+          git_change_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('git_change_evidence_sha256', '')
+          git_change_valid = isinstance(git_change_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',git_change_sha256)) and checks['requirements-browser']=='success'
+          automated_execution_passed = engineering_passed and qc_valid and test_plan_valid and assertion_valid and runner_valid and registry_valid and execution_gate_valid and final_execution_valid
+          passed = automated_execution_passed and git_change_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4c.5', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4d.1', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -388,9 +403,11 @@ jobs:
                         execution_quality_gate_evidence_sha256=execution_gate_sha256 if execution_gate_valid else None,
                         automated_test_execution_acceptance='PASS' if final_execution_valid else 'BLOCK',
                         automated_test_execution_evidence_sha256=final_execution_sha256 if final_execution_valid else None,
-                        automated_test_execution_complete=passed,
+                        automated_test_execution_complete=automated_execution_passed,
+                        git_change_detection_acceptance='PASS' if git_change_valid else 'BLOCK',
+                        git_change_evidence_sha256=git_change_sha256 if git_change_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4d' if passed else None,
+                        development_next_phase='P6.4d.2' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
