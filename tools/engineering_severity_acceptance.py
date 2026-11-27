@@ -8,7 +8,7 @@ import defect_severity as s
 
 def main():
     r=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SeverityTests))
-    if not r.wasSuccessful() or r.testsRun!=10 or r.skipped:raise SystemExit(1)
+    if not r.wasSuccessful() or r.testsRun!=14 or r.skipped:raise SystemExit(1)
     raw=Path(sys.argv[1]).read_bytes();prior=json.loads(raw)
     v=json.loads(Path(sys.argv[2]).read_bytes())
     identity=dict(source_commit=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'])

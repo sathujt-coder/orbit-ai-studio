@@ -22,6 +22,7 @@ import engineering_candidate_selection
 import engineering_sandbox
 import engineering_draft
 import engineering_quality
+import defect_severity
 import engineering_qc
 import engineering_test_plan
 import engineering_assertion_registry
@@ -194,6 +195,7 @@ def init_db():
         engineering_test_plan.ensure_schema(c)
         engineering_assertion_registry.ensure_schema(c)
         regression_quality_gate.ensure_schema(c)
+        defect_severity.ensure_schema(c)
         dependency_completion.ensure_schema(c)
         dependency_queue.ensure_schema(c)
         bound_recovery.ensure_schema(c)

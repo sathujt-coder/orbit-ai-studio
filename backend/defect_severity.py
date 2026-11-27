@@ -33,13 +33,23 @@ def current(c,db,pid,jid,submitted=None):
 def attest(c,db,pid,jid,actor,finding_id,expected_digest,impact, rationale,confirmation):
     if not c.in_transaction:raise ValueError('Audited transaction required')
     if confirmation!='ATTEST SEVERITY '+jid+' '+finding_id:raise PermissionError('Explicit confirmation required')
+    c.execute('SAVEPOINT severity_attest')
+    try:
+        return _attest(c,db,pid,jid,actor,finding_id,expected_digest,impact,rationale)
+    except Exception:
+        c.execute('ROLLBACK TO severity_attest')
+        raise
+    finally:
+        c.execute('RELEASE severity_attest')
+
+def _attest(c,db,pid,jid,actor,finding_id,expected_digest,impact,rationale):
     pp.check_role(c,pid,actor,'approve')
     v=current(c,db,pid,jid)
     if v['state']!='DETECTED' or v['evidence_digest']!=expected_digest:raise ValueError('Stale detection')
     f=next((x for x in v['findings'] if x['finding_id']==finding_id),None)
     if not f or f['kind']!='ASSERTION_MISMATCH' or impact not in LEVELS:
         raise ValueError('Reviewed product finding required')
-    if not isinstance(rationale,str) or not 20<=len(rationale.strip())<=1600 or '\\x00' in rationale:
+    if not isinstance(rationale,str) or not 20<=len(rationale.strip())<=1600 or '\x00' in rationale:
         raise ValueError('Impact rationale required')
     e=dict(schema='orbit.severity-attestation.v1',project_id=pid,job_id=jid,finding_id=finding_id,
            receipt_digest=v['receipt_digest'],detection_digest=v['evidence_digest'],finding_digest=pp.digest(f),

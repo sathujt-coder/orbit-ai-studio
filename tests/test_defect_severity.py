@@ -51,4 +51,29 @@ class SeverityTests(unittest.TestCase):
         self.v=self.f.f.nonexecuted('ERROR','DOCKER_UNAVAILABLE')
         with self.assertRaises(ValueError):self.attest('COSMETIC_IMPACT')
         self.assertEqual(self.view()['items'][0]['severity'],'HIGH')
+    def test_atomic_audit_failure(self):
+        self.c.execute("""CREATE TRIGGER fail_severity_audit BEFORE INSERT ON auth_audit
+            WHEN NEW.action='engineering_severity_attest'
+            BEGIN SELECT RAISE(ABORT,'injected audit failure'); END""")
+        before=self.c.execute('SELECT count(*) FROM auth_audit').fetchone()[0]
+        with self.assertRaises(sqlite3.IntegrityError):self.attest('COSMETIC_IMPACT')
+        self.assertEqual(self.c.execute('SELECT count(*) FROM engineering_severity_attestations').fetchone()[0],0)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM auth_audit').fetchone()[0],before)
+        self.assertTrue(self.c.in_transaction)
+        self.c.commit()
+        self.assertEqual(self.c.execute('SELECT count(*) FROM engineering_severity_attestations').fetchone()[0],0)
+    def test_idempotent_migration_preserves_receipt(self):
+        digest=self.attest('COSMETIC_IMPACT')
+        s.ensure_schema(self.c);s.ensure_schema(self.c)
+        self.assertEqual(self.view()['items'][0]['attestation_digest'],digest)
+    def test_nul_rationale_rejected(self):
+        f=self.v['findings'][0]['finding_id']
+        with self.assertRaises(ValueError):
+            s.attest(self.c,None,'p','j','reviewer',f,self.v['evidence_digest'],'COSMETIC_IMPACT',
+                     'Reviewed evidence with '+chr(0)+' invalid text','ATTEST SEVERITY j '+f)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM engineering_severity_attestations').fetchone()[0],0)
+    def test_revoked_reviewer(self):
+        self.c.execute("DELETE FROM auth_memberships WHERE user_id='reviewer'")
+        with self.assertRaises(PermissionError):self.attest('DATA_LOSS')
+        self.assertEqual(self.c.execute('SELECT count(*) FROM engineering_severity_attestations').fetchone()[0],0)
 if __name__=='__main__':unittest.main()

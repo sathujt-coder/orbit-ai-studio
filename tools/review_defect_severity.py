@@ -20,13 +20,12 @@ def main():
             c.row_factory=sqlite3.Row
             c.execute('PRAGMA foreign_keys=ON')
             runner.begin_audited_transaction(c)
-            pp.check_role(c,a.project,a.actor,'approve' if a.attest else 'read')
             if a.attest:
-                s.ensure_schema(c)
                 digest=s.attest(c,a.db,a.project,a.job,a.actor,a.finding,a.expected_digest,a.impact,a.rationale,a.confirm)
             else:
                 # Schema installation is an explicit migration, never a side effect of a read.
                 runner.restrict_cli_database(c)
+                pp.check_role(c,a.project,a.actor,'read')
                 digest=None
             v=s.view(c,a.db,a.project,a.job)
         print(json.dumps(dict(result=v,attestation_digest=digest),sort_keys=True))
