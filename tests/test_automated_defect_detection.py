@@ -46,6 +46,31 @@ class DetectionTests(unittest.TestCase):
         self.f.report['results'][0]['status']='PASS'
         self.assertEqual(self.detect()['state'],'BLOCK')
 
+    def nonexecuted(self,status,reason):
+        f=self.f
+        f.setup_result(False)
+        row=f.report['results'][0]
+        row.pop('observation');row.pop('value_digest')
+        row.update(status=status,reason=reason,executed=False)
+        f.report['executed_count']=0
+        s=f.run['snapshot']
+        s['report_digest']=g.pp.digest(f.report)
+        s['summary']=g.registry.validate_report(f.report,f.src,f.cases,f.targets)
+        f.run['digest']=g.pp.digest(s)
+        f.trace=g.priority.evidence(f.schedule,[] if status=='NOT_EXECUTED' else ['T'],f.report)
+        f.receipt=g.make_receipt('p','j',f.run,f.trace,f.schedule,f.cases,f.targets,'stamp')
+        return self.detect()
+
+    def test_runtime_error(self):
+        v=self.nonexecuted('ERROR','DOCKER_UNAVAILABLE')
+        self.assertEqual(v['state'],'DETECTED')
+        self.assertEqual(v['findings'][0]['kind'],'EXECUTION_ERROR')
+
+    def test_missing_execution(self):
+        v=self.nonexecuted('NOT_EXECUTED','TOTAL_TIMEOUT')
+        self.assertEqual(v['state'],'DETECTED')
+        self.assertEqual(v['findings'][0]['kind'],'MISSING_EXECUTION')
+
     def test_authorization(self):
         key=next(iter(d.FLAGS))
         self.f.r[key]=True

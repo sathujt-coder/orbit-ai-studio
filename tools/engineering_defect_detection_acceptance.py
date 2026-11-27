@@ -12,7 +12,7 @@ sys.path.insert(0,str(root/'backend'))
 from test_automated_defect_detection import DetectionTests
 suite=unittest.defaultTestLoader.loadTestsFromTestCase(DetectionTests)
 result=unittest.TextTestRunner(verbosity=2).run(suite)
-passed=result.wasSuccessful() and result.testsRun==8 and not result.skipped
+passed=result.wasSuccessful() and result.testsRun==10 and not result.skipped
 report=dict(schema='orbit.automated-defect-detection-acceptance.v1',
             source_commit=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],
             run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],tests=result.testsRun,

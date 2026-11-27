@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      defect_integration_sha256: ${{ steps.defect-integration.outputs.evidence_sha256 }}
       final_regression_chain_sha256: ${{ steps.final-regression-evidence.outputs.chain_sha256 }}
     steps:
       - uses: actions/checkout@v4
@@ -266,6 +267,15 @@ jobs:
       - name: Validate final regression impact lifecycle and chain
         id: final-regression-evidence
         run: python tools/engineering_final_regression_acceptance.py "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-git-change-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-regression-priority-evidence.json" "$RUNNER_TEMP/engineering-regression-gate-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate trusted defect detection lifecycle
+        id: defect-integration
+        run: python tools/engineering_defect_integration_acceptance.py "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.defects" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-defect-integration-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-integration-evidence
+          path: ${{ runner.temp }}/engineering-defect-integration-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain final regression impact evidence
         uses: actions/upload-artifact@v4
         with:
@@ -469,7 +479,9 @@ jobs:
           regression_passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid and regression_gate_valid and final_regression_valid
           defect_sha256 = actual.get('validate', {}).get('outputs', {}).get('defect_detection_sha256', '')
           defect_valid = isinstance(defect_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',defect_sha256)) and checks['validate']=='success'
-          passed = regression_passed and defect_valid
+          defect_integration_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_integration_sha256', '')
+          defect_integration_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_integration_sha256)) and checks['requirements-browser']=='success'
+          passed = regression_passed and defect_valid and defect_integration_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
                         milestone='P6.4e.1', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
@@ -512,7 +524,8 @@ jobs:
                         regression_impact_complete=regression_passed,
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
-                        automated_defect_detection_acceptance='PASS' if defect_valid else 'BLOCK',
+                        automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
                         automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
                         development_next_phase='P6.4e.2' if passed else None,
