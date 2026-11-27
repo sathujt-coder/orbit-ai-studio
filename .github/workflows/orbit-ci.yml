@@ -128,6 +128,7 @@ jobs:
       git_change_evidence_sha256: ${{ steps.git-change-evidence.outputs.evidence_sha256 }}
       dependency_impact_evidence_sha256: ${{ steps.dependency-impact-evidence.outputs.evidence_sha256 }}
       impacted_test_evidence_sha256: ${{ steps.impacted-test-evidence.outputs.evidence_sha256 }}
+      regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,6 +185,7 @@ jobs:
           ORBIT_GIT_CHANGE_EVIDENCE: ${{ runner.temp }}/engineering-git-change-evidence.json
           ORBIT_DEPENDENCY_IMPACT_EVIDENCE: ${{ runner.temp }}/engineering-dependency-impact-evidence.json
           ORBIT_IMPACTED_TEST_EVIDENCE: ${{ runner.temp }}/engineering-impacted-test-evidence.json
+          ORBIT_REGRESSION_PRIORITY_EVIDENCE: ${{ runner.temp }}/engineering-regression-priority-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
@@ -236,6 +238,16 @@ jobs:
       - name: Validate impacted test mapping evidence
         id: impacted-test-evidence
         run: python tools/engineering_impacted_test_acceptance.py "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-runner-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate prioritized full regression evidence
+        id: regression-priority-evidence
+        run: python tools/engineering_regression_priority_acceptance.py "$RUNNER_TEMP/engineering-regression-priority-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Retain prioritized full regression evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-regression-priority-evidence
+          path: ${{ runner.temp }}/engineering-regression-priority-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain impacted test mapping evidence
         uses: actions/upload-artifact@v4
         with:
@@ -356,7 +368,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4d.3 — Impacted test mapping acceptance
+    name: P6.4d.4 — Prioritized full regression execution acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -403,9 +415,11 @@ jobs:
           dependency_impact_valid = isinstance(dependency_impact_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',dependency_impact_sha256)) and checks['requirements-browser']=='success'
           impacted_test_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('impacted_test_evidence_sha256', '')
           impacted_test_valid = isinstance(impacted_test_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',impacted_test_sha256)) and checks['requirements-browser']=='success'
-          passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid
+          regression_priority_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('regression_priority_evidence_sha256', '')
+          regression_priority_valid = isinstance(regression_priority_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',regression_priority_sha256)) and checks['requirements-browser']=='success'
+          passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4d.3', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4d.4', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -438,8 +452,10 @@ jobs:
                         dependency_impact_evidence_sha256=dependency_impact_sha256 if dependency_impact_valid else None,
                         impacted_test_mapping_acceptance='PASS' if impacted_test_valid else 'BLOCK',
                         impacted_test_evidence_sha256=impacted_test_sha256 if impacted_test_valid else None,
+                        regression_priority_acceptance='PASS' if regression_priority_valid else 'BLOCK',
+                        regression_priority_evidence_sha256=regression_priority_sha256 if regression_priority_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4d.4' if passed else None,
+                        development_next_phase='P6.4d.5' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',

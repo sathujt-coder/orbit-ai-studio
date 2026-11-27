@@ -221,9 +221,13 @@ def restrict_cli_database(c,*,persist=False):
     c.set_authorizer(authorize)
 
 
-def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image,expected_registry_version=None):
+def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image,expected_registry_version=None,priority_comparison=None,priority_mapping_digest=None):
     from engineering_assertion_registry import check_version,append
     if confirmation!='RUN ACCEPTANCE ASSERTIONS '+jid:raise PermissionError('Explicit local confirmation required')
+    if (priority_comparison is None)!=(priority_mapping_digest is None):
+        raise ValueError('Both priority comparison and mapping digest required')
+    if priority_comparison is not None:
+        import regression_priority as priority
     image=vf.pinned_image(image)
     if c.in_transaction:raise ValueError('Idle database connection required')
     c.execute('BEGIN')
@@ -233,22 +237,37 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
         if (source['plan_digest'],source['source_digest'],source['assertion_contract_digest'],source['sandbox_digest'])!=(plan_digest,source_digest,assertion_digest,sandbox_digest):
             raise ValueError('Stale execution authorization')
         if expected_registry_version is not None:check_version(c,pid,jid,expected_registry_version)
+        schedule=priority.current(c,db,pid,jid,source,cases,targets,priority_comparison,priority_mapping_digest) if priority_comparison is not None else None
         c.commit()
     except Exception:
         c.rollback();raise
-    results=[]
+    results=[];attempted=[]
+    pairs=list(zip(cases,targets))
+    if schedule is not None:
+        by_id={case['id']:(case,meta) for case,meta in pairs}
+        if len(by_id)!=len(pairs) or set(schedule['execution_order'])!=set(by_id) or len(schedule['execution_order'])!=len(pairs):
+            raise ValueError('Invalid mandatory execution schedule')
+        pairs=[by_id[i] for i in schedule['execution_order']]
     deadline=time.monotonic()+TOTAL_TIMEOUT
     with tempfile.TemporaryDirectory(prefix='orbit-assertion-candidate-') as work:
         root,git=sb.materialize(db,pid,jid,source['selected'],proposal,source['git']['parent'],work)
         if git!=source['git']:raise ValueError('Materialized Git identity mismatch')
-        for case,meta in zip(cases,targets):
+        for case,meta in pairs:
             remaining=deadline-time.monotonic()
             if remaining<=0:
                 result=dict(case_id=case['id'],criterion_id=case['criterion_id'],kind=case['kind'],
                     assertion_digest=pp.digest(case['execution']),**meta,status='NOT_EXECUTED',executed=False,reason='TOTAL_TIMEOUT')
-            else:result=execute_case(root,image,case,meta,min(TIMEOUT,remaining))
+            else:
+                attempted.append(case['id'])
+                result=execute_case(root,image,case,meta,min(TIMEOUT,remaining))
+            if result['case_id']!=case['id']:raise ValueError('Execution case identity mismatch')
             results.append(result)
     expected=[x['id'] for x in cases]
+    if schedule is not None:
+        observed={x['case_id']:x for x in results}
+        if len(observed)!=len(expected) or set(observed)!=set(expected):
+            raise ValueError('Incomplete prioritized results')
+        results=[observed[i] for i in expected]
     if [x['case_id'] for x in results]!=expected:raise ValueError('Incomplete execution coverage')
     passed=all(x['executed'] is True and x['status']=='PASS' for x in results)
     report=dict(schema='orbit.acceptance-runner-report.v1',source=source,actor=actor,image=image,
@@ -256,11 +275,16 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
                 executed_count=sum(x['executed'] for x in results),case_count=len(cases),
                 gate='PASS' if passed else 'BLOCK',persisted=False,**FLAGS)
     result=dict(report=report,digest=pp.digest(report))
+    if schedule is not None:
+        trace=priority.evidence(schedule,attempted,report)
+        result.update(priority=trace,priority_digest=pp.digest(trace))
     c.execute('BEGIN IMMEDIATE' if expected_registry_version is not None else 'BEGIN')
     try:
         pp.check_role(c,pid,actor,'approve')
         fresh=current(c,db,pid,jid)
         if fresh!=(source,cases,proposal,targets):raise ValueError('Execution source changed during run')
+        if schedule is not None and priority.current(c,db,pid,jid,source,cases,targets,priority_comparison,priority_mapping_digest)!=schedule:
+            raise ValueError('Priority mapping changed during run')
         if expected_registry_version is not None:
             result['receipt']=append(c,pid,jid,expected_registry_version,report,source,cases,targets,vf.utc_now())
         c.commit()

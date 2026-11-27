@@ -780,6 +780,27 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(recoveredMapping.mappings,initialMapping.mappings);
   assert.equal(recoveredMapping.full_regression_required,true);
   assert.equal(recoveredMapping.selective_execution_authorized,false);
+  const priorityArgsFor=(comparison,digest)=>assertionArgsFor(correctedPlan,4).slice(0,-2).concat(['--priority-comparison',comparison,'--priority-mapping-digest',digest]);
+  assert.throws(()=>execFileSync('python',priorityArgsFor('baseline_to_B',initialMapping.evidence_digest),{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  const priorityRuns={};
+  for(const comparison of ['baseline_to_B','A_to_B']){
+    const args=priorityArgsFor(comparison,recoveredMapping.evidence_digest);
+    const v=JSON.parse(execFileSync('python',args,{stdio:'pipe',timeout:150000}).toString());
+    assert.deepEqual(v.report,recoveredRun.report);
+    assert.equal(v.report.gate,'PASS');
+    assert.equal(v.priority.schedule.required_count,3);
+    assert.equal(v.priority.schedule.impacted_count,comparison==='baseline_to_B'?3:0);
+    assert.deepEqual(v.priority.attempted_order,v.priority.schedule.execution_order);
+    assert.deepEqual(v.priority.unattempted_order,[]);
+    assert.equal(v.priority.selective_execution_authorized,false);
+    assert.equal(v.priority.full_regression_required,true);
+    assert.equal(v.receipt,undefined);
+    priorityRuns[comparison]=v;
+  }
+  const kinds=Object.fromEntries(correctedPlan.history.at(-1).snapshot.cases.map(x=>[x.kind,x.id]));
+  assert.deepEqual(priorityRuns.baseline_to_B.priority.attempted_order,[kinds.NEGATIVE,kinds.BOUNDARY,kinds.POSITIVE]);
+  assert.deepEqual(priorityRuns.A_to_B.priority.attempted_order,recoveredRun.report.results.map(x=>x.case_id));
+  assert.deepEqual(await get(owner,registryPath),registryRecovered);
   assert.equal(registryRecovered.state,'EXECUTION_RECORDED_PASS');
   assert.equal(registryRecovered.latest_version,4);
   assert.deepEqual(registryRecovered.current_receipt,recoveredRun.receipt);
@@ -1061,6 +1082,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,initial:initialMapping,recovered:recoveredMapping,stale:staleMapping,
     viewer_read:true,post_rejected:true
   }),{flag:'wx'});
+  assert.throws(()=>execFileSync('python',priorityArgsFor('baseline_to_B',recoveredMapping.evidence_digest),{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  fsSandbox.writeFileSync(process.env.ORBIT_REGRESSION_PRIORITY_EVIDENCE,JSON.stringify({
+    schema:'orbit.regression-priority-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,runs:priorityRuns,old_mapping_rejected:true,stale_rejected:true,registry_unchanged:true
+  }),{flag:'wx'});
+  console.log('P6.4d.4 prioritized full regression actual Docker PASS');
   console.log('P6.4d.3 exact impacted test mapping PASS');
   console.log('P6.4d.2 static dependency impact evidence PASS');
   console.log('P6.4d.1 exact Git tree change detection PASS');
