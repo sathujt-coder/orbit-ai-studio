@@ -201,12 +201,16 @@ def current(c,db,pid,jid):
                 selected=lane,candidate_digest=git['source_sha256'],git=git)
     return source,e['cases'],proposal,targets
 
-def restrict_cli_database(c,*,persist=False):
+def restrict_cli_database(c,*,persist=False,persist_priority=False):
     """Permit existing RBAC audit INSERTs, never domain or schema mutations.
 
     SQLite query_only forbids the audited authorize() call as well as domain
     writes. The authorizer is connection-local and fails closed on new SQL.
     """
+    if persist_priority and not persist:raise ValueError('Priority persistence requires assertion persistence')
+    insert_tables={'auth_audit'}
+    if persist:insert_tables.add('engineering_assertion_runs')
+    if persist_priority:insert_tables.add('engineering_regression_priority_receipts')
     read_actions={sqlite3.SQLITE_SELECT,sqlite3.SQLITE_READ,sqlite3.SQLITE_FUNCTION,
                   sqlite3.SQLITE_TRANSACTION,sqlite3.SQLITE_RECURSIVE}
     def authorize(action,arg1,arg2,database,trigger):
@@ -215,7 +219,7 @@ def restrict_cli_database(c,*,persist=False):
             (arg1=='database_list' and arg2 is None) or
             (arg1 in ('table_info','index_info','index_list') and arg2 is not None)):
             return sqlite3.SQLITE_OK
-        if action==sqlite3.SQLITE_INSERT and database=='main' and arg1 in (('auth_audit','engineering_assertion_runs') if persist else ('auth_audit',)) and trigger is None:
+        if action==sqlite3.SQLITE_INSERT and database=='main' and arg1 in insert_tables and trigger is None:
             return sqlite3.SQLITE_OK
         return sqlite3.SQLITE_DENY
     c.set_authorizer(authorize)
@@ -286,7 +290,11 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
         if schedule is not None and priority.current(c,db,pid,jid,source,cases,targets,priority_comparison,priority_mapping_digest)!=schedule:
             raise ValueError('Priority mapping changed during run')
         if expected_registry_version is not None:
-            result['receipt']=append(c,pid,jid,expected_registry_version,report,source,cases,targets,vf.utc_now())
+            stamp=vf.utc_now()
+            result['receipt']=append(c,pid,jid,expected_registry_version,report,source,cases,targets,stamp)
+            if schedule is not None:
+                import regression_quality_gate as regression
+                result['priority_receipt']=regression.append(c,pid,jid,result['receipt'],trace,schedule,cases,targets,stamp)
         c.commit()
     except Exception:
         c.rollback();raise

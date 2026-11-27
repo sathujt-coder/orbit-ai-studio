@@ -723,6 +723,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.ok(Object.values(executionGatePassed.checks).every(x=>x==='PASS'));
   assert.deepEqual(await get(viewer,executionGatePath),executionGatePassed);
   assert.equal(executionGatePassed.execution_authorized,false);
+  const regressionGatePath=engineering+'/regression-quality/'+boundJob.job_id;
+  const regressionMissing=await get(owner,regressionGatePath);
+  assert.equal(regressionMissing.state,'BLOCK');
+  assert.equal(regressionMissing.checks.execution_quality,'PASS');
+  assert.equal(regressionMissing.checks.current_mapping,'PASS');
+  assert.equal(regressionMissing.checks.durable_priority_receipt,'BLOCK');
+  assert.equal((await post(owner,csrf,regressionGatePath,{})).status(),404);
   // Final lifecycle: explicitly revise a single expected value, execute real
   // Docker assertions, preserve the BLOCK receipt, then approve and rerun.
   const badCases=executableBody.cases.map(t=>t.kind==='POSITIVE'
@@ -743,9 +750,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     return [...args,'--expected-registry-version',String(v)];
   }
   assert.throws(()=>execFileSync('python',[...runnerArgs,'--expected-registry-version','2'],{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  const failedMapping=await get(owner,mappingPath);
+  assert.equal(failedMapping.state,'IMPACTED_TEST_MAPPING_READY');
+  const priorityPersistArgs=(plan,v,m)=>[...assertionArgsFor(plan,v),'--priority-comparison','baseline_to_B','--priority-mapping-digest',m.evidence_digest];
   let failedRun;
   try{
-    execFileSync('python',assertionArgsFor(failedPlan,2),{stdio:'pipe',timeout:150000});
+    execFileSync('python',priorityPersistArgs(failedPlan,2,failedMapping),{stdio:'pipe',timeout:150000});
     assert.fail('Expected real assertion failure');
   }catch(e){
     assert.equal(e.status,2);
@@ -762,6 +772,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(gateFailed.state,'BLOCK');
   assert.equal(gateFailed.checks.legacy_qc,'PASS');
   assert.equal(gateFailed.checks.test_plan,'PASS');
+  const regressionFailed=await get(owner,regressionGatePath);
+  assert.equal(regressionFailed.state,'BLOCK');
+  assert.equal(regressionFailed.checks.durable_priority_receipt,'PASS');
+  assert.equal(regressionFailed.checks.mandatory_regression,'BLOCK');
+  assert.deepEqual(regressionFailed.priority_receipt,failedRun.priority_receipt);
   const correctedResponse=await post(reviewer,rc,testPlanPath,{...executableBody,expected_version:3});
   assert.equal(correctedResponse.status(),201,await correctedResponse.text());
   const correctedPlan=await get(owner,testPlanPath);
@@ -770,7 +785,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const registryBeforeRecovery=await get(owner,registryPath);
   assert.equal(registryBeforeRecovery.state,'STALE');
   assert.deepEqual(registryBeforeRecovery.history,registryFailed.history);
-  const recoveredRun=JSON.parse(execFileSync('python',assertionArgsFor(correctedPlan,3),{stdio:'pipe',timeout:150000}).toString());
+  const mappingBeforeRecovery=await get(owner,mappingPath);
+  const regressionBeforeRecovery=await get(owner,regressionGatePath);
+  assert.equal(regressionBeforeRecovery.state,'BLOCK');
+  assert.equal(regressionBeforeRecovery.priority_receipt,null);
+  const recoveredRun=JSON.parse(execFileSync('python',priorityPersistArgs(correctedPlan,3,mappingBeforeRecovery),{stdio:'pipe',timeout:150000}).toString());
   const registryRecovered=await get(owner,registryPath);
   const gateRecovered=await get(owner,executionGatePath);
   const recoveredMapping=await get(owner,mappingPath);
@@ -780,6 +799,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(recoveredMapping.mappings,initialMapping.mappings);
   assert.equal(recoveredMapping.full_regression_required,true);
   assert.equal(recoveredMapping.selective_execution_authorized,false);
+  assert.deepEqual(recoveredMapping,mappingBeforeRecovery);
+  const regressionRecovered=await get(owner,regressionGatePath);
+  assert.equal(regressionRecovered.state,'REGRESSION_QUALITY_PASS',JSON.stringify(regressionRecovered));
+  assert.deepEqual(regressionRecovered.priority_receipt,recoveredRun.priority_receipt);
+  assert.equal(regressionRecovered.receipts.execution,registryRecovered.current_receipt.digest);
+  assert.deepEqual(await get(viewer,regressionGatePath),regressionRecovered);
+  assert.ok(Object.values(regressionRecovered.checks).every(x=>x==='PASS'));
   const priorityArgsFor=(comparison,digest)=>assertionArgsFor(correctedPlan,4).slice(0,-2).concat(['--priority-comparison',comparison,'--priority-mapping-digest',digest]);
   assert.throws(()=>execFileSync('python',priorityArgsFor('baseline_to_B',initialMapping.evidence_digest),{stdio:'pipe',timeout:60000}),e=>e.status===1);
   const priorityRuns={};
@@ -1087,6 +1113,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     schema:'orbit.regression-priority-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,runs:priorityRuns,old_mapping_rejected:true,stale_rejected:true,registry_unchanged:true
   }),{flag:'wx'});
+  const regressionStale=await get(owner,regressionGatePath);
+  assert.equal(regressionStale.state,'BLOCK');
+  assert.equal(regressionStale.priority_receipt,null);
+  fsSandbox.writeFileSync(process.env.ORBIT_REGRESSION_GATE_EVIDENCE,JSON.stringify({
+    schema:'orbit.regression-quality-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,missing:regressionMissing,failed_mapping:failedMapping,failed:regressionFailed,
+    before_recovery:regressionBeforeRecovery,recovered:regressionRecovered,stale:regressionStale,viewer_read:true,post_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4d.5 durable regression quality gate PASS');
   console.log('P6.4d.4 prioritized full regression actual Docker PASS');
   console.log('P6.4d.3 exact impacted test mapping PASS');
   console.log('P6.4d.2 static dependency impact evidence PASS');
