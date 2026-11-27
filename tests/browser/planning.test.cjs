@@ -652,6 +652,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(runnerResult.report.persisted,false);
   assert.equal(runnerResult.report.source.candidate_digest,runnerSandbox.receipt.git.B.source_sha256);
   assert.deepEqual(await get(owner,testPlanPath),executablePlan);
+  const executionGatePath=engineering+'/execution-quality/'+boundJob.job_id;
+  const executionGateBefore=await get(owner,executionGatePath);
+  assert.equal(executionGateBefore.state,'BLOCK');
+  assert.equal(executionGateBefore.checks.legacy_qc,'PASS');
+  assert.equal(executionGateBefore.checks.test_plan,'PASS');
+  assert.equal(executionGateBefore.checks.execution_receipt,'BLOCK');
+  assert.equal((await post(owner,csrf,executionGatePath,runnerResult)).status(),404);
   const registryPath=engineering+'/assertion-runs/'+boundJob.job_id;
   const registryInitial=await get(owner,registryPath);
   assert.equal(registryInitial.state,'AWAITING_EXECUTION');
@@ -673,6 +680,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(registrySecond.history[0],registryPassed.history[0]);
   assert.deepEqual(registrySecond.current_receipt,persistedAgain.receipt);
   assert.equal(registrySecond.history[1].snapshot.previous_digest,registryPassed.history[0].digest);
+  const executionGatePassed=await get(owner,executionGatePath);
+  assert.equal(executionGatePassed.state,'EXECUTION_QUALITY_PASS',JSON.stringify(executionGatePassed));
+  assert.equal(executionGatePassed.receipts.execution,registrySecond.current_receipt.digest);
+  assert.equal(executionGatePassed.coverage.executed_count,executablePlan.history[1].snapshot.cases.length);
+  assert.ok(Object.values(executionGatePassed.checks).every(x=>x==='PASS'));
+  assert.deepEqual(await get(viewer,executionGatePath),executionGatePassed);
+  assert.equal(executionGatePassed.execution_authorized,false);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -897,6 +911,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,initial:registryInitial,first:registryPassed,second:registrySecond,
     stale:registryStale,duplicate_rejected:true,post_rejected:true,stale_rejected:true
   }),{flag:'wx'});
+  const executionGateStale=await get(owner,executionGatePath);
+  assert.equal(executionGateStale.state,'BLOCK');
+  assert.equal(executionGateStale.checks.execution_receipt,'BLOCK');
+  assert.equal(executionGateStale.checks.legacy_qc,'BLOCK');
+  fsSandbox.writeFileSync(process.env.ORBIT_EXECUTION_GATE_EVIDENCE,JSON.stringify({
+    schema:'orbit.execution-quality-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,before:executionGateBefore,passed:executionGatePassed,
+    stale:executionGateStale,post_rejected:true,viewer_read:true
+  }),{flag:'wx'});
+  console.log('P6.4c.4 execution quality gate PASS');
   console.log('P6.4c.3 immutable assertion registry PASS');
   console.log('P6.4c.2 real Git/Docker individual assertions PASS');
   console.log('P6.4c.1 executable assertion contract and immutable legacy upgrade PASS');
