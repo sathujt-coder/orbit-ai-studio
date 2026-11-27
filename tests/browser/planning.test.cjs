@@ -804,6 +804,17 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(severityFailed.items[0].severity,'LOW');
   const severityFailedGate=(await get(owner,regressionGatePath)).state;
   assert.equal(severityFailedGate,'BLOCK');
+  const defectRegistryArgs=['tools/register_detected_defects.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,'--actor','ci-reviewer'];
+  const defectRegistryRead=()=>JSON.parse(execFileSync('python',defectRegistryArgs,{stdio:'pipe',timeout:60000}).toString()).result;
+  const defectRegistryPending=defectRegistryRead();
+  assert.equal(defectRegistryPending.state,'REGISTRATION_REQUIRED');
+  const defectRegisterArgs=[...defectRegistryArgs,'--register','--expected-digest',severityFailed.evidence_digest,'--confirm','REGISTER DETECTED DEFECTS '+boundJob.job_id];
+  const defectRegistryRegistered=JSON.parse(execFileSync('python',defectRegisterArgs,{stdio:'pipe',timeout:60000}).toString()).result;
+  assert.equal(defectRegistryRegistered.state,'REGISTERED');
+  assert.equal(defectRegistryRegistered.history[0].snapshot.classification.severity,'LOW');
+  assert.throws(()=>execFileSync('python',defectRegisterArgs,{stdio:'pipe',timeout:60000}),e=>e.status===1&&e.stderr.toString().includes('Execution already registered'));
+  assert.deepEqual(defectRegistryRead(),defectRegistryRegistered);
+  assert.equal((await get(owner,regressionGatePath)).state,'BLOCK');
   const classificationFailed=detectDefects(true);
   assert.equal(classificationFailed.state,'CLASSIFIED');
   assert.equal(detectionFailed.state,'DETECTED',JSON.stringify(detectionFailed));
@@ -849,6 +860,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(guardRecovered,regressionRecovered);
   rejectRegressionGuard(regressionFailed.evidence_digest);
   const detectionRecovered=detectDefects();
+  const defectRegistryRecovered=defectRegistryRead();
+  assert.equal(defectRegistryRecovered.state,'NO_CURRENT_FINDINGS');
+  assert.deepEqual(defectRegistryRecovered.history,defectRegistryRegistered.history);
   const severityRecovered=severityRead();
   assert.equal(severityRecovered.state,'NO_FINDINGS');
   const classificationRecovered=detectDefects(true);
@@ -1177,6 +1191,9 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   rejectRegressionGuard(regressionRecovered.evidence_digest);
   rejectRegressionGuard(regressionStale.evidence_digest);
   const detectionStale=detectDefects();
+  const defectRegistryStale=defectRegistryRead();
+  assert.equal(defectRegistryStale.state,'BLOCK');
+  assert.deepEqual(defectRegistryStale.history,defectRegistryRegistered.history);
   const severityStale=severityRead();
   assert.equal(severityStale.state,'BLOCK');
   const classificationStale=detectDefects(true);
@@ -1193,6 +1210,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.severity',JSON.stringify({
     source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
     failed:severityFailed,recovered:severityRecovered,stale:severityStale,failed_gate:severityFailedGate
+  }),{flag:'wx'});
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.registry',JSON.stringify({
+    source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+    pending:defectRegistryPending,registered:defectRegistryRegistered,recovered:defectRegistryRecovered,
+    stale:defectRegistryStale,duplicate_rejected:true,failed_gate:severityFailedGate
   }),{flag:'wx'});
   const staleHistory=readRegressionHistory();
   assert.deepEqual(staleHistory,recoveredHistory);
