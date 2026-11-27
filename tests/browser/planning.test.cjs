@@ -650,6 +650,18 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(gitChanges.comparisons.A_to_B.unchanged_count,2);
   assert.deepEqual(await get(viewer,gitChangesPath),gitChanges);
   assert.equal((await post(owner,csrf,gitChangesPath,{})).status(),404);
+  const impactPath=engineering+'/dependency-impact/'+boundJob.job_id;
+  const impactEvidence=await get(owner,impactPath);
+  assert.equal(impactEvidence.state,'DEPENDENCY_IMPACT_READY',JSON.stringify(impactEvidence));
+  assert.equal(impactEvidence.source.git_change_evidence_digest,gitChanges.evidence_digest);
+  assert.deepEqual(impactEvidence.graphs.B.edges,[{importer:'test_main.py',dependency:'main.py'}]);
+  assert.deepEqual(impactEvidence.graphs.B.uncertainties,[]);
+  assert.deepEqual(impactEvidence.comparisons.baseline_to_B.current_impacted_paths,['main.py','test_main.py']);
+  assert.deepEqual(impactEvidence.comparisons.A_to_B.impacted_paths,[]);
+  assert.equal(impactEvidence.full_regression_required,true);
+  assert.equal(impactEvidence.selective_execution_authorized,false);
+  assert.deepEqual(await get(viewer,impactPath),impactEvidence);
+  assert.equal((await post(owner,csrf,impactPath,{})).status(),404);
   const runnerArgs=['tools/run_acceptance_assertions.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,
    '--actor','ci-reviewer','--plan-digest',executablePlan.history[1].digest,'--source-digest',executablePlan.source_digest,
    '--assertion-digest',executablePlan.assertion_contract_digest,'--sandbox-digest',runnerSandbox.receipt.digest,
@@ -1012,6 +1024,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,current:gitChanges,stale:gitChangesStale,
     viewer_read:true,post_rejected:true
   }),{flag:'wx'});
+  const impactStale=await get(owner,impactPath);
+  assert.equal(impactStale.state,'BLOCK');
+  assert.deepEqual(impactStale.graphs,{});
+  assert.equal(impactStale.full_regression_required,true);
+  fsSandbox.writeFileSync(process.env.ORBIT_DEPENDENCY_IMPACT_EVIDENCE,JSON.stringify({
+    schema:'orbit.dependency-impact-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,current:impactEvidence,stale:impactStale,
+    viewer_read:true,post_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4d.2 static dependency impact evidence PASS');
   console.log('P6.4d.1 exact Git tree change detection PASS');
   console.log('P6.4c.5 real assertion failure, durable BLOCK, explicit recovery and stale guard PASS');
   console.log('P6.4c.4 execution quality gate PASS');
