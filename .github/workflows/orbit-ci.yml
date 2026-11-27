@@ -11,6 +11,8 @@ jobs:
     name: Python tests and JavaScript syntax
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      defect_detection_sha256: ${{ steps.defect-detection.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +44,16 @@ jobs:
         run: python -m compileall -q backend tools tests
       - name: Run test suite
         run: python -m unittest discover -s tests -v
+      - name: Automated defect detection acceptance
+        id: defect-detection
+        run: python tools/engineering_defect_detection_acceptance.py
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.defect-detection.outcome != 'skipped'
+        with:
+          name: engineering-defect-detection-evidence
+          path: engineering-defect-detection-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Validate frontend syntax
         run: |
           node --check web/app.js
@@ -455,9 +467,11 @@ jobs:
           expected_chain_sha256 = hashlib.sha256(json.dumps(expected_chain,sort_keys=True,separators=(',',':')).encode()).hexdigest()
           final_regression_valid = isinstance(final_regression_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',final_regression_sha256)) and final_chain_sha256==expected_chain_sha256 and checks['requirements-browser']=='success'
           regression_passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid and regression_gate_valid and final_regression_valid
-          passed = regression_passed
+          defect_sha256 = actual.get('validate', {}).get('outputs', {}).get('defect_detection_sha256', '')
+          defect_valid = isinstance(defect_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',defect_sha256)) and checks['validate']=='success'
+          passed = regression_passed and defect_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4d.6', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.1', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -498,8 +512,10 @@ jobs:
                         regression_impact_complete=regression_passed,
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
+                        automated_defect_detection_acceptance='PASS' if defect_valid else 'BLOCK',
+                        automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4e' if passed else None,
+                        development_next_phase='P6.4e.2' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
