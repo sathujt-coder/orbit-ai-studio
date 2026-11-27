@@ -652,6 +652,27 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(runnerResult.report.persisted,false);
   assert.equal(runnerResult.report.source.candidate_digest,runnerSandbox.receipt.git.B.source_sha256);
   assert.deepEqual(await get(owner,testPlanPath),executablePlan);
+  const registryPath=engineering+'/assertion-runs/'+boundJob.job_id;
+  const registryInitial=await get(owner,registryPath);
+  assert.equal(registryInitial.state,'AWAITING_EXECUTION');
+  assert.equal(registryInitial.latest_version,0);
+  assert.equal((await post(owner,csrf,registryPath,runnerResult)).status(),404);
+  const persistArgs=[...runnerArgs,'--expected-registry-version','0'];
+  const persistedResult=JSON.parse(execFileSync('python',persistArgs,{stdio:'pipe',timeout:150000}).toString());
+  assert.equal(persistedResult.report.gate,'PASS');
+  const registryPassed=await get(owner,registryPath);
+  assert.equal(registryPassed.state,'EXECUTION_RECORDED_PASS');
+  assert.equal(registryPassed.latest_version,1);
+  assert.deepEqual(registryPassed.current_receipt,persistedResult.receipt);
+  assert.deepEqual(await get(viewer,registryPath),registryPassed);
+  assert.throws(()=>execFileSync('python',persistArgs,{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  const persistAgain=[...runnerArgs,'--expected-registry-version','1'];
+  const persistedAgain=JSON.parse(execFileSync('python',persistAgain,{stdio:'pipe',timeout:150000}).toString());
+  const registrySecond=await get(owner,registryPath);
+  assert.equal(registrySecond.latest_version,2);
+  assert.deepEqual(registrySecond.history[0],registryPassed.history[0]);
+  assert.deepEqual(registrySecond.current_receipt,persistedAgain.receipt);
+  assert.equal(registrySecond.history[1].snapshot.previous_digest,registryPassed.history[0].digest);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -866,6 +887,17 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'real_git_docker_assertions',
     result:runnerResult,rbac_rejected:true,stale_rejected:true
   }),{flag:'wx'});
+  const registryStale=await get(owner,registryPath);
+  assert.equal(registryStale.state,'STALE');
+  assert.equal(registryStale.current_receipt,null);
+  assert.deepEqual(registryStale.history,registrySecond.history);
+  assert.throws(()=>execFileSync('python',[...runnerArgs,'--expected-registry-version','2'],{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  fsSandbox.writeFileSync(process.env.ORBIT_ASSERTION_REGISTRY_EVIDENCE,JSON.stringify({
+    schema:'orbit.assertion-registry-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,initial:registryInitial,first:registryPassed,second:registrySecond,
+    stale:registryStale,duplicate_rejected:true,post_rejected:true,stale_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4c.3 immutable assertion registry PASS');
   console.log('P6.4c.2 real Git/Docker individual assertions PASS');
   console.log('P6.4c.1 executable assertion contract and immutable legacy upgrade PASS');
   console.log('P6.4b acceptance test plan traceability and stale rejection PASS');

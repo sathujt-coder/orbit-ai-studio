@@ -201,7 +201,7 @@ def current(c,db,pid,jid):
                 selected=lane,candidate_digest=git['source_sha256'],git=git)
     return source,e['cases'],proposal,targets
 
-def restrict_cli_database(c):
+def restrict_cli_database(c,*,persist=False):
     """Permit existing RBAC audit INSERTs, never domain or schema mutations.
 
     SQLite query_only forbids the audited authorize() call as well as domain
@@ -215,13 +215,14 @@ def restrict_cli_database(c):
             (arg1=='database_list' and arg2 is None) or
             (arg1 in ('table_info','index_info','index_list') and arg2 is not None)):
             return sqlite3.SQLITE_OK
-        if action==sqlite3.SQLITE_INSERT and database=='main' and arg1=='auth_audit' and trigger is None:
+        if action==sqlite3.SQLITE_INSERT and database=='main' and arg1 in (('auth_audit','engineering_assertion_runs') if persist else ('auth_audit',)) and trigger is None:
             return sqlite3.SQLITE_OK
         return sqlite3.SQLITE_DENY
     c.set_authorizer(authorize)
 
 
-def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image):
+def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image,expected_registry_version=None):
+    from engineering_assertion_registry import check_version,append
     if confirmation!='RUN ACCEPTANCE ASSERTIONS '+jid:raise PermissionError('Explicit local confirmation required')
     image=vf.pinned_image(image)
     if c.in_transaction:raise ValueError('Idle database connection required')
@@ -231,6 +232,7 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
         source,cases,proposal,targets=current(c,db,pid,jid)
         if (source['plan_digest'],source['source_digest'],source['assertion_contract_digest'],source['sandbox_digest'])!=(plan_digest,source_digest,assertion_digest,sandbox_digest):
             raise ValueError('Stale execution authorization')
+        if expected_registry_version is not None:check_version(c,pid,jid,expected_registry_version)
         c.commit()
     except Exception:
         c.rollback();raise
@@ -246,14 +248,6 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
                     assertion_digest=pp.digest(case['execution']),**meta,status='NOT_EXECUTED',executed=False,reason='TOTAL_TIMEOUT')
             else:result=execute_case(root,image,case,meta,min(TIMEOUT,remaining))
             results.append(result)
-    c.execute('BEGIN')
-    try:
-        pp.check_role(c,pid,actor,'approve')
-        fresh=current(c,db,pid,jid)
-        if fresh!=(source,cases,proposal,targets):raise ValueError('Execution source changed during run')
-        c.commit()
-    except Exception:
-        c.rollback();raise
     expected=[x['id'] for x in cases]
     if [x['case_id'] for x in results]!=expected:raise ValueError('Incomplete execution coverage')
     passed=all(x['executed'] is True and x['status']=='PASS' for x in results)
@@ -261,4 +255,15 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
                 runtime='docker',network='none',workspace='read-only',results=results,
                 executed_count=sum(x['executed'] for x in results),case_count=len(cases),
                 gate='PASS' if passed else 'BLOCK',persisted=False,**FLAGS)
-    return dict(report=report,digest=pp.digest(report))
+    result=dict(report=report,digest=pp.digest(report))
+    c.execute('BEGIN IMMEDIATE' if expected_registry_version is not None else 'BEGIN')
+    try:
+        pp.check_role(c,pid,actor,'approve')
+        fresh=current(c,db,pid,jid)
+        if fresh!=(source,cases,proposal,targets):raise ValueError('Execution source changed during run')
+        if expected_registry_version is not None:
+            result['receipt']=append(c,pid,jid,expected_registry_version,report,source,cases,targets,vf.utc_now())
+        c.commit()
+    except Exception:
+        c.rollback();raise
+    return result
