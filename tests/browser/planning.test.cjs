@@ -636,6 +636,22 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(executablePlan.latest_version,2);
   assert.deepEqual(executablePlan.history[0],planPassed.history[0]);
   assert.equal((await post(reviewer,rc,testPlanPath,{...planBody,expected_version:2})).status(),400);
+  const runnerSandbox=await get(owner,sandboxPath);
+  assert.equal(runnerSandbox.state,'PASS');
+  const runnerArgs=['tools/run_acceptance_assertions.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,
+   '--actor','ci-reviewer','--plan-digest',executablePlan.history[1].digest,'--source-digest',executablePlan.source_digest,
+   '--assertion-digest',executablePlan.assertion_contract_digest,'--sandbox-digest',runnerSandbox.receipt.digest,
+   '--confirm','RUN ACCEPTANCE ASSERTIONS '+boundJob.job_id];
+  const deniedArgs=runnerArgs.slice();deniedArgs[deniedArgs.indexOf('--actor')+1]='ci-developer';
+  assert.throws(()=>execFileSync('python',deniedArgs,{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  const runnerResult=JSON.parse(execFileSync('python',runnerArgs,{stdio:'pipe',timeout:150000}).toString());
+  assert.equal(runnerResult.report.gate,'PASS',JSON.stringify(runnerResult));
+  assert.equal(runnerResult.report.executed_count,executablePlan.history[1].snapshot.cases.length);
+  assert.deepEqual(runnerResult.report.results.map(x=>x.case_id),executablePlan.history[1].snapshot.cases.map(x=>x.id));
+  assert.ok(runnerResult.report.results.every(x=>x.status==='PASS'&&x.executed===true));
+  assert.equal(runnerResult.report.persisted,false);
+  assert.equal(runnerResult.report.source.candidate_digest,runnerSandbox.receipt.git.B.source_sha256);
+  assert.deepEqual(await get(owner,testPlanPath),executablePlan);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
   assert.equal(eligible.source.prerequisites[0].digest,savedCompletion.receipt.digest);
@@ -844,6 +860,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,legacy:planPassed,upgraded:executablePlan,stale:planStale,
     shell_rejected:true,downgrade_rejected:true,rbac_rejected:true
   }),{flag:'wx'});
+  assert.throws(()=>execFileSync('python',runnerArgs,{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  fsSandbox.writeFileSync(process.env.ORBIT_ASSERTION_RUNNER_EVIDENCE,JSON.stringify({
+    schema:'orbit.assertion-runner-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,transport:'real_git_docker_assertions',
+    result:runnerResult,rbac_rejected:true,stale_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4c.2 real Git/Docker individual assertions PASS');
   console.log('P6.4c.1 executable assertion contract and immutable legacy upgrade PASS');
   console.log('P6.4b acceptance test plan traceability and stale rejection PASS');
   console.log('P6.4a deterministic QC evidence, open/stale block and read-only HTTP PASS');
