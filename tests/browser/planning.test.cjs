@@ -730,6 +730,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(regressionMissing.checks.current_mapping,'PASS');
   assert.equal(regressionMissing.checks.durable_priority_receipt,'BLOCK');
   assert.equal((await post(owner,csrf,regressionGatePath,{})).status(),404);
+  const regressionGuardArgs=['tools/check_regression_quality.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,'--actor','ci-reviewer','--expected-digest'];
+  const checkRegressionGuard=(digest)=>JSON.parse(execFileSync('python',[...regressionGuardArgs,digest],{stdio:'pipe',timeout:60000}).toString());
+  const rejectRegressionGuard=(digest)=>assert.throws(()=>checkRegressionGuard(digest),e=>e.status===1&&e.stderr.toString().includes('Current regression quality gate required'));
+  const readRegressionHistory=()=>JSON.parse(execFileSync('python',['tests/browser/regression_history_fixture.py',process.env.AI_COMPANY_DB,pid,boundJob.job_id],{stdio:'pipe',timeout:60000}).toString());
+  rejectRegressionGuard(regressionMissing.evidence_digest);
+  const missingHistory=readRegressionHistory();
+  assert.deepEqual(missingHistory.execution_history,registrySecond.history);
+  assert.deepEqual(missingHistory.priority_history,[]);
+  assert.equal(missingHistory.priority_audit_count,0);
   // Final lifecycle: explicitly revise a single expected value, execute real
   // Docker assertions, preserve the BLOCK receipt, then approve and rerun.
   const badCases=executableBody.cases.map(t=>t.kind==='POSITIVE'
@@ -777,6 +786,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(regressionFailed.checks.durable_priority_receipt,'PASS');
   assert.equal(regressionFailed.checks.mandatory_regression,'BLOCK');
   assert.deepEqual(regressionFailed.priority_receipt,failedRun.priority_receipt);
+  rejectRegressionGuard(regressionFailed.evidence_digest);
+  const failedHistory=readRegressionHistory();
+  assert.deepEqual(failedHistory.execution_history,registryFailed.history);
+  assert.deepEqual(failedHistory.priority_history,[failedRun.priority_receipt]);
+  assert.equal(failedHistory.priority_audit_count,1);
   const correctedResponse=await post(reviewer,rc,testPlanPath,{...executableBody,expected_version:3});
   assert.equal(correctedResponse.status(),201,await correctedResponse.text());
   const correctedPlan=await get(owner,testPlanPath);
@@ -789,6 +803,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const regressionBeforeRecovery=await get(owner,regressionGatePath);
   assert.equal(regressionBeforeRecovery.state,'BLOCK');
   assert.equal(regressionBeforeRecovery.priority_receipt,null);
+  rejectRegressionGuard(regressionBeforeRecovery.evidence_digest);
   const recoveredRun=JSON.parse(execFileSync('python',priorityPersistArgs(correctedPlan,3,mappingBeforeRecovery),{stdio:'pipe',timeout:150000}).toString());
   const registryRecovered=await get(owner,registryPath);
   const gateRecovered=await get(owner,executionGatePath);
@@ -806,6 +821,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(regressionRecovered.receipts.execution,registryRecovered.current_receipt.digest);
   assert.deepEqual(await get(viewer,regressionGatePath),regressionRecovered);
   assert.ok(Object.values(regressionRecovered.checks).every(x=>x==='PASS'));
+  const guardRecovered=checkRegressionGuard(regressionRecovered.evidence_digest);
+  assert.deepEqual(guardRecovered,regressionRecovered);
+  rejectRegressionGuard(regressionFailed.evidence_digest);
+  const recoveredHistory=readRegressionHistory();
+  assert.deepEqual(recoveredHistory.execution_history,registryRecovered.history);
+  assert.deepEqual(recoveredHistory.priority_history,[failedRun.priority_receipt,recoveredRun.priority_receipt]);
+  assert.equal(recoveredHistory.priority_audit_count,2);
   const priorityArgsFor=(comparison,digest)=>assertionArgsFor(correctedPlan,4).slice(0,-2).concat(['--priority-comparison',comparison,'--priority-mapping-digest',digest]);
   assert.throws(()=>execFileSync('python',priorityArgsFor('baseline_to_B',initialMapping.evidence_digest),{stdio:'pipe',timeout:60000}),e=>e.status===1);
   const priorityRuns={};
@@ -1121,6 +1143,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,missing:regressionMissing,failed_mapping:failedMapping,failed:regressionFailed,
     before_recovery:regressionBeforeRecovery,recovered:regressionRecovered,stale:regressionStale,viewer_read:true,post_rejected:true
   }),{flag:'wx'});
+  rejectRegressionGuard(regressionRecovered.evidence_digest);
+  rejectRegressionGuard(regressionStale.evidence_digest);
+  const staleHistory=readRegressionHistory();
+  assert.deepEqual(staleHistory,recoveredHistory);
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE,JSON.stringify({
+    schema:'orbit.final-regression-lifecycle.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,history:{missing:missingHistory,failed:failedHistory,recovered:recoveredHistory,stale:staleHistory},
+    guard:{missing_rejected:true,failed_rejected:true,before_recovery_rejected:true,recovered:guardRecovered,old_digest_rejected:true,stale_pass_digest_rejected:true,stale_current_digest_rejected:true}
+  }),{flag:'wx'});
+  console.log('P6.4d.6 final regression lifecycle, exact guard and durable history PASS');
   console.log('P6.4d.5 durable regression quality gate PASS');
   console.log('P6.4d.4 prioritized full regression actual Docker PASS');
   console.log('P6.4d.3 exact impacted test mapping PASS');

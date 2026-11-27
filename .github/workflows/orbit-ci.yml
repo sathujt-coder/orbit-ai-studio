@@ -132,6 +132,8 @@ jobs:
       impacted_test_evidence_sha256: ${{ steps.impacted-test-evidence.outputs.evidence_sha256 }}
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
+      final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      final_regression_chain_sha256: ${{ steps.final-regression-evidence.outputs.chain_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -190,6 +192,7 @@ jobs:
           ORBIT_IMPACTED_TEST_EVIDENCE: ${{ runner.temp }}/engineering-impacted-test-evidence.json
           ORBIT_REGRESSION_PRIORITY_EVIDENCE: ${{ runner.temp }}/engineering-regression-priority-evidence.json
           ORBIT_REGRESSION_GATE_EVIDENCE: ${{ runner.temp }}/engineering-regression-gate-evidence.json
+          ORBIT_FINAL_REGRESSION_LIFECYCLE: ${{ runner.temp }}/engineering-regression-lifecycle-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
@@ -248,6 +251,16 @@ jobs:
       - name: Validate durable regression quality gate
         id: regression-gate-evidence
         run: python tools/engineering_regression_gate_acceptance.py "$RUNNER_TEMP/engineering-regression-gate-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-assertion-registry-evidence.json" "$RUNNER_TEMP/engineering-execution-gate-evidence.json"
+      - name: Validate final regression impact lifecycle and chain
+        id: final-regression-evidence
+        run: python tools/engineering_final_regression_acceptance.py "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-git-change-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-regression-priority-evidence.json" "$RUNNER_TEMP/engineering-regression-gate-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Retain final regression impact evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-final-regression-evidence
+          path: ${{ runner.temp }}/engineering-final-regression-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain regression quality gate evidence
         uses: actions/upload-artifact@v4
         with:
@@ -382,7 +395,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4d.5 — Regression quality gate acceptance
+    name: P6.4d.6 — Final regression impact analysis acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -433,9 +446,18 @@ jobs:
           regression_priority_valid = isinstance(regression_priority_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',regression_priority_sha256)) and checks['requirements-browser']=='success'
           regression_gate_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('regression_gate_evidence_sha256', '')
           regression_gate_valid = isinstance(regression_gate_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',regression_gate_sha256)) and checks['requirements-browser']=='success'
-          passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid and regression_gate_valid
+          import hashlib
+          final_regression_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_regression_evidence_sha256', '')
+          final_chain_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_regression_chain_sha256', '')
+          expected_chain = dict(git_change=git_change_sha256,dependency_impact=dependency_impact_sha256,
+                                impacted_test=impacted_test_sha256,regression_priority=regression_priority_sha256,
+                                regression_gate=regression_gate_sha256,final_execution=final_execution_sha256)
+          expected_chain_sha256 = hashlib.sha256(json.dumps(expected_chain,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          final_regression_valid = isinstance(final_regression_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',final_regression_sha256)) and final_chain_sha256==expected_chain_sha256 and checks['requirements-browser']=='success'
+          regression_passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid and regression_gate_valid and final_regression_valid
+          passed = regression_passed
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4d.5', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4d.6', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -472,8 +494,12 @@ jobs:
                         regression_priority_evidence_sha256=regression_priority_sha256 if regression_priority_valid else None,
                         regression_quality_gate_acceptance='PASS' if regression_gate_valid else 'BLOCK',
                         regression_gate_evidence_sha256=regression_gate_sha256 if regression_gate_valid else None,
+                        regression_impact_acceptance='PASS' if regression_passed else 'BLOCK',
+                        regression_impact_complete=regression_passed,
+                        final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
+                        final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4d.6' if passed else None,
+                        development_next_phase='P6.4e' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
