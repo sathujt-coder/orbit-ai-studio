@@ -109,6 +109,18 @@ class EngineeringSandboxTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):self.run_replay()
         self.assertEqual(self.c.execute('SELECT COUNT(*) FROM engineering_sandbox_runs').fetchone()[0],0)
 
+    def test_audited_replay_reserves_writer_before_read_and_releases_for_docker(self):
+        statements=[]
+        self.c.set_trace_callback(statements.append)
+        self.addCleanup(self.c.set_trace_callback,None)
+        fake=FakeDocker()
+        def check(argv,**kwargs):
+            self.assertFalse(self.c.in_transaction)
+            return fake(argv,**kwargs)
+        self.run_replay(check)
+        begins=[x for x in statements if x.startswith('BEGIN')]
+        self.assertEqual(begins,['BEGIN IMMEDIATE','BEGIN IMMEDIATE'])
+
     def test_report_replacement_stales_replay(self):
         self.run_replay()
         self.fixture.evidence['report_digest']='new digest'

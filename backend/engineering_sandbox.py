@@ -181,8 +181,9 @@ def run(c,db_path,pid,jid,actor,expected_digest,expected_version,confirmation,
         raise ValueError('Invalid sandbox receipt version')
     if c.in_transaction:
         raise ValueError('Sandbox requires an idle database connection')
-    # Snapshot under one read transaction; do not hold DB writer lock during Docker.
-    c.execute('BEGIN')
+    # Reserve the writer before audited RBAC reads in WAL mode.
+    # Release before Docker; reauthorize in the existing final transaction.
+    c.execute('BEGIN IMMEDIATE')
     try:
         pp.check_role(c,pid,actor,'approve')
         context,job,decision=current(c,db_path,pid,jid)
