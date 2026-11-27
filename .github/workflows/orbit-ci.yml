@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      severity_hardening_sha256: ${{ steps.severity-hardening.outputs.evidence_sha256 }}
       defect_classification_sha256: ${{ steps.defect-classification.outputs.evidence_sha256 }}
       defect_integration_sha256: ${{ steps.defect-integration.outputs.evidence_sha256 }}
       final_regression_chain_sha256: ${{ steps.final-regression-evidence.outputs.chain_sha256 }}
@@ -284,6 +285,15 @@ jobs:
         with:
           name: engineering-defect-classification-evidence
           path: ${{ runner.temp }}/engineering-defect-classification-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate authoritative severity hardening
+        id: severity-hardening
+        run: python tools/engineering_severity_acceptance.py "$RUNNER_TEMP/engineering-defect-classification-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.severity" "$RUNNER_TEMP/engineering-severity-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-severity-evidence
+          path: ${{ runner.temp }}/engineering-severity-evidence.json
           if-no-files-found: error
           retention-days: 14
       - name: Retain final regression impact evidence
@@ -493,9 +503,11 @@ jobs:
           defect_integration_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_integration_sha256)) and checks['requirements-browser']=='success'
           classification_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_classification_sha256', '')
           classification_valid = bool(re.fullmatch(r'[0-9a-f]{64}',classification_sha256)) and checks['requirements-browser']=='success'
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid
+          severity_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('severity_hardening_sha256', '')
+          severity_valid = bool(re.fullmatch(r'[0-9a-f]{64}',severity_sha256)) and checks['requirements-browser']=='success'
+          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.2', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.2.1', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -537,6 +549,8 @@ jobs:
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        severity_hardening_acceptance='PASS' if severity_valid else 'BLOCK',
+                        severity_hardening_evidence_sha256=severity_sha256 if severity_valid else None,
                         defect_classification_acceptance='PASS' if classification_valid else 'BLOCK',
                         defect_classification_evidence_sha256=classification_sha256 if classification_valid else None,
                         defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,

@@ -797,6 +797,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(regressionFailed.priority_receipt,failedRun.priority_receipt);
   rejectRegressionGuard(regressionFailed.evidence_digest);
   const detectionFailed=detectDefects();
+  const severityArgs=['tools/review_defect_severity.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,'--actor','ci-reviewer'];
+  const severityRead=()=>JSON.parse(execFileSync('python',severityArgs,{stdio:'pipe',timeout:60000}).toString()).result;
+  const severityFinding=detectionFailed.findings[0].finding_id;
+  const severityFailed=JSON.parse(execFileSync('python',[...severityArgs,'--attest','--finding',severityFinding,'--expected-digest',detectionFailed.evidence_digest,'--impact','COSMETIC_IMPACT','--rationale','Controlled fixture review of deliberately incorrect expected value','--confirm','ATTEST SEVERITY '+boundJob.job_id+' '+severityFinding],{stdio:'pipe',timeout:60000}).toString()).result;
+  assert.equal(severityFailed.items[0].severity,'LOW');
+  const severityFailedGate=(await get(owner,regressionGatePath)).state;
+  assert.equal(severityFailedGate,'BLOCK');
   const classificationFailed=detectDefects(true);
   assert.equal(classificationFailed.state,'CLASSIFIED');
   assert.equal(detectionFailed.state,'DETECTED',JSON.stringify(detectionFailed));
@@ -842,6 +849,8 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(guardRecovered,regressionRecovered);
   rejectRegressionGuard(regressionFailed.evidence_digest);
   const detectionRecovered=detectDefects();
+  const severityRecovered=severityRead();
+  assert.equal(severityRecovered.state,'NO_FINDINGS');
   const classificationRecovered=detectDefects(true);
   assert.equal(classificationRecovered.state,'NO_FINDINGS');
   assert.equal(detectionRecovered.state,'NO_FINDINGS',JSON.stringify(detectionRecovered));
@@ -1168,6 +1177,8 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   rejectRegressionGuard(regressionRecovered.evidence_digest);
   rejectRegressionGuard(regressionStale.evidence_digest);
   const detectionStale=detectDefects();
+  const severityStale=severityRead();
+  assert.equal(severityStale.state,'BLOCK');
   const classificationStale=detectDefects(true);
   assert.equal(classificationStale.state,'BLOCK');
   assert.equal(detectionStale.state,'BLOCK');
@@ -1178,6 +1189,10 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.classification',JSON.stringify({
     source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
     missing:classificationMissing,failed:classificationFailed,recovered:classificationRecovered,stale:classificationStale
+  }),{flag:'wx'});
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.severity',JSON.stringify({
+    source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+    failed:severityFailed,recovered:severityRecovered,stale:severityStale,failed_gate:severityFailedGate
   }),{flag:'wx'});
   const staleHistory=readRegressionHistory();
   assert.deepEqual(staleHistory,recoveredHistory);
