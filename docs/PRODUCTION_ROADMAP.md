@@ -194,5 +194,10 @@ Read-only current selected sandbox and both reviewed candidate manifests, exact 
 
 Acceptance: 2eb1bcf, ORBIT CI 45937090794, 566 including four Docker probes, 22/3, 18/18, 11/11 jobs, git-change JSON SHA256 1e53e9c42a8891604d06e5d799f0b42d6aa35b6d39552a38da57386c802a621f.
 
-### P6.4d.2 — Dependency Impact Analysis (pending CI)
+### P6.4d.2 — Dependency Impact Analysis (PASS)
 Candidate-file static Python AST import graph, exact Git change binding, direct and transitive reverse reachability over union of before/after graphs including removed files and cycles, package/relative imports. Known dynamic/ambiguous/unresolved/non-Python/parse-error inputs widen to all files if changed. Static analysis is incomplete, not a runtime dependency proof; always full_regression_required=true and selective_execution_authorized=false, including no changes. WBS dependencies unchanged; no production historical baseline. Read-only HTTP evidence, ten unit regressions and mandatory run-bound validator with exact fixture graph and Git digests, stale BLOCK, no automatic dispatch. Previous Quality Gates, models, prompts, token budget and Docker constraints unchanged. P6.4d.3 only after full System PASS.
+
+Acceptance: 73d9d2a, ORBIT CI 45938058299, 576 including four Docker probes, 22/3, 18/18, 11/11 jobs, dependency-impact JSON SHA256 489d438e70ead2af2618aceff1508ad46a2198d606af2960b3b4dc157866ab6a.
+
+### P6.4d.3 — Impacted Test Case Mapping (pending CI)
+Advisory exact mapping of executable acceptance cases to selected candidate module path/hash, current immutable plan, assertion contract, source, selection, sandbox and impact evidence. Only comparisons ending in selected candidate: baseline to selected, plus A to B when B selected. Direct, transitive, conservative fallback, no static impact detected. Every case remains required, even when zero impacted; no selective execution or test waiver. Read-only GET, eight regressions, mandatory run-bound browser/validator evidence for initial and recovered plan versions, stale BLOCK. No model, prompt, token budget, Docker or previous gate changes. Static Python imports and empty baseline limitations remain. P6.4d.4 only after System PASS.

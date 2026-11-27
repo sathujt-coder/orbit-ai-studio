@@ -662,6 +662,18 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(impactEvidence.selective_execution_authorized,false);
   assert.deepEqual(await get(viewer,impactPath),impactEvidence);
   assert.equal((await post(owner,csrf,impactPath,{})).status(),404);
+  const mappingPath=engineering+'/impacted-tests/'+boundJob.job_id;
+  const initialMapping=await get(owner,mappingPath);
+  assert.equal(initialMapping.state,'IMPACTED_TEST_MAPPING_READY',JSON.stringify(initialMapping));
+  assert.equal(initialMapping.source.impact_evidence_digest,impactEvidence.evidence_digest);
+  assert.equal(initialMapping.source.runner_source.plan_digest,executablePlan.history[1].digest);
+  assert.equal(initialMapping.mappings.baseline_to_B.impacted_count,3);
+  assert.equal(initialMapping.mappings.A_to_B.impacted_count,0);
+  assert.equal(initialMapping.mappings.A_to_B.required_count,3);
+  assert.deepEqual(initialMapping.mappings.baseline_to_B.cases.map(x=>x.case_id),executablePlan.history[1].snapshot.cases.map(x=>x.id));
+  assert.ok(initialMapping.mappings.baseline_to_B.cases.every(x=>x.required&&x.reason==='DIRECT_CHANGE'));
+  assert.deepEqual(await get(viewer,mappingPath),initialMapping);
+  assert.equal((await post(owner,csrf,mappingPath,{})).status(),404);
   const runnerArgs=['tools/run_acceptance_assertions.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,
    '--actor','ci-reviewer','--plan-digest',executablePlan.history[1].digest,'--source-digest',executablePlan.source_digest,
    '--assertion-digest',executablePlan.assertion_contract_digest,'--sandbox-digest',runnerSandbox.receipt.digest,
@@ -761,6 +773,13 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const recoveredRun=JSON.parse(execFileSync('python',assertionArgsFor(correctedPlan,3),{stdio:'pipe',timeout:150000}).toString());
   const registryRecovered=await get(owner,registryPath);
   const gateRecovered=await get(owner,executionGatePath);
+  const recoveredMapping=await get(owner,mappingPath);
+  assert.equal(recoveredMapping.state,'IMPACTED_TEST_MAPPING_READY',JSON.stringify(recoveredMapping));
+  assert.notEqual(recoveredMapping.evidence_digest,initialMapping.evidence_digest);
+  assert.equal(recoveredMapping.source.runner_source.plan_version,4);
+  assert.deepEqual(recoveredMapping.mappings,initialMapping.mappings);
+  assert.equal(recoveredMapping.full_regression_required,true);
+  assert.equal(recoveredMapping.selective_execution_authorized,false);
   assert.equal(registryRecovered.state,'EXECUTION_RECORDED_PASS');
   assert.equal(registryRecovered.latest_version,4);
   assert.deepEqual(registryRecovered.current_receipt,recoveredRun.receipt);
@@ -1033,6 +1052,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,current:impactEvidence,stale:impactStale,
     viewer_read:true,post_rejected:true
   }),{flag:'wx'});
+  const staleMapping=await get(owner,mappingPath);
+  assert.equal(staleMapping.state,'BLOCK');
+  assert.deepEqual(staleMapping.mappings,{});
+  assert.equal(staleMapping.full_regression_required,true);
+  fsSandbox.writeFileSync(process.env.ORBIT_IMPACTED_TEST_EVIDENCE,JSON.stringify({
+    schema:'orbit.impacted-test-browser.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
+    run_attempt:process.env.GITHUB_RUN_ATTEMPT,initial:initialMapping,recovered:recoveredMapping,stale:staleMapping,
+    viewer_read:true,post_rejected:true
+  }),{flag:'wx'});
+  console.log('P6.4d.3 exact impacted test mapping PASS');
   console.log('P6.4d.2 static dependency impact evidence PASS');
   console.log('P6.4d.1 exact Git tree change detection PASS');
   console.log('P6.4c.5 real assertion failure, durable BLOCK, explicit recovery and stale guard PASS');

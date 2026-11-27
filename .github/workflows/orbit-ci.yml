@@ -127,6 +127,7 @@ jobs:
       final_execution_evidence_sha256: ${{ steps.final-execution-evidence.outputs.evidence_sha256 }}
       git_change_evidence_sha256: ${{ steps.git-change-evidence.outputs.evidence_sha256 }}
       dependency_impact_evidence_sha256: ${{ steps.dependency-impact-evidence.outputs.evidence_sha256 }}
+      impacted_test_evidence_sha256: ${{ steps.impacted-test-evidence.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -182,6 +183,7 @@ jobs:
           ORBIT_FINAL_EXECUTION_EVIDENCE: ${{ runner.temp }}/engineering-final-execution-evidence.json
           ORBIT_GIT_CHANGE_EVIDENCE: ${{ runner.temp }}/engineering-git-change-evidence.json
           ORBIT_DEPENDENCY_IMPACT_EVIDENCE: ${{ runner.temp }}/engineering-dependency-impact-evidence.json
+          ORBIT_IMPACTED_TEST_EVIDENCE: ${{ runner.temp }}/engineering-impacted-test-evidence.json
         run: |
           set -o pipefail
           node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
@@ -231,6 +233,16 @@ jobs:
       - name: Validate dependency impact evidence
         id: dependency-impact-evidence
         run: python tools/engineering_dependency_impact_acceptance.py "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-git-change-evidence.json"
+      - name: Validate impacted test mapping evidence
+        id: impacted-test-evidence
+        run: python tools/engineering_impacted_test_acceptance.py "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-runner-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Retain impacted test mapping evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-impacted-test-evidence
+          path: ${{ runner.temp }}/engineering-impacted-test-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain dependency impact evidence
         uses: actions/upload-artifact@v4
         with:
@@ -344,7 +356,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4d.2 — Dependency impact analysis acceptance
+    name: P6.4d.3 — Impacted test mapping acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -389,9 +401,11 @@ jobs:
           automated_execution_passed = engineering_passed and qc_valid and test_plan_valid and assertion_valid and runner_valid and registry_valid and execution_gate_valid and final_execution_valid
           dependency_impact_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('dependency_impact_evidence_sha256', '')
           dependency_impact_valid = isinstance(dependency_impact_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',dependency_impact_sha256)) and checks['requirements-browser']=='success'
-          passed = automated_execution_passed and git_change_valid and dependency_impact_valid
+          impacted_test_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('impacted_test_evidence_sha256', '')
+          impacted_test_valid = isinstance(impacted_test_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',impacted_test_sha256)) and checks['requirements-browser']=='success'
+          passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4d.2', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4d.3', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -422,8 +436,10 @@ jobs:
                         git_change_evidence_sha256=git_change_sha256 if git_change_valid else None,
                         dependency_impact_acceptance='PASS' if dependency_impact_valid else 'BLOCK',
                         dependency_impact_evidence_sha256=dependency_impact_sha256 if dependency_impact_valid else None,
+                        impacted_test_mapping_acceptance='PASS' if impacted_test_valid else 'BLOCK',
+                        impacted_test_evidence_sha256=impacted_test_sha256 if impacted_test_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4d.3' if passed else None,
+                        development_next_phase='P6.4d.4' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
