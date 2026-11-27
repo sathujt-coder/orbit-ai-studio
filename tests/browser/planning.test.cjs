@@ -858,7 +858,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(gateRecovered.receipts.execution,registryRecovered.current_receipt.digest);
   assert.equal(gateRecovered.execution_authorized,false);
   const guardArgs=['tools/check_execution_quality.py','--db',process.env.AI_COMPANY_DB,'--project',pid,'--job',boundJob.job_id,'--actor','ci-reviewer','--expected-digest'];
-  assert.throws(()=>execFileSync('python',[...guardArgs,executionGatePassed.evidence_digest],{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  assert.throws(()=>execFileSync('python',[...guardArgs,executionGatePassed.evidence_digest],{stdio:'pipe',timeout:60000}),e=>e.status===1&&e.stderr.toString().includes('Current execution quality gate required'));
   assert.deepEqual(JSON.parse(execFileSync('python',[...guardArgs,gateRecovered.evidence_digest],{stdio:'pipe',timeout:60000}).toString()),gateRecovered);
   const eligible=(await get(owner,'/api/projects/'+pid+'/state')).dependency_queue.items.find(x=>x.package_id===edge.target);
   assert.equal(eligible.state,'READY_FOR_EXPLICIT_SUBMISSION');
@@ -1093,7 +1093,7 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,before:executionGateBefore,passed:executionGatePassed,
     stale:executionGateStale,post_rejected:true,viewer_read:true
   }),{flag:'wx'});
-  assert.throws(()=>execFileSync('python',[...guardArgs,gateRecovered.evidence_digest],{stdio:'pipe',timeout:60000}),e=>e.status===1);
+  assert.throws(()=>execFileSync('python',[...guardArgs,gateRecovered.evidence_digest],{stdio:'pipe',timeout:60000}),e=>e.status===1&&e.stderr.toString().includes('Current execution quality gate required'));
   fsSandbox.writeFileSync(process.env.ORBIT_FINAL_EXECUTION_EVIDENCE,JSON.stringify({
     schema:'orbit.final-automated-test-execution.v1',source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,
     run_attempt:process.env.GITHUB_RUN_ATTEMPT,failed_plan:failedPlan,corrected_plan:correctedPlan,

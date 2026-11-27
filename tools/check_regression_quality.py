@@ -17,7 +17,7 @@ def main():
             c.row_factory=sqlite3.Row
             c.execute('PRAGMA foreign_keys=ON')
             runner.restrict_cli_database(c)
-            c.execute('BEGIN')
+            runner.begin_audited_transaction(c)
             gate.pp.check_role(c,a.project,a.actor,'read')
             v=gate.require_current(c,a.db,a.project,a.job,a.expected_digest)
         print(json.dumps(v,sort_keys=True))

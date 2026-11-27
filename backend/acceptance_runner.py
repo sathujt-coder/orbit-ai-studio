@@ -225,6 +225,17 @@ def restrict_cli_database(c,*,persist=False,persist_priority=False):
     c.set_authorizer(authorize)
 
 
+def begin_audited_transaction(c):
+    """Acquire the SQLite writer reservation before any audited RBAC read.
+
+    authorize() SELECTs membership then INSERTs an audit row. A deferred
+    read transaction can fail its WAL snapshot upgrade despite busy_timeout.
+    IMMEDIATE waits at entry, before reading any authorization or evidence.
+    """
+    if c.in_transaction:raise ValueError('Idle database connection required')
+    c.execute('BEGIN IMMEDIATE')
+
+
 def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image,expected_registry_version=None,priority_comparison=None,priority_mapping_digest=None):
     from engineering_assertion_registry import check_version,append
     if confirmation!='RUN ACCEPTANCE ASSERTIONS '+jid:raise PermissionError('Explicit local confirmation required')
@@ -233,8 +244,7 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
     if priority_comparison is not None:
         import regression_priority as priority
     image=vf.pinned_image(image)
-    if c.in_transaction:raise ValueError('Idle database connection required')
-    c.execute('BEGIN')
+    begin_audited_transaction(c)
     try:
         pp.check_role(c,pid,actor,'approve')
         source,cases,proposal,targets=current(c,db,pid,jid)
@@ -282,7 +292,7 @@ def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_di
     if schedule is not None:
         trace=priority.evidence(schedule,attempted,report)
         result.update(priority=trace,priority_digest=pp.digest(trace))
-    c.execute('BEGIN IMMEDIATE' if expected_registry_version is not None else 'BEGIN')
+    begin_audited_transaction(c)
     try:
         pp.check_role(c,pid,actor,'approve')
         fresh=current(c,db,pid,jid)
