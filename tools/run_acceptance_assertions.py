@@ -17,7 +17,7 @@ def main():
         with sqlite3.connect(a.db,timeout=20) as c:
             c.row_factory=sqlite3.Row
             c.execute('PRAGMA foreign_keys=ON')
-            c.execute('PRAGMA query_only=ON')
+            runner.restrict_cli_database(c)
             result=runner.run(c,a.db,a.project,a.job,a.actor,a.plan_digest,a.source_digest,a.assertion_digest,a.sandbox_digest,a.confirm,image=a.python_image)
         print(json.dumps(result,sort_keys=True))
         return 0 if result['report']['gate']=='PASS' else 2

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -199,6 +200,26 @@ def current(c,db,pid,jid):
                 selection_digest=context['selection_digest'],sandbox_digest=receipt['digest'],
                 selected=lane,candidate_digest=git['source_sha256'],git=git)
     return source,e['cases'],proposal,targets
+
+def restrict_cli_database(c):
+    """Permit existing RBAC audit INSERTs, never domain or schema mutations.
+
+    SQLite query_only forbids the audited authorize() call as well as domain
+    writes. The authorizer is connection-local and fails closed on new SQL.
+    """
+    read_actions={sqlite3.SQLITE_SELECT,sqlite3.SQLITE_READ,sqlite3.SQLITE_FUNCTION,
+                  sqlite3.SQLITE_TRANSACTION,sqlite3.SQLITE_RECURSIVE}
+    def authorize(action,arg1,arg2,database,trigger):
+        if action in read_actions:return sqlite3.SQLITE_OK
+        if action==sqlite3.SQLITE_PRAGMA and (
+            (arg1=='database_list' and arg2 is None) or
+            (arg1 in ('table_info','index_info','index_list') and arg2 is not None)):
+            return sqlite3.SQLITE_OK
+        if action==sqlite3.SQLITE_INSERT and database=='main' and arg1=='auth_audit' and trigger is None:
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+    c.set_authorizer(authorize)
+
 
 def run(c,db,pid,jid,actor,plan_digest,source_digest,assertion_digest,sandbox_digest,confirmation,*,image):
     if confirmation!='RUN ACCEPTANCE ASSERTIONS '+jid:raise PermissionError('Explicit local confirmation required')

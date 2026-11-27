@@ -1,8 +1,9 @@
-import hashlib,json,os,sys,tempfile,unittest
+import hashlib,json,os,sqlite3,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 import acceptance_runner as r
+import auth_store
 
 def contract(args=None,assertion=None):
     return dict(runtime='python',module='main',function='add',arguments=[2,3] if args is None else args,
@@ -43,6 +44,52 @@ class RunnerTests(unittest.TestCase):
                 t.assert_not_called()
     def test_explicit_confirmation_before_db(self):
         with self.assertRaises(PermissionError):r.run(None,None,'p','j','actor','a','b','c','d','no',image=None)
+    def test_cli_audit_only_database_allows_actual_rbac(self):
+        with sqlite3.connect(':memory:') as c:
+            c.row_factory=sqlite3.Row
+            auth_store.ensure_schema(c)
+            c.execute("INSERT INTO auth_users(id,password_hash) VALUES('reviewer','fixture'),('developer','fixture')")
+            c.execute("INSERT INTO auth_memberships VALUES('reviewer','p','reviewer'),('developer','p','developer')")
+            c.execute("CREATE TABLE engineering_test_plans(id INTEGER PRIMARY KEY)")
+            c.execute("INSERT INTO engineering_test_plans VALUES(1)")
+            c.commit()
+            r.restrict_cli_database(c)
+            r.pp.check_role(c,'p','reviewer','approve')
+            with self.assertRaises(PermissionError):r.pp.check_role(c,'p','developer','approve')
+            c.commit()
+            self.assertEqual([x[0] for x in c.execute("SELECT outcome FROM auth_audit ORDER BY id")],['allowed','denied'])
+            self.assertTrue(c.execute('PRAGMA database_list').fetchall())
+            for sql in ("INSERT INTO engineering_test_plans VALUES(2)",
+                        "UPDATE engineering_test_plans SET id=2","DELETE FROM engineering_test_plans",
+                        "DELETE FROM auth_audit","UPDATE auth_memberships SET role='owner'",
+                        "CREATE TABLE unsafe(id)","DROP TABLE engineering_test_plans","PRAGMA writable_schema=ON"):
+                with self.assertRaises(sqlite3.DatabaseError):c.execute(sql)
+            self.assertEqual([x[0] for x in c.execute("SELECT id FROM engineering_test_plans")],[1])
+    def test_runner_two_real_rbac_checks_without_writer_lock_during_execution(self):
+        with sqlite3.connect(':memory:') as c:
+            c.row_factory=sqlite3.Row
+            auth_store.ensure_schema(c)
+            c.execute("INSERT INTO auth_users(id,password_hash) VALUES('reviewer','fixture')")
+            c.execute("INSERT INTO auth_memberships VALUES('reviewer','p','reviewer')")
+            c.commit()
+            r.restrict_cli_database(c)
+            p=proposal('def add(a,b):return a+b')
+            case=dict(id='T',criterion_id='AC',kind='POSITIVE',execution=contract())
+            meta=r.target(p,case['execution'])
+            source=dict(plan_digest='p1',source_digest='s1',assertion_contract_digest='a1',
+                        sandbox_digest='b1',selected='B',git=dict(parent='base'))
+            def materialize(db,pid,jid,lane,proposal,base,work):
+                self.assertFalse(c.in_transaction)
+                return r.vf._materialize_proposal(proposal,work),source['git']
+            result=dict(case_id='T',executed=True,status='PASS')
+            with patch.object(r,'current',return_value=(source,[case],p,[meta])), \
+                 patch.object(r.sb,'materialize',side_effect=materialize), \
+                 patch.object(r,'execute_case',return_value=result):
+                report=r.run(c,None,'p','j','reviewer','p1','s1','a1','b1',
+                             'RUN ACCEPTANCE ASSERTIONS j',image='python@sha256:'+'0'*64)
+            self.assertEqual(report['report']['gate'],'PASS')
+            self.assertFalse(report['report']['persisted'])
+            self.assertEqual([x[0] for x in c.execute("SELECT outcome FROM auth_audit ORDER BY id")],['allowed','allowed'])
     def test_docker_command_is_fixed_and_isolated(self):
         cmd=r.vf._docker_cmd('image',Path('/tmp/work'),['python','-I','-B','-c',r.HARNESS,'{}'],'name')
         for x in ('--network','none','--read-only','--cap-drop','ALL','65534:65534','--memory','256m','--pids-limit','64','--pull','never'):
