@@ -130,6 +130,7 @@ $('securityEvidenceRefresh').addEventListener('click',loadSecurityEvidence);
 let threatGeneration=0;
 function clearThreatModel(){
  threatGeneration++;
+ clearSast();
  $('threatModelStatus').textContent='Chưa xác minh · Security gate BLOCK';
 }
 async function loadThreatModel(){
@@ -154,6 +155,31 @@ async function loadThreatModel(){
  }catch(e){if(live()){$('threatModelStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
 }
 $('threatModelRefresh').addEventListener('click',loadThreatModel);
+let sastGeneration=0;
+function clearSast(){
+ sastGeneration++;
+ $('sastStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadSast(){
+ const pid=projectId,jid=codingSelected;clearSast();
+ if(!pid||!jid)return;
+ const generation=sastGeneration,live=()=>generation===sastGeneration&&pid===projectId&&jid===codingSelected;
+ $('sastStatus').textContent='Đang phân tích tĩnh · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/sast/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-sast.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||v.requirements_approved!==false||
+     !['BLOCK','SAST_BASELINE_READY'].includes(v.state)||!['NOT_ASSESSED','BLOCK','NO_RULE_MATCHES'].includes(v.scan_verdict)||
+     !Array.isArray(v.files)||!Array.isArray(v.findings))throw Error('Invalid SAST evidence');
+  $('sastStatus').textContent=[v.state,'Security gate: BLOCK','Scan: '+v.scan_verdict,
+   'Candidate: '+(v.source?.candidate_digest||'—'),'Policy: '+v.policy_digest,
+   ...v.files.map(x=>x.path+' · '+x.status),
+   ...v.findings.map(x=>x.path+':'+x.line+' · '+x.rule_id+' · '+x.severity),
+   'Evidence: '+v.evidence_digest,'Python AST baseline · Không phải security clearance'].join('\n');
+ }catch(e){if(live()){$('sastStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('sastRefresh').addEventListener('click',loadSast);
 let repairView=null,retestView=null,repairScope=null,repairGeneration=0,repairBusy=false;
 const repairTransitions={OPEN:['ASSIGN'],ASSIGNED:['REASSIGN','START'],IN_PROGRESS:['REASSIGN','SUBMIT'],
  REPAIR_SUBMITTED:['REJECT','VERIFY'],VERIFIED:['REJECT','CLOSE'],CLOSED:['REOPEN']};

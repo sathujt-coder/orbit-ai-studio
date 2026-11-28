@@ -28,6 +28,7 @@ import defect_repair_tracking
 import defect_retest_quality
 import security_evidence
 import security_threat_model
+import security_sast
 import engineering_qc
 import engineering_test_plan
 import engineering_assertion_registry
@@ -897,6 +898,14 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/sast/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=security_sast.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/threat-model/[A-Za-z0-9_-]{1,100}',path):
                 actor,pid,_=self.auth_context
                 jid=path.rsplit('/',1)[1]

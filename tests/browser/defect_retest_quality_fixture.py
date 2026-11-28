@@ -5,6 +5,7 @@ from defect_repair_positive_fixture import (closing, connect, capture, snapshots
 import defect_retest_quality as q
 import security_evidence as security
 import security_threat_model as threat
+import security_sast as sast
 
 def point(db,pid,jid):
     with closing(connect(db)) as c:
@@ -49,13 +50,13 @@ def main():
             before=snapshots.copy_project_snapshot(c,db,pid,lambda c,p:capture(c,p,jid))
         with closing(connect(db)) as c:
             c.execute('PRAGMA journal_mode=WAL');c.execute('BEGIN')
-            source,cases,_,_=runner.current(c,db,pid,jid)
+            source,cases,proposal,_=runner.current(c,db,pid,jid)
             m=mapping.view(c,db,pid,jid)
             version=len(t.runs.history(c,pid,jid))
             require(not t.registry.history(c,pid,jid),'Clean registry baseline required')
             c.rollback()
             closer=c.execute("SELECT m.user_id FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id WHERE m.project_id=? AND m.role='owner' AND u.active=1",(pid,)).fetchone()[0]
-        fail_case=cases[0]['id'];points={};executions=[];security_points={};threat_points={}
+        fail_case=cases[0]['id'];points={};executions=[];security_points={};threat_points={};sast_points={}
         def execute(fail=False):
             result=run(db,pid,jid,source,m,version+len(executions),fail_case if fail else None)
             require(result['report']['gate']==('BLOCK' if fail else 'PASS'),'Unexpected real Docker result')
@@ -74,6 +75,11 @@ def main():
                 require(model['state']==('BLOCK' if key=='stale' else 'THREAT_MODEL_READY')
                     and model['security_gate']=='BLOCK' and model['requirements_approved'] is False,'Unexpected threat model state')
                 threat_points[key]=model
+                scan=sast.evaluate(pid,jid,model,proposal)
+                require(scan['source'] is not None and scan['scan_verdict']!='NOT_ASSESSED'
+                    and scan['security_gate']=='BLOCK','Candidate scan missing')
+                require(key!='stale' or scan['state']=='BLOCK','Stale SAST unexpectedly ready')
+                sast_points[key]=scan
         execute(True);r1=register(db,pid,jid);mark('open','BLOCK')
         command(db,pid,jid,r1,'ASSIGN','ci-reviewer','ci-developer')
         command(db,pid,jid,r1,'START','ci-developer')
@@ -113,8 +119,12 @@ def main():
             rejected(lambda:q.require_current(c,db,pid,jid,points['both_closed']['gate']['evidence_digest']),ValueError,'Current defect retest quality gate required')
         with closing(connect(live)) as c:
             require(snapshots.capture(c,pid,lambda c,p:capture(c,p,jid))==before,'Live evidence modified')
+        # Private fixture-only bytes, never included in uploaded evidence.
+        path=os.environ['ORBIT_FINAL_REGRESSION_LIFECYCLE']+'.sast-input'
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'w',encoding='utf-8') as file:json.dump(proposal,file)
         print(json.dumps(dict(schema='orbit.defect-retest-quality-browser.v1',source_commit=os.environ['GITHUB_SHA'],
             run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],project_id=pid,job_id=jid,
-            registrations=[r1,r2],executions=executions,points=points,reopen_race=reopen,security_points=security_points,threat_points=threat_points,
+            registrations=[r1,r2],executions=executions,points=points,reopen_race=reopen,security_points=security_points,threat_points=threat_points,sast_points=sast_points,
             same_run_rejected=True,failed_verify_rejected=True,stale_digest_rejected=True,live_unchanged=True),sort_keys=True))
 if __name__=='__main__':main()

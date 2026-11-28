@@ -239,5 +239,10 @@ See docs/P6.5a-security-evidence.md. Read-only current source/receipt/retest/san
 
 CI #194, HEAD 2f85ed8, run 46115997166, 11/11 jobs success, 725 Python tests (4 separate Docker probes), 24 General Browser, 3 Planning Chromium, 18/18 dependency checkpoints; 33 ZIP and 28 Studio digest references independently matched. Security evidence 15251991718 PASS; security gate BLOCK.
 
-### P6.5b — Threat Modeling & Security Requirements (pending CI)
+### P6.5b — Threat Modeling & Security Requirements (development CI PASS)
 See docs/P6.5b-threat-model.md. Deterministic architecture baseline, exact source binding, 7 assets, 6 boundaries, 16 threats/requirements with all six STRIDE categories; no candidate-specific analysis, approval or security clearance. Read-only dashboard/API, mandatory CI evidence, existing P6.4/P6.5a gates unchanged.
+
+CI #195, HEAD 4dbee52, run 46117314545, 11/11 jobs success; 741 Python tests (4 separate Docker probes), 25 General Browser, 3 Planning Chromium, 18/18 dependency checkpoints; 34 ZIP, 29 Studio digest references, 6 threat snapshots independently verified. Threat artifact 15252557819. Security gate BLOCK, requirements NOT_VERIFIED.
+
+### P6.5c — Static Application Security Testing (pending CI)
+Bounded deterministic selected candidate Python AST baseline, exact file/Git and threat evidence binding, read-only API/dashboard, 22 regressions and mandatory CI evidence. No candidate execution, no source contents in artifact. Non-Python executable formats and invalid/oversized inputs fail closed; passive text not scanned. No comprehensive taint analysis, secret or CVE scanning or security clearance. Existing gates unchanged.
