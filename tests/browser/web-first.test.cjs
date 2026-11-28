@@ -314,3 +314,67 @@ test('Studio orchestration controls fail closed without adopted source and prese
   assert.equal(await page.locator('#studioWorkflow').evaluate(e=>e.scrollWidth<=e.clientWidth+2),true);
  }finally{await browser.close()}
 });
+
+test('Defect retest panel preserves historical occurrence and fails closed on stale evidence',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:1365,height:900}}),csrf=await login(page);
+  const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'Repair UI '+Date.now(),idea:'Explicit repair controls fixture',platform:'Web app'}});
+  assert.equal(created.status(),201);const pid=(await created.json()).project_id;
+  await page.addInitScript(({origin,id})=>{if(location.origin===origin)localStorage.setItem('orbit-project',id)},{origin:ORIGIN,id:pid});
+  const j='fixture-repair-a',j2='fixture-repair-b',rd='a'.repeat(64),rd2='b'.repeat(64),fid='c'.repeat(64);
+  let version=0,mismatch=false,submitted=null,hold=false,held=false,release;
+  const pending=new Promise(resolve=>{release=resolve});
+  const items=()=>[{finding_id:fid,registration_digest:rd,latest:false,severity:'HIGH',state:version?'ASSIGNED':'CLOSED',assignee:'ci-developer',history:[{digest:'d'.repeat(64),snapshot:{action:'CLOSE',actor:'ci-reviewer',note:'Old closure'}}]},
+   {finding_id:fid,registration_digest:rd2,latest:true,severity:'HIGH',state:'OPEN',assignee:null,history:[]}];
+  const digest=()=>String(version+1).repeat(64);
+  const json=(route,body,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
+  await page.route('**/api/projects/'+pid+'/coding',route=>json(route,{jobs:[j,j2].map(id=>({id,status:'failed',spec:'Synthetic UI fixture '+id}))}));
+  await page.route('**/api/coding/**',route=>{
+   const parts=new URL(route.request().url()).pathname.split('/');const id=parts[3];
+   return json(route,parts[4]==='verifications'?{verifications:[]}:parts[4]==='quality'?{job_id:id,status:'BLOCK'}:{id,status:'failed',spec:'Synthetic UI fixture'});
+  });
+  await page.route('**/api/projects/'+pid+'/engineering/defect-repairs/*',async route=>{
+   const id=new URL(route.request().url()).pathname.split('/').at(-1);
+   if(route.request().method()==='POST'){
+    submitted=route.request().postDataJSON();version++;
+    return json(route,{digest:'e'.repeat(64)},201);
+   }
+   const payload={project_id:pid,job_id:id,state:'READY',registry_state:'NO_CURRENT_FINDINGS',items:id===j?items():[],evidence_digest:digest()};
+   if(hold&&id===j){held=true;await pending;}
+   return json(route,payload);
+  });
+  await page.route('**/api/projects/'+pid+'/engineering/defect-retest-quality/*',route=>{
+   const id=new URL(route.request().url()).pathname.split('/').at(-1);
+   return json(route,{project_id:pid,job_id:id,state:'BLOCK',checks:{explicit_closure:'BLOCK'},items:id===j?items().map(x=>({registration_digest:x.registration_digest,status:x.state==='CLOSED'?'STALE_RETEST':'UNRESOLVED',closure_digest:null})):[],repair_digest:mismatch?'f'.repeat(64):digest(),evidence_digest:'9'.repeat(64),execution_digest:'8'.repeat(64)});
+  });
+  await page.goto(ORIGIN+'/');await page.locator('#studioLine[data-project-id="'+pid+'"][data-ready="true"]').waitFor({timeout:15000});
+  await page.locator('[data-view="coding"]').click();
+  await page.locator('#codingJobs [data-job="'+j+'"]').click();
+  await page.locator('#defectRepairRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#defectRepairItem').options.length===2);
+  await page.locator('#defectRepairItem').selectOption(rd);
+  assert.match(await page.locator('#defectRepairItem option').first().textContent(),/Lịch sử.*STALE_RETEST/);
+  assert.deepEqual(await page.locator('#defectRepairAction option').allTextContents(),['REOPEN']);
+  await page.locator('#defectRepairNote').fill('Explicit revalidation request');
+  page.once('dialog',dialog=>dialog.accept());
+  await page.locator('#defectRepairSubmit').click();
+  await page.waitForFunction(()=>document.querySelector('#defectRepairStatus').textContent.includes('ASSIGNED'));
+  assert.deepEqual(submitted,{action:'REOPEN',finding_id:fid,registration_digest:rd,expected_digest:'1'.repeat(64),assignee:null,note:'Explicit revalidation request',confirmation:'REOPEN DEFECT '+j+' '+fid});
+  assert.match(await page.locator('#defectRetestStatus').textContent(),/BLOCK/);
+  mismatch=true;await page.locator('#defectRepairRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#defectRepairStatus').textContent.includes('Không thể xác minh'));
+  assert.equal(await page.locator('#defectRepairSubmit').isDisabled(),true);
+  mismatch=false;hold=true;await page.locator('#defectRepairRefresh').click();
+  for(let i=0;i<100&&!held;i++)await new Promise(resolve=>setTimeout(resolve,50));
+  assert.equal(held,true);
+  await page.locator('#codingJobs [data-job="'+j2+'"]').click();
+  await page.locator('#defectRepairRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#defectRepairStatus').textContent.startsWith('READY'));
+  const delayed=page.waitForResponse(response=>response.url().endsWith('/defect-repairs/'+j));
+  release();await delayed;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('#defectRepairItem option').count(),0);
+  assert.equal(await page.locator('#defectRepairSubmit').isDisabled(),true);
+ }finally{await browser.close()}
+});

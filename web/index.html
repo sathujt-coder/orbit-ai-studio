@@ -98,12 +98,14 @@
             <h3>Defect Assignment &amp; Repair Tracking</h3>
             <button type="button" class="btn outline" id="defectRepairRefresh">Tải trạng thái defect</button>
             <pre id="defectRepairStatus" class="github-preview" aria-live="polite">Chọn coding job và tải trạng thái.</pre>
+            <h3>Defect Retest Quality Gate · Chỉ đọc</h3>
+            <pre id="defectRetestStatus" class="github-preview" aria-live="polite">Chưa xác minh · BLOCK</pre>
             <form id="defectRepairForm">
-              <label>Defect <select id="defectRepairItem" required></select></label>
-              <label>Hành động <select id="defectRepairAction"><option>ASSIGN</option><option>REASSIGN</option><option>START</option><option>SUBMIT</option><option>REJECT</option><option>VERIFY</option><option>CLOSE</option></select></label>
+              <label>Defect <select id="defectRepairItem" required disabled></select></label>
+              <label>Hành động <select id="defectRepairAction" required disabled></select></label>
               <label>Assignee (chỉ ASSIGN/REASSIGN) <input id="defectRepairAssignee" maxlength="100"></label>
               <label>Ghi chú <textarea id="defectRepairNote" maxlength="1000" required></textarea></label>
-              <button type="submit" class="btn outline">Xác nhận cập nhật defect</button>
+              <button type="submit" id="defectRepairSubmit" class="btn outline" disabled>Xác nhận cập nhật defect</button>
             </form>
             <pre id="codingVerification" class="github-preview">Sandbox verification: chưa có bằng chứng chạy mã. Chỉ có thể thực thi qua CLI sau xác nhận thủ công.</pre>
             <a id="codingDownload" class="btn outline hidden" download>Tải bản mã đã qua review ↧</a>

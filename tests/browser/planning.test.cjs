@@ -819,9 +819,22 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const repairOpen=await get(owner,repairPath);
   assert.equal(repairOpen.state,'READY');
   assert.equal(repairOpen.items[0].state,'OPEN');
+  const retestPath=engineering+'/defect-retest-quality/'+boundJob.job_id;
+  const retestOpen=await get(owner,retestPath);
+  assert.equal(retestOpen.state,'BLOCK');
+  assert.equal(retestOpen.repair_digest,repairOpen.evidence_digest);
+  assert.equal(retestOpen.items[0].status,'UNRESOLVED');
+  assert.equal(retestOpen.items[0].severity,'LOW');
+  assert.equal((await viewer.request.get(ORIGIN+retestPath)).status(),200);
+  assert.equal((await viewer.request.get(ORIGIN+'/api/projects/'+other+'/engineering/defect-retest-quality/'+boundJob.job_id)).status(),403);
+  assert.equal((await post(owner,csrf,retestPath,{})).status(),404);
   const repairItem=repairOpen.items[0];
   const repairBody=(action,v,assignee=null)=>({action,finding_id:repairItem.finding_id,registration_digest:repairItem.registration_digest,
     expected_digest:v.evidence_digest,assignee,note:'Controlled repair tracking fixture',confirmation:action+' DEFECT '+boundJob.job_id+' '+repairItem.finding_id});
+  for(const [page,token] of [[viewer,vc],[dev,dc],[reviewer,'0'.repeat(64)]])
+   assert.equal((await post(page,token,repairPath,repairBody('REOPEN',repairOpen))).status(),403);
+  assert.equal((await post(reviewer,rc,repairPath,repairBody('REOPEN',repairOpen))).status(),400);
+  assert.deepEqual(await get(owner,repairPath),repairOpen);
   assert.equal((await post(viewer,vc,repairPath,repairBody('ASSIGN',repairOpen,'ci-developer'))).status(),403);
   assert.equal((await post(reviewer,rc,repairPath,repairBody('ASSIGN',repairOpen,'ci-developer'))).status(),201);
   const repairAssigned=await get(owner,repairPath);
@@ -890,6 +903,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const repairRejected=await get(owner,repairPath);
   assert.equal(repairRejected.items[0].state,'IN_PROGRESS');
   assert.deepEqual(await get(viewer,repairPath),repairRejected);
+  const retestRecovered=await get(viewer,retestPath);
+  assert.equal(retestRecovered.state,'BLOCK');
+  assert.equal(retestRecovered.checks.mandatory_regression,'PASS');
+  assert.equal(retestRecovered.checks.explicit_closure,'BLOCK');
+  assert.equal(retestRecovered.items[0].status,'UNRESOLVED');
+  assert.equal(retestRecovered.repair_digest,repairRejected.evidence_digest);
   const severityRecovered=severityRead();
   assert.equal(severityRecovered.state,'NO_FINDINGS');
   const classificationRecovered=detectDefects(true);

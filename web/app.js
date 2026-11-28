@@ -9,11 +9,11 @@ let codingQuality=null;
 let codingJobs=[],codingSelected='',codingBusy=false,codingDetail=null,codingVerifications=[];
 let githubConfig=null,githubExports=[],githubSelected='',githubVerified='',githubBusy=false;
 let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')||'',selectedDept='po',selectedAgent='po-A',world=null,loading=false,documentText='',showAll=false,artifactFilter=null,chatSending=false;
-let sessionCsrf='',stateGeneration=0;
+let sessionCsrf='',sessionUser='',stateGeneration=0;
 async function api(path,method='GET',body){let opts={method,headers:{'Content-Type':'application/json','X-ORBIT-UI':'1'}};if(method!=='GET')opts.headers['X-ORBIT-CSRF']=sessionCsrf;if(body!==undefined)opts.body=JSON.stringify(body);const r=await fetch(path,opts);let v;try{v=await r.json()}catch{throw Error('Máy chủ không phản hồi JSON')};if(r.status===401){location.replace('/account.html');throw Error('Phiên đã hết hạn')}if(!r.ok)throw Error(v.error||'Lỗi không xác định');return v}
 function toast(msg,isError=false){let el=document.createElement('div');el.className='toast'+(isError?' error':'');el.textContent=msg;$('toastWrap').append(el);setTimeout(()=>el.remove(),4500)}
 function setProject(pid){clearRepair();stateGeneration++;loading=false;projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='po';selectedAgent='po-A';$('studioLine').replaceChildren();$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;$('roleWorkspace').replaceChildren();delete $('roleWorkspace').dataset.signature;delete $('roleWorkspace').dataset.projectId;delete $('roleWorkspace').dataset.role;delete $('studioLine').dataset.projectId;$('studioLine').dataset.ready='false';$('lineFreshness').textContent='Đang tải dự án mới…';$('pipelineTrack').replaceChildren();$('agentMembers').replaceChildren();$('deptName').textContent='Đang tải phòng ban…';$('deptDescription').textContent='';$('deptDeliverable').textContent='';$('deptStatus').textContent='Chưa xác minh';$('inspect-actions-extension')?.replaceChildren();world?.updateTasks([]);artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
-async function init(){try{const session=await api('/api/auth/session');sessionCsrf=session.csrf_token;bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.routing_mode==='smart'?'SMART ROUTING · Model được chọn theo tác vụ':'A: '+bootstrap.provider.modelA+' · B: '+bootstrap.provider.modelB+' (chưa xác minh live)';
+async function init(){try{const session=await api('/api/auth/session');sessionCsrf=session.csrf_token;sessionUser=session.user;bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.routing_mode==='smart'?'SMART ROUTING · Model được chọn theo tác vụ':'A: '+bootstrap.provider.modelA+' · B: '+bootstrap.provider.modelB+' (chưa xác minh live)';
   const providerLink=document.getElementById('providerSettingsLink');if(providerLink)providerLink.hidden=!bootstrap.provider_admin;const monitoringLink=document.getElementById('monitoringLink');if(monitoringLink)monitoringLink.hidden=!bootstrap.provider_admin;const resourceLink=document.getElementById('resourceSettingsLink');if(resourceLink)resourceLink.hidden=!bootstrap.provider_admin;
  $('headerDate').textContent=new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'numeric',month:'long'});
  bindEvents();renderSidebar();await loadState();await loadGithubConfig();await loadGithubExports();await loadCodingJobs();setInterval(loadState,1400);setInterval(loadCodingJobs,4000)}catch(err){toast('Không thể kết nối backend: '+err.message,true);$('activityFeed').innerHTML='<div class="empty"><span>⚠</span><b>Chưa kết nối máy chủ</b><small>Mở ứng dụng tại http://127.0.0.1:8787 sau khi chạy python3 backend/server.py</small></div>'}}
@@ -23,12 +23,12 @@ async function loadState(){
  try{
   const state=await api('/api/projects/'+encodeURIComponent(pid)+'/state');
   if(generation!==stateGeneration||projectId!==pid||state.project.id!==pid)return;
-  current=state;render();
+  current=state;render();syncRepairControls();
   $('lineFreshness').textContent='Dữ liệu dự án: '+state.project.name+' · cập nhật '+new Date().toLocaleTimeString('vi-VN');
  }catch(err){
   if(generation!==stateGeneration)return;
   $('studioLine').dataset.ready='false';$('roleWorkspace').dataset.stale='true';$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;
-  $('lineFreshness').textContent='Không cập nhật được dữ liệu; trạng thái hiển thị có thể đã cũ.';
+  $('lineFreshness').textContent='Không cập nhật được dữ liệu; trạng thái hiển thị có thể đã cũ.';syncRepairControls();
   toast(err.message,true);
  }finally{if(generation===stateGeneration)loading=false}
 }
@@ -82,7 +82,7 @@ function bindEvents(){for(let el of [$('newProjectBtn'),$('newProjectShortcut')]
  $('chatForm').addEventListener('submit',sendChat);
  $('codingForm').addEventListener('submit',startCoding);
  $('codingRefresh').addEventListener('click',loadCodingJobs);
- $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){codingSelected=btn.dataset.job;codingVerifications=[];await loadCodingDetail();renderCoding()}});
+ $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){if(codingSelected!==btn.dataset.job)clearRepair();codingSelected=btn.dataset.job;codingVerifications=[];await loadCodingDetail();renderCoding()}});
  $('githubArtifact').addEventListener('change',e=>{githubSelected=e.target.value;githubVerified='';$('githubPreviewText').textContent='Chọn Kiểm tra trước khi gửi để xác minh quality gate.';renderGitHub()});
  $('githubPreview').addEventListener('click',previewGitHub);$('githubCreate').addEventListener('click',createGitHubPR);
  document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('[data-view]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const section=({overview:'overviewSection',departments:'roleWorkspaceSection',workflow:'workflowSection',artifacts:'artifactsSection',coding:'codingSection',github:'githubSection'})[btn.dataset.view];if(section==='departmentsSection')$('officeDetails').open=true;$(section).scrollIntoView({behavior:'smooth',block:'start'})}));
@@ -92,7 +92,7 @@ async function run(mode){try{await api('/api/projects/'+projectId+'/run','POST',
 
 async function startCoding(e){e.preventDefault();if(codingBusy||!projectId)return;
  const spec=$('codingSpec').value.trim();if(spec.length<15)return;codingBusy=true;$('codingStart').disabled=true;
- try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});codingSelected=r.job_id;codingDetail=null;codingVerifications=[];
+ try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});clearRepair();codingSelected=r.job_id;codingDetail=null;codingVerifications=[];
   $('codingSpec').value='';toast('DEV-A và DEV-B đã nhận job. Code chỉ được tải khi cả hai review đạt.');await loadCodingJobs();await loadCodingDetail();}
  catch(err){toast(err.message,true)}finally{codingBusy=false;$('codingStart').disabled=false}}
 async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
@@ -101,34 +101,111 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status)))await loadCodingDetail();
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
-let repairView=null,repairScope=null,repairGeneration=0;
-function clearRepair(){repairGeneration++;repairView=null;repairScope=null;$('defectRepairItem')?.replaceChildren();if($('defectRepairStatus'))$('defectRepairStatus').textContent='Chọn coding job và tải trạng thái.';}
+let repairView=null,retestView=null,repairScope=null,repairGeneration=0,repairBusy=false;
+const repairTransitions={OPEN:['ASSIGN'],ASSIGNED:['REASSIGN','START'],IN_PROGRESS:['REASSIGN','SUBMIT'],
+ REPAIR_SUBMITTED:['REJECT','VERIFY'],VERIFIED:['REJECT','CLOSE'],CLOSED:['REOPEN']};
+const repairReview=new Set(['ASSIGN','REASSIGN','REJECT','VERIFY','CLOSE','REOPEN']);
+const repairHex=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
+function repairScoped(){return repairScope&&repairScope.pid===projectId&&repairScope.jid===codingSelected;}
+function repairActions(item){
+ const p=current?.workflow_permissions;
+ if(repairBusy||!repairScoped()||repairView?.state!=='READY'||retestView?.repair_digest!==repairView.evidence_digest||
+   !item||!sessionUser||p?.project_id!==projectId||current?.project?.id!==projectId||$('studioLine').dataset.ready!=='true')return [];
+ return (repairTransitions[item.state]||[]).filter(action=>{
+  if(repairReview.has(action)){
+   if(!p.can_approve)return false;
+   if(!['ASSIGN','REASSIGN'].includes(action)&&item.assignee===sessionUser)return false;
+   if(action==='CLOSE'&&item.history.at(-1)?.snapshot.actor===sessionUser)return false;
+   return true;
+  }
+  return p.can_write===true&&item.assignee===sessionUser;
+ });
+}
+function syncRepairControls(){
+ const select=$('defectRepairAction');if(!select)return;
+ const item=repairView?.items.find(x=>x.registration_digest===$('defectRepairItem').value);
+ const actions=repairActions(item),old=select.value;
+ if([...select.options].map(x=>x.value).join(',')!==actions.join(',')){
+  select.replaceChildren(...actions.map(a=>new Option(a,a)));
+  if(actions.includes(old))select.value=old;
+ }
+ const assign=['ASSIGN','REASSIGN'].includes(select.value);
+ $('defectRepairItem').disabled=repairBusy||!repairScoped()||!repairView;
+ select.disabled=!actions.length;$('defectRepairAssignee').disabled=!actions.length||!assign;
+ $('defectRepairAssignee').required=!!actions.length&&assign;
+ $('defectRepairNote').disabled=!actions.length;$('defectRepairSubmit').disabled=!actions.length;
+ $('defectRepairRefresh').disabled=repairBusy;
+}
+function clearRepair(message='Chọn coding job và tải trạng thái.'){
+ repairGeneration++;repairView=null;retestView=null;repairScope=null;
+ $('defectRepairItem')?.replaceChildren();
+ if($('defectRepairStatus'))$('defectRepairStatus').textContent=message;
+ if($('defectRetestStatus'))$('defectRetestStatus').textContent='Chưa xác minh · BLOCK';
+ syncRepairControls();
+}
 async function loadRepair(){
- const pid=projectId,jid=codingSelected,generation=++repairGeneration;
- if(!pid||!jid){clearRepair();return;}
- const path='/api/projects/'+encodeURIComponent(pid)+'/engineering/defect-repairs/'+encodeURIComponent(jid);
+ if(repairBusy)return;
+ const pid=projectId,jid=codingSelected,old=$('defectRepairItem').value;
+ clearRepair('Đang tải evidence…');
+ if(!pid||!jid)return;
+ const generation=repairGeneration,base='/api/projects/'+encodeURIComponent(pid)+'/engineering/';
+ const path=base+'defect-repairs/'+encodeURIComponent(jid);
+ repairScope={pid,jid,path};
+ const live=()=>generation===repairGeneration&&repairScoped();
  try{
-  const v=await api(path);if(generation!==repairGeneration||pid!==projectId||jid!==codingSelected)return;
-  repairView=v;repairScope={pid,jid,path};
-  const select=$('defectRepairItem'),old=select.value;select.replaceChildren();
-  for(const x of v.items||[]){if(!x.latest)continue;const option=document.createElement('option');option.value=x.registration_digest;option.textContent=x.severity+' · '+x.state+' · '+x.finding_id.slice(0,12);select.append(option);}
+  const v=await api(path);if(!live())return;
+  const q=await api(base+'defect-retest-quality/'+encodeURIComponent(jid));if(!live())return;
+  if(v.project_id!==pid||v.job_id!==jid||q.project_id!==pid||q.job_id!==jid||
+     !repairHex(v.evidence_digest)||!repairHex(q.evidence_digest)||!Array.isArray(v.items)||!Array.isArray(q.items)||
+     (v.state==='READY'&&q.repair_digest!==v.evidence_digest)||
+     (q.repair_digest!==null&&q.repair_digest!==v.evidence_digest))throw Error('Evidence không đồng nhất; tải lại trạng thái.');
+  repairView=v;retestView=q;
+  const select=$('defectRepairItem');select.replaceChildren();
+  const status=new Map(q.items.map(x=>[x.registration_digest,x.status]));
+  for(const x of v.items){
+   const option=document.createElement('option');option.value=x.registration_digest;
+   option.textContent=(x.latest?'Hiện tại':'Lịch sử')+' · '+x.severity+' · '+x.state+' · '+(status.get(x.registration_digest)||'CHƯA XÁC MINH')+' · '+x.registration_digest.slice(0,12);
+   select.append(option);
+  }
   if([...select.options].some(x=>x.value===old))select.value=old;
-  $('defectRepairStatus').textContent=[v.state+' · '+v.registry_state,...(v.items||[]).map(x=>x.finding_id+' · '+x.state+' · '+(x.assignee||'—')+'\n'+x.history.map(e=>e.snapshot.action+' '+e.snapshot.actor+' · '+e.snapshot.note).join('\n'))].join('\n');
- }catch(e){if(generation===repairGeneration){clearRepair();toast(e.message,true);}}
+  $('defectRepairStatus').textContent=[v.state+' · '+v.registry_state,...v.items.map(x=>
+    (x.latest?'CURRENT':'HISTORICAL')+' · '+x.finding_id+' · '+x.registration_digest+' · '+x.state+' · '+(x.assignee||'—')+'\n'+
+    x.history.map(e=>e.snapshot.action+' '+e.snapshot.actor+' · '+e.digest+' · '+e.snapshot.note).join('\n'))].join('\n');
+  $('defectRetestStatus').textContent=[q.state,...Object.entries(q.checks||{}).map(([k,val])=>k+': '+val),
+    'Execution: '+(q.execution_digest||'—'),'Regression: '+(q.regression_digest||'—'),'Retest evidence: '+q.evidence_digest,
+    ...q.items.map(x=>x.registration_digest+' · '+x.status+' · closure '+(x.closure_digest||'—')),
+    'Development evidence only · Không cấp quyền execution/release'].join('\n');
+  syncRepairControls();
+ }catch(e){if(live()){clearRepair('Không thể xác minh evidence; tải lại thủ công.');toast(e.message,true);}}
 }
 $('defectRepairRefresh')?.addEventListener('click',loadRepair);
+$('defectRepairItem')?.addEventListener('change',syncRepairControls);
+$('defectRepairAction')?.addEventListener('change',syncRepairControls);
 $('defectRepairForm')?.addEventListener('submit',async e=>{
  e.preventDefault();
- const v=repairView,scope=repairScope;
- if(!v||v.state!=='READY'||!scope||scope.pid!==projectId||scope.jid!==codingSelected){toast('Tải lại trạng thái defect trước.',true);return;}
- const item=v.items.find(x=>x.registration_digest===$('defectRepairItem').value&&x.latest);
- if(!item)return;
- const action=$('defectRepairAction').value,confirmation=action+' DEFECT '+scope.jid+' '+item.finding_id;
- if(!window.confirm(confirmation))return;
- try{await api(scope.path,'POST',{action,finding_id:item.finding_id,registration_digest:item.registration_digest,expected_digest:v.evidence_digest,assignee:['ASSIGN','REASSIGN'].includes(action)?$('defectRepairAssignee').value.trim():null,note:$('defectRepairNote').value,confirmation});
- if(scope.pid===projectId&&scope.jid===codingSelected){$('defectRepairNote').value='';await loadRepair();}}
- catch(err){toast(err.message,true);}
+ const v=repairView,scope=repairScope,generation=repairGeneration;
+ const item=v?.items.find(x=>x.registration_digest===$('defectRepairItem').value);
+ const action=$('defectRepairAction').value;
+ if(!repairActions(item).includes(action)){toast('Tải lại trạng thái defect và kiểm tra quyền.',true);return;}
+ const confirmation=action+' DEFECT '+scope.jid+' '+item.finding_id;
+ if(!window.confirm(confirmation+'\nOccurrence: '+item.registration_digest))return;
+ repairBusy=true;syncRepairControls();
+ let success=false;
+ try{
+  await api(scope.path,'POST',{action,finding_id:item.finding_id,registration_digest:item.registration_digest,
+   expected_digest:v.evidence_digest,assignee:['ASSIGN','REASSIGN'].includes(action)?$('defectRepairAssignee').value.trim():null,
+   note:$('defectRepairNote').value,confirmation});
+  success=true;
+ }catch(err){if(generation===repairGeneration&&repairScoped())toast(err.message,true);}
+ finally{
+  repairBusy=false;
+  if(generation===repairGeneration&&repairScoped()){
+   if(success){$('defectRepairNote').value='';await loadRepair();}
+   else clearRepair('Cập nhật bị từ chối; tải lại evidence trước khi thử lại.');
+  }else syncRepairControls();
+ }
 });
+syncRepairControls();
 async function loadCodingDetail(){if(!codingSelected)return;
  if(repairScope&&(repairScope.pid!==projectId||repairScope.jid!==codingSelected))clearRepair();
  try{const id=codingSelected;const detail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');const quality=await api('/api/coding/'+encodeURIComponent(id)+'/quality');if(id!==codingSelected)return;codingDetail=detail;codingQuality=quality;codingVerifications=v.verifications||[];renderCoding()}
