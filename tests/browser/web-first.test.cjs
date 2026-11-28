@@ -378,3 +378,53 @@ test('Defect retest panel preserves historical occurrence and fails closed on st
   assert.equal(await page.locator('#defectRepairSubmit').isDisabled(),true);
  }finally{await browser.close()}
 });
+
+test('Security evidence panel is read-only and discards foreign and delayed job snapshots',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:1365,height:900}}),csrf=await login(page);
+  const created=await page.request.post(ORIGIN+'/api/projects',{headers:headers(csrf),data:{name:'Security Evidence UI '+Date.now(),idea:'Scope and stale snapshot fixture',platform:'Web app'}});
+  assert.equal(created.status(),201);const pid=(await created.json()).project_id;
+  await page.addInitScript(({origin,id})=>{if(location.origin===origin)localStorage.setItem('orbit-project',id)},{origin:ORIGIN,id:pid});
+  const j='security-fixture-a',j2='security-fixture-b';
+  const json=(route,body)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+  let hold=false,held=false,foreign=false,release,requests=[];
+  const pending=new Promise(resolve=>{release=resolve});
+  await page.route('**/api/projects/'+pid+'/coding',route=>json(route,{jobs:[j,j2].map(id=>({id,status:'failed',spec:'Security UI fixture '+id}))}));
+  await page.route('**/api/coding/**',route=>{
+   const parts=new URL(route.request().url()).pathname.split('/');const id=parts[3];
+   return json(route,parts[4]==='verifications'?{verifications:[]}:parts[4]==='quality'?{job_id:id,status:'BLOCK'}:{id,status:'failed',spec:'Synthetic UI fixture'});
+  });
+  await page.route('**/api/projects/'+pid+'/engineering/security-evidence/*',async route=>{
+   const id=new URL(route.request().url()).pathname.split('/').at(-1);requests.push(route.request().method());
+   if(hold&&id===j){held=true;await pending;}
+   return json(route,{schema:'orbit.security-evidence.v1',project_id:foreign?'foreign':pid,job_id:id,
+    state:id===j?'SECURITY_EVIDENCE_READY':'BLOCK',security_gate:'BLOCK',
+    checks:{exact_source:id===j?'PASS':'BLOCK'},assessments:{secret_scan:'NOT_ASSESSED',dependency_vulnerabilities:'NOT_ASSESSED'},
+    source:id===j?{candidate_digest:'a'.repeat(64),execution_digest:'b'.repeat(64)}:null,evidence_digest:'c'.repeat(64)});
+  });
+  await page.goto(ORIGIN+'/');await page.locator('#studioLine[data-project-id="'+pid+'"][data-ready="true"]').waitFor({timeout:15000});
+  await page.locator('[data-view="coding"]').click();
+  await page.locator('#codingJobs [data-job="'+j+'"]').click();
+  const panel=page.locator('#securityEvidenceStatus');
+  await page.locator('#securityEvidenceRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#securityEvidenceStatus').textContent.includes('SECURITY_EVIDENCE_READY'));
+  assert.match(await panel.textContent(),/Security gate: BLOCK/);
+  assert.match(await panel.textContent(),/secret_scan: NOT_ASSESSED/);
+  foreign=true;await page.locator('#securityEvidenceRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#securityEvidenceStatus').textContent.includes('Không thể xác minh'));
+  assert.doesNotMatch(await panel.textContent(),/SECURITY_EVIDENCE_READY/);
+  foreign=false;hold=true;await page.locator('#securityEvidenceRefresh').click();
+  for(let i=0;i<100&&!held;i++)await new Promise(resolve=>setTimeout(resolve,50));
+  assert.equal(held,true);
+  await page.locator('#codingJobs [data-job="'+j2+'"]').click();
+  await page.locator('#securityEvidenceRefresh').click();
+  await page.waitForFunction(()=>document.querySelector('#securityEvidenceStatus').textContent.includes('exact_source: BLOCK'));
+  const late=page.waitForResponse(response=>response.url().endsWith('/security-evidence/'+j));
+  release();await late;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.doesNotMatch(await panel.textContent(),/SECURITY_EVIDENCE_READY/);
+  assert.match(await panel.textContent(),/exact_source: BLOCK/);
+  assert.deepEqual(requests,['GET','GET','GET','GET']);
+ }finally{await browser.close()}
+});

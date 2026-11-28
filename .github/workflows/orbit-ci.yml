@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      security_evidence_sha256: ${{ steps.security-evidence.outputs.evidence_sha256 }}
       defect_retest_quality_sha256: ${{ steps.defect-retest-quality.outputs.evidence_sha256 }}
       defect_repair_positive_sha256: ${{ steps.defect-repair-positive.outputs.evidence_sha256 }}
       defect_repair_sha256: ${{ steps.defect-repair.outputs.evidence_sha256 }}
@@ -336,6 +337,15 @@ jobs:
           path: ${{ runner.temp }}/engineering-defect-retest-quality-evidence.json
           if-no-files-found: error
           retention-days: 14
+      - name: Verify mandatory security evidence consolidation
+        id: security-evidence
+        run: python tools/engineering_security_evidence_acceptance.py "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.security" "$RUNNER_TEMP/engineering-security-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-security-evidence
+          path: ${{ runner.temp }}/engineering-security-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain final regression impact evidence
         uses: actions/upload-artifact@v4
         with:
@@ -477,7 +487,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4e.6 — Final automated defect system acceptance
+    name: P6.5a — Security evidence consolidation system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
@@ -612,9 +622,22 @@ jobs:
               if final_defect_valid: final_defect_chain = ev['evidence_chain_sha256']
           except (OSError, ValueError, KeyError, TypeError):
               pass
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid and final_defect_valid
+          security_sha256 = actual.get('requirements-browser',{}).get('outputs',{}).get('security_evidence_sha256','')
+          security_valid = False
+          try:
+              blob = Path('final-defect-input/engineering-security-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              security_valid = (hashlib.sha256(blob).hexdigest()==security_sha256 and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.security-evidence-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT'] and ev['retest_sha256']==retest_sha256
+                  and ev['security_gate']=='BLOCK' and ev['security_release_authorized'] is False)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          defect_passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid and final_defect_valid
+          passed = defect_passed and security_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.6', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.5a', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -659,7 +682,10 @@ jobs:
                         final_automated_defect_acceptance='PASS' if final_defect_valid else 'BLOCK',
                         final_automated_defect_evidence_sha256=final_defect_sha256 if final_defect_valid else None,
                         final_automated_defect_chain_sha256=final_defect_chain,
-                        automated_defect_detection_complete=passed,
+                        automated_defect_detection_complete=defect_passed,
+                        security_evidence_acceptance='PASS' if security_valid else 'BLOCK',
+                        security_evidence_sha256=security_sha256 if security_valid else None,
+                        security_quality_gate='BLOCK',security_release_authorized=False,
                         defect_retest_quality_acceptance='PASS' if retest_valid else 'BLOCK',
                         defect_retest_quality_evidence_sha256=retest_sha256 if retest_valid else None,
                         defect_repair_positive_acceptance='PASS' if defect_repair_positive_valid else 'BLOCK',
@@ -675,7 +701,7 @@ jobs:
                         defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
                         automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase=None,
+                        development_next_phase='P6.5b' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',

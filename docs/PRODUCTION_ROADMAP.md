@@ -229,3 +229,10 @@ ORBIT CI #176 (45961502154, HEAD 39db017, merge 85bd229f989a353143d2b4e019a38c15
 ### P6.4e.4 / P6.4e.4.1 — Defect repair tracking (development acceptance PASS)
 
 CI #188, HEAD 4eaf7bf, run 46096666758, all 11 jobs PASS; 677/22/3 tests and 18/18 dependency checkpoints. Positive Docker execution-error recovery and explicit independent closure; concurrent ASSIGN/SUBMIT/CLOSE each one accepted and one stale; 30 ZIP hashes and 25 evidence references independently matched. Real model and release acceptance separate. Next P6.4e.5 Retest & Quality Gate, initial read-only foundation in docs/P6.4e.5-retest-quality.md. Full acceptance remains conditional on explicit stale/historical resolution and mandatory run-bound evidence.
+
+### P6.4e.6 — Final Automated Defect Acceptance (development CI PASS)
+ORBIT CI #193, HEAD f01d72b, run 46106980886, all 11 jobs success; 711 Python tests (4 separate real Docker probes), 23 General Browser, 3 Planning Chromium, 18/18 dependency checkpoints. Mandatory final defect artifact 15248088614. Model inference #160 and qualification #107 failed independently; no release authority.
+
+## P6.5 — Automated Security Engineering (development only)
+### P6.5a — Security Evidence Consolidation (pending CI)
+See docs/P6.5a-security-evidence.md. Read-only current source/receipt/retest/sandbox-policy contract, scoped HTTP RBAC/CSRF, manual dashboard, mandatory trusted Docker and HTTP evidence. Consolidation READY is not security PASS; all unassessed security categories and production release remain BLOCK. No changes to prior gates or model parameters. P6.5b only after CI PASS.

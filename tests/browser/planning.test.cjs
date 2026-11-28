@@ -834,6 +834,16 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal((await viewer.request.get(ORIGIN+retestPath)).status(),200);
   assert.equal((await viewer.request.get(ORIGIN+'/api/projects/'+other+'/engineering/defect-retest-quality/'+boundJob.job_id)).status(),403);
   assert.equal((await post(owner,csrf,retestPath,{})).status(),404);
+  const securityPath=engineering+'/security-evidence/'+boundJob.job_id;
+  const securityOpen=await get(owner,securityPath);
+  assert.equal(securityOpen.state,'BLOCK');
+  assert.equal(securityOpen.security_gate,'BLOCK');
+  assert.equal(securityOpen.project_id,pid);
+  assert.equal(securityOpen.job_id,boundJob.job_id);
+  assert.deepEqual(await get(viewer,securityPath),securityOpen);
+  assert.equal((await viewer.request.get(ORIGIN+'/api/projects/'+other+'/engineering/security-evidence/'+boundJob.job_id)).status(),403);
+  assert.equal((await post(owner,csrf,securityPath,{})).status(),404);
+  assert.equal((await post(owner,'0'.repeat(64),securityPath,{})).status(),403);
   const repairItem=repairOpen.items[0];
   const repairBody=(action,v,assignee=null)=>({action,finding_id:repairItem.finding_id,registration_digest:repairItem.registration_digest,
     expected_digest:v.evidence_digest,assignee,note:'Controlled repair tracking fixture',confirmation:action+' DEFECT '+boundJob.job_id+' '+repairItem.finding_id});
@@ -915,6 +925,11 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.equal(retestRecovered.checks.explicit_closure,'BLOCK');
   assert.equal(retestRecovered.items[0].status,'UNRESOLVED');
   assert.equal(retestRecovered.repair_digest,repairRejected.evidence_digest);
+  const securityRecovered=await get(owner,securityPath);
+  assert.equal(securityRecovered.state,'BLOCK');
+  assert.equal(securityRecovered.security_gate,'BLOCK');
+  assert.equal(securityRecovered.source.retest_digest,retestRecovered.evidence_digest);
+  assert.notEqual(securityRecovered.evidence_digest,securityOpen.evidence_digest);
   const severityRecovered=severityRead();
   assert.equal(severityRecovered.state,'NO_FINDINGS');
   const classificationRecovered=detectDefects(true);
@@ -1271,6 +1286,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
     pending:defectRegistryPending,registered:defectRegistryRegistered,recovered:defectRegistryRecovered,
     stale:defectRegistryStale,duplicate_rejected:true,failed_gate:severityFailedGate
+  }),{flag:'wx'});
+  const securityStale=await get(owner,securityPath);
+  assert.equal(securityStale.state,'BLOCK');
+  assert.equal(securityStale.security_gate,'BLOCK');
+  assert.equal(securityStale.source,null);
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.security',JSON.stringify({
+    source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+    open:securityOpen,recovered:securityRecovered,stale:securityStale,
+    open_retest:retestOpen,recovered_retest:retestRecovered,viewer_read:true,cross_project_denied:true,post_denied:true,csrf_denied:true
   }),{flag:'wx'});
   const repairStale=await get(owner,repairPath);
   assert.equal(repairStale.state,'BLOCK');

@@ -101,6 +101,31 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status)))await loadCodingDetail();
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
+let securityGeneration=0;
+function clearSecurityEvidence(){
+ securityGeneration++;
+ $('securityEvidenceStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadSecurityEvidence(){
+ const pid=projectId,jid=codingSelected;
+ clearSecurityEvidence();
+ if(!pid||!jid)return;
+ const generation=securityGeneration,live=()=>generation===securityGeneration&&pid===projectId&&jid===codingSelected;
+ $('securityEvidenceStatus').textContent='Đang tải snapshot · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/security-evidence/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-evidence.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||
+     !['BLOCK','SECURITY_EVIDENCE_READY'].includes(v.state))throw Error('Invalid security evidence');
+  $('securityEvidenceStatus').textContent=[v.state,'Security gate: '+v.security_gate,
+   ...Object.entries(v.checks).map(([k,x])=>k+': '+x),
+   ...Object.entries(v.assessments).map(([k,x])=>k+': '+x),
+   'Candidate: '+(v.source?.candidate_digest||'—'),'Execution: '+(v.source?.execution_digest||'—'),
+   'Evidence: '+v.evidence_digest,'Snapshot tại thời điểm tải · Không cấp quyền execution/release'].join('\n');
+ }catch(e){if(live()){$('securityEvidenceStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('securityEvidenceRefresh').addEventListener('click',loadSecurityEvidence);
 let repairView=null,retestView=null,repairScope=null,repairGeneration=0,repairBusy=false;
 const repairTransitions={OPEN:['ASSIGN'],ASSIGNED:['REASSIGN','START'],IN_PROGRESS:['REASSIGN','SUBMIT'],
  REPAIR_SUBMITTED:['REJECT','VERIFY'],VERIFIED:['REJECT','CLOSE'],CLOSED:['REOPEN']};
@@ -137,6 +162,7 @@ function syncRepairControls(){
  $('defectRepairRefresh').disabled=repairBusy;
 }
 function clearRepair(message='Chọn coding job và tải trạng thái.'){
+ clearSecurityEvidence();
  repairGeneration++;repairView=null;retestView=null;repairScope=null;
  $('defectRepairItem')?.replaceChildren();
  if($('defectRepairStatus'))$('defectRepairStatus').textContent=message;
@@ -189,7 +215,7 @@ $('defectRepairForm')?.addEventListener('submit',async e=>{
  if(!repairActions(item).includes(action)){toast('Tải lại trạng thái defect và kiểm tra quyền.',true);return;}
  const confirmation=action+' DEFECT '+scope.jid+' '+item.finding_id;
  if(!window.confirm(confirmation+'\nOccurrence: '+item.registration_digest))return;
- repairBusy=true;syncRepairControls();
+ clearSecurityEvidence();repairBusy=true;syncRepairControls();
  let success=false;
  try{
   await api(scope.path,'POST',{action,finding_id:item.finding_id,registration_digest:item.registration_digest,
