@@ -8,6 +8,38 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_bridge
+import studio_handoff
+import studio_activity
+import studio_quality
+import studio_workflow
+import work_package_binding
+import studio_coding
+import bound_recovery
+import studio_verification
+import engineering_contract
+import project_git_workspace
+import engineering_candidate_selection
+import engineering_sandbox
+import engineering_draft
+import engineering_quality
+import defect_severity
+import detected_defect_registry
+import defect_repair_tracking
+import defect_retest_quality
+import security_evidence
+import security_threat_model
+import security_sast
+import engineering_qc
+import engineering_test_plan
+import engineering_assertion_registry
+import execution_quality_gate
+import regression_quality_gate
+import engineering_git_changes
+import engineering_dependency_impact
+import engineering_impacted_tests
+import dependency_completion
+import dependency_queue
+import wbs_dependency_extension
 import coding_factory
 import verification_factory
 import auth_store
@@ -15,6 +47,12 @@ import auth_http
 import auth_policy
 import acceptance_store
 import product_requirements
+import project_planning
+import planning_discovery
+import planning_jobs
+import work_breakdown
+import wbs_decomposition
+import decomposition_jobs
 import requirements_discovery
 import requirements_jobs
 import model_provider
@@ -39,7 +77,34 @@ MODEL_LANES = model_provider.load_config(os.environ)
 PROVIDER = model_provider.mode(MODEL_LANES)
 MODEL_A = MODEL_LANES['A'].model
 MODEL_B = MODEL_LANES['B'].model
-LOCK = threading.RLock()
+class TimedDispatchLock:
+    """Preserve RLock semantics; bounded diagnostic output only in browser fixture."""
+    def __init__(self):
+        self.lock=threading.RLock()
+        self.local=threading.local()
+    def acquire(self,*args,**kwargs):
+        start=time.monotonic()
+        acquired=self.lock.acquire(*args,**kwargs)
+        if acquired:
+            stack=getattr(self.local,'stack',[])
+            stack.append((start,time.monotonic()))
+            self.local.stack=stack
+        return acquired
+    def release(self):
+        start,held=self.local.stack.pop()
+        self.lock.release()
+        end=time.monotonic()
+        if not self.local.stack and os.getenv('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')=='1':
+            wait,hold=held-start,end-held
+            if wait>=0.1 or hold>=0.1:
+                print('ORBIT lock timing wait_ms=%d hold_ms=%d'%(wait*1000,hold*1000),file=sys.stderr,flush=True)
+    def __enter__(self):
+        self.acquire()
+        return self
+    def __exit__(self,*exc):
+        self.release()
+
+LOCK = TimedDispatchLock()
 RESOURCE_MANAGER = resource_manager.Manager()
 CONCURRENCY = concurrency_control.Limiter()
 BUDGET_GUARD = inference_guard.Guard()
@@ -93,6 +158,8 @@ def db(): return ManagedConnection()
 
 
 def init_db():
+    # Main owns the dispatcher lock before startup; migrate on an idle connection.
+    with LOCK, db() as c:studio_coding.migrate_retry_bindings(c)
     with LOCK, db() as c:
         auth_store.ensure_schema(c)
         acceptance_store.ensure_schema(c)
@@ -114,10 +181,33 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_event_project ON events(project_id,created_at);
         ''')
         product_requirements.ensure_schema(c)
+        project_planning.ensure_schema(c)
         agent_queue.ensure_schema(c)
         requirements_jobs.ensure_schema(c)
+        planning_jobs.ensure_schema(c)
+        work_breakdown.ensure_schema(c)
+        decomposition_jobs.ensure_schema(c)
         model_routing.ensure_schema(c)
         monitoring.ensure_schema(c)
+        studio_handoff.ensure_schema(c)
+        studio_activity.ensure_schema(c)
+        work_package_binding.ensure_schema(c)
+        studio_coding.ensure_schema(c)
+        studio_verification.ensure_schema(c)
+        engineering_contract.ensure_schema(c)
+        engineering_candidate_selection.ensure_schema(c)
+        engineering_sandbox.ensure_schema(c)
+        engineering_draft.ensure_schema(c)
+        engineering_test_plan.ensure_schema(c)
+        engineering_assertion_registry.ensure_schema(c)
+        regression_quality_gate.ensure_schema(c)
+        defect_severity.ensure_schema(c)
+        detected_defect_registry.ensure_schema(c)
+        defect_repair_tracking.ensure_schema(c)
+        dependency_completion.ensure_schema(c)
+        dependency_queue.ensure_schema(c)
+        bound_recovery.ensure_schema(c)
+        wbs_dependency_extension.ensure_schema(c)
         # Schema migration for databases created by ORBIT 0.1/0.2. Preserve history.
         for table in ('artifacts','reviews'):
             columns={row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -149,7 +239,12 @@ def log(c,pid,sid,aid,level,message):
 def rows(c,query,params=()): return [dict(r) for r in c.execute(query,params).fetchall()]
 
 
-def project_state(pid):
+def workflow_permissions(c,pid,actor):
+    row=c.execute("SELECT m.role FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id WHERE m.project_id=? AND m.user_id=? AND u.active=1",(pid,actor)).fetchone() if actor else None
+    permissions=auth_store.ROLES.get(row[0],set()) if row else set()
+    return dict(project_id=pid,can_write='write' in permissions,can_approve='approve' in permissions)
+
+def project_state(pid,actor=None):
     with LOCK, db() as c:
         p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Không tìm thấy dự án')
@@ -165,7 +260,16 @@ def project_state(pid):
         done=sum(t['status'] in ('done','approved') for t in tasks)
         working=next((t for t in tasks if t['status'] in ('drafting','reviewing','synthesizing','awaiting_approval','needs_revision')),None)
         q=agent_queue.active(c,pid,'pipeline')
+        handoff=studio_handoff.view(c,pid,STAGES,tasks)
         return dict(project=dict(p),tasks=tasks,artifacts=artifacts,reviews=reviews,events=events,
+                    handoff=handoff,activity=studio_activity.view(c,pid,STAGES,handoff),
+                    quality=studio_quality.view(c,pid,STAGES,tasks,handoff),
+                    workflow=studio_workflow.view(c,pid),
+                    engineering=engineering_contract.view(c,pid),
+                    dependency_completion=dependency_completion.view(c,pid),
+                    dependency_queue=dependency_queue.view(c,pid),
+                    dependency_extension=wbs_dependency_extension.view(c,pid),
+                    workflow_permissions=workflow_permissions(c,pid,actor),
                     stats=dict(done=done,total=len(tasks),percent=round(done/len(tasks)*100),artifacts=len(artifacts),reviews=len(reviews),active=working['stage_id'] if working else None),running=bool(q and q['status'] in ('queued','running')),pause_requested=bool(q and q['control']=='pause'))
 
 
@@ -294,12 +398,16 @@ def parse_review(raw):
         return 'REQUEST_CHANGES',0,'Không phân tích được JSON review; yêu cầu làm lại. Raw: '+raw[:500]
 
 
-def run_stage(pid, sid, lanes=None):
+def run_stage(pid, sid, lanes=None, *, queue_id=None):
     lanes=provider_snapshot()[1] if lanes is None else lanes
     run_id=uid()
     with LOCK,db() as c:
         project=dict(c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone())
-    context=get_preceding(pid,sid)
+    # Persist the exact context before any inference. Route selection still uses
+    # the original context length and the same model/prompt/budget policy.
+    with LOCK,db() as c:
+        context=studio_handoff.prepare(c,pid,STAGES,sid,run_id,model_provider.mode(lanes),now())
+        studio_activity.bind(c,pid,sid,run_id,queue_id,now())
     lanes=route_pair(lanes,pid,run_id,sid,'stage',len(project['idea'])+len(context))
     mode=model_provider.mode(lanes)
     llm=snapshot_call(lanes,project_id=pid,department=sid,run_id=run_id,purpose='stage')
@@ -322,7 +430,10 @@ def run_stage(pid, sid, lanes=None):
                +f'\nBối cảnh các giai đoạn trước (chỉ để tham khảo):\n{context}')
             draft=llm(system,user,lane,phase='stage_draft')
         drafts[lane]=draft
-        save_artifact(pid,sid,aid,'draft',draft,run_id)
+        with LOCK,db() as c:
+            c.execute('INSERT INTO artifacts(id,project_id,stage_id,agent_id,kind,content,created_at,run_id) VALUES(?,?,?,?,?,?,?,?)',
+                (uid(),pid,sid,aid,'draft',draft,now(),run_id))
+            studio_handoff.record_draft(c,pid,sid,run_id,lane,now())
         set_status(pid,sid,'drafting',f'{aid} hoàn thành bản đề xuất độc lập.',aid)
     set_status(pid,sid,'reviewing',f'{s["name"]}: hai agent review chéo, không tự chấm bài của mình.')
     votes=[]
@@ -390,6 +501,48 @@ def enqueue_coding(pid,actor,spec,priority=5,dependency_id=None,retry_of=None):
     QUEUE_WAKE.set()
     return {'job_id':jid,'queue_id':task['id'],'mode':model_provider.mode(lanes),'provider_revision':revision,'status':'queued'}
 
+def enqueue_dependent_coding(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:_,spec=dependency_queue.request(c,pid,actor,body)
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,routing=ROUTING['fingerprint'])
+            dependency_queue.record(c,pid,actor,body,jid,task['id'],spec,now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],status='queued',production_release_authorized=False)
+
+def enqueue_bound_retry(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:
+            src,spec=bound_recovery.request(c,pid,actor,body)
+            old=agent_queue.get(c,pid,src['previous_queue_id'])
+            if revision!=old['provider_revision'] or agent_queue.fingerprint(lanes,ROUTING['fingerprint'])!=old['provider_fingerprint']:
+                raise ValueError('Original provider configuration required for bound retry')
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,
+                priority=old['priority'],dependency_id=old['dependency_id'],retry_of=old['id'],routing=ROUTING['fingerprint'])
+            task['digest']=bound_recovery.record(c,pid,actor,body,jid,task['id'],now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],retry_of=src['previous_queue_id'],receipt_digest=task['digest'],
+                status='queued',production_release_authorized=False)
+
+def enqueue_bound_coding(pid,actor,body):
+    with LOCK:
+        revision,lanes=provider_snapshot()
+        with db() as c:spec=studio_coding.request(c,pid,actor,body)
+        task={}
+        def insert(c,jid):
+            task['id']=agent_queue.enqueue(c,pid,'coding',actor,revision,lanes,coding_job_id=jid,routing=ROUTING['fingerprint'])
+            studio_coding.record(c,pid,actor,body,jid,task['id'],spec,now())
+        jid=coding_factory.begin(db,LOCK,pid,spec,uid,now,log,None,enqueue=insert)
+    QUEUE_WAKE.set()
+    return dict(job_id=jid,queue_id=task['id'],status='queued',production_release_authorized=False)
+
 def enqueue_requirements(pid,actor,priority=5,dependency_id=None,retry_of=None,scope_contract=None):
     with LOCK,db() as c:
         revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
@@ -425,7 +578,78 @@ def run_requirements(pid,identifier,lanes):
         result=requirements_jobs.persist(c,pid,identifier,evidence,lanes,now())
         agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
 
+def enqueue_planning(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
+    required={'requirements_version','requirements_digest','confirmation'}
+    if not required<=set(body) or set(body)-required-{'scope_contract'}:raise ValueError('Invalid planning request fields')
+    if body['confirmation']!='RUN AI PLANNING':raise ValueError('Explicit RUN AI PLANNING required')
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=planning_jobs.enqueue(c,pid,actor,revision,lanes,now(),version=body['requirements_version'],
+            digest=body['requirements_digest'],priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'],scope_contract=body.get('scope_contract'))
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_planning(pid,identifier,lanes):
+    with LOCK,db() as c:source=planning_jobs.checked_input(c,pid,identifier)
+    packet=planning_discovery.packet(source)
+    lanes=model_provider.require_distinct_real(route_pair(lanes,pid,identifier,'pm','planning',len(product_requirements.canonical(packet))))
+    def call(lane,phase,system,user,schema):
+        with LOCK,db() as c:planning_jobs.checked_input(c,pid,identifier)
+        return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,agent_id='pm-'+lane,
+            purpose=phase,run_id=identifier,runtime_settings=True,max_tokens=min(2048,lanes[lane].max_tokens),
+            schema=schema,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+    evidence=planning_discovery.discover(call,source)
+    with LOCK,db() as c:
+        result=planning_jobs.persist(c,pid,identifier,evidence,lanes,now())
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
+def enqueue_decomposition(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=decomposition_jobs.enqueue(c,pid,actor,revision,lanes,body,
+            priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_decomposition(pid,identifier,lanes):
+    with LOCK,db() as c:snap=decomposition_jobs.checked_input(c,pid,identifier)
+    lane=snap['source']['lane']
+    # Pin the configured local lane; never route/fallback to a remote model.
+    model=decomposition_jobs.local_lane(lanes,lane)
+    def call(phase,system,user,schema):
+        with LOCK,db() as c:decomposition_jobs.checked_input(c,pid,identifier)
+        return usage_store.tracked_chat(db,LOCK,model,system,user,project_id=pid,agent_id='wbs-'+lane,
+            purpose=phase,run_id=identifier,runtime_settings=True,max_tokens=wbs_decomposition.MAX_OUTPUT,
+            schema=schema,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+    evidence=wbs_decomposition.run(call,snap['source'],snap['document'])
+    with LOCK,db() as c:
+        result=decomposition_jobs.persist(c,pid,identifier,evidence,model,now())
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
+def enqueue_cross_review(pid,actor,body,priority=5,dependency_id=None,retry_of=None):
+    with LOCK,db() as c:
+        revision,lanes=provider_settings.load(c,os.environ,MODEL_LANES)
+        identifier=work_breakdown.planning_review.enqueue(c,pid,actor,revision,lanes,body,work_breakdown.view(c,pid),
+            priority=priority,dependency_id=dependency_id,retry_of=retry_of,routing=ROUTING['fingerprint'])
+    QUEUE_WAKE.set()
+    return {'queue_id':identifier,'status':'queued'}
+
+def run_cross_review(pid,identifier,lanes):
+    review=work_breakdown.planning_review
+    review.local_pair(lanes)
+    with LOCK,db() as c:snap=review.checked(c,pid,identifier,work_breakdown.view(c,pid))
+    def call(lane,system,user,schema):
+        with LOCK,db() as c:review.checked(c,pid,identifier,work_breakdown.view(c,pid))
+        return usage_store.tracked_chat(db,LOCK,lanes[lane],system,user,project_id=pid,agent_id='pm-'+lane,
+            purpose='planning_cross_review',run_id=identifier,runtime_settings=True,max_tokens=review.MAX_OUTPUT,
+            schema=schema,resource_guard=RESOURCE_MANAGER,concurrency_guard=CONCURRENCY,budget_guard=BUDGET_GUARD)
+    evidence=review.run(call,snap)
+    with LOCK,db() as c:
+        result=review.persist(c,pid,identifier,evidence,lanes,now(),work_breakdown.view(c,pid))
+        agent_queue.boundary(c,agent_queue.get(c,pid,identifier),result,int(time.time()),now())
+
 def dispatch_one():
+    dispatch_started=time.monotonic()
     with LOCK,db() as c:
         if QUEUE_STOP.is_set():return False
         # Stop before claiming so paused dispatch does not inflate attempts or history.
@@ -437,6 +661,7 @@ def dispatch_one():
     if not row:return False
     pid,identifier=row['project_id'],row['id']
     stage=None
+    claimed=time.monotonic()
     try:
         with LOCK,db() as c:
             row=agent_queue.get(c,pid,identifier)
@@ -463,24 +688,47 @@ def dispatch_one():
                 if target['status']!='queued':
                     agent_queue.fail(c,row,'stage_not_eligible',int(time.time()),now());return True
                 stage=target['stage_id']
+        if row['kind']=='planning_review':
+            run_cross_review(pid,identifier,lanes)
+            return True
+        if row['kind']=='decomposition':
+            run_decomposition(pid,identifier,lanes)
+            return True
+        if row['kind']=='planning':
+            run_planning(pid,identifier,lanes)
+            return True
         if row['kind']=='requirements':
             run_requirements(pid,identifier,lanes)
             return True
         if row['kind']=='pipeline':
-            result=run_stage(pid,stage,lanes)
+            result=run_stage(pid,stage,lanes,queue_id=identifier)
         else:
             jid=row['coding_job_id']
             with LOCK,db() as c:
-                spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
+                spec=c.execute('SELECT spec FROM coding_jobs WHERE id=? AND project_id=?',(jid,pid)).fetchone()[0]
+                bound=studio_coding.lookup(c,pid,jid)
+                if bound:
+                    try:studio_coding.validate(c,pid,jid,identifier)
+                    except (ValueError,KeyError,TypeError,PermissionError):
+                        agent_queue.fail(c,row,'coding_source_invalid',int(time.time()),now());return True
             lanes=route_pair(lanes,pid,jid,'dev','coding',len(spec)+len(get_preceding(pid,'dev')))
             mode=model_provider.mode(lanes)
             llm=None if mode=='demo' else snapshot_call(lanes,project_id=pid,department='dev',purpose='coding',run_id=jid)
-            coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
+            if bound:
+                def source_guard(c):studio_coding.validate(c,pid,jid,identifier)
+                coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding,source_guard=source_guard)
+            else:
+                coding_factory.work(db,LOCK,jid,pid,llm,now,log,get_preceding)
             with LOCK,db() as c:
                 result=c.execute('SELECT status FROM coding_jobs WHERE id=?',(jid,)).fetchone()[0]
             if result not in ('ready','needs_revision','failed'):result='failed'
         with LOCK,db() as c:
             current=agent_queue.get(c,pid,identifier)
+            if current['kind']=='coding' and studio_coding.lookup(c,pid,current['coding_job_id']):
+                try:studio_coding.validate(c,pid,current['coding_job_id'],identifier)
+                except (ValueError,KeyError,TypeError,PermissionError):
+                    c.execute("UPDATE coding_jobs SET status='failed',error='coding_source_invalid',updated_at=? WHERE id=? AND project_id=?",(now(),current['coding_job_id'],pid))
+                    agent_queue.fail(c,current,'coding_source_invalid',int(time.time()),now());return True
             agent_queue.boundary(c,current,result,int(time.time()),now(),stage)
     except Exception as error:
         # Do not log raw prompts/errors or automatically replay uncertain execution.
@@ -493,6 +741,9 @@ def dispatch_one():
                 if row['kind']=='requirements' and isinstance(error,RuntimeError) and str(error).startswith('requirements_provider_failure:'):
                     reason=str(error)[:160]
                 agent_queue.fail(c,current,reason,int(time.time()),now())
+    finally:
+        if os.getenv('ORBIT_REQUIREMENTS_BROWSER_FIXTURE')=='1':
+            print('ORBIT dispatch timing kind=%s claim_ms=%d total_ms=%d'%(row['kind'],(claimed-dispatch_started)*1000,(time.monotonic()-dispatch_started)*1000),file=sys.stderr,flush=True)
     return True
 
 def queue_worker():
@@ -515,8 +766,20 @@ def retry_queue(pid,identifier,actor,confirmation):
             if not agent_queue.permitted(c,actor,pid):raise PermissionError('Project write permission required')
             dep=old['dependency_id']
             if dep and agent_queue.get(c,pid,dep)['status']!='succeeded':raise ValueError('Original dependency not successful; submit a new task')
+            if old['kind']=='coding' and studio_coding.lookup(c,pid,old['coding_job_id']):raise ValueError('Bound coding retry requires explicit future recovery workflow')
             spec=c.execute('SELECT spec FROM coding_jobs WHERE id=?',(old['coding_job_id'],)).fetchone()[0] if old['kind']=='coding' else None
         if old['kind']=='coding':return enqueue_coding(pid,actor,spec,old['priority'],dep,identifier)
+        if old['kind']=='planning_review':
+            with db() as c:snapshot=work_breakdown.planning_review.input_for(c,pid,identifier)
+            return enqueue_cross_review(pid,actor,dict(bundle_digest=snapshot['digest'],confirmation='RUN PM CROSS REVIEW'),old['priority'],dep,identifier)
+        if old['kind']=='decomposition':
+            with db() as c:snapshot=decomposition_jobs.input_for(c,pid,identifier)
+            return enqueue_decomposition(pid,actor,dict(wbs_version=snapshot['wbs_version'],
+                wbs_digest=snapshot['wbs_digest'],confirmation='RUN AI DECOMPOSITION'),old['priority'],dep,identifier)
+        if old['kind']=='planning':
+            with db() as c:snapshot=planning_jobs.input_for(c,pid,identifier)
+            return enqueue_planning(pid,actor,dict(requirements_version=snapshot['requirements_version'],
+                requirements_digest=snapshot['requirements_digest'],confirmation='RUN AI PLANNING'),old['priority'],dep,identifier)
         if old['kind']=='requirements':return enqueue_requirements(pid,actor,old['priority'],dep,identifier)
         return {'queue_id':enqueue_pipeline(pid,actor,old['mode'],old['priority'],dep,identifier)}
 
@@ -629,12 +892,142 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: status,data,headers=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 self.send_json(status,data,headers);return
             if path.startswith('/api/') and not self.guard('GET',path):return
-            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html'):
+            if path in ('/','/index.html','/access.html','/providers.html','/usage.html','/cost.html','/resources.html','/queue.html','/routing.html','/protection.html','/monitoring.html','/requirements.html','/planning.html'):
                 with LOCK,db() as c: status,session,_=auth_http.session(c,self.headers,secure=TRANSPORT.secure)
                 if status!=200:
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/sast/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=security_sast.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/threat-model/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=security_threat_model.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/security-evidence/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=security_evidence.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/defect-retest-quality/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=defect_retest_quality.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/defect-repairs/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=defect_repair_tracking.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/regression-quality/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=regression_quality_gate.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/impacted-tests/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_impacted_tests.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependency-impact/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_dependency_impact.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/git-changes/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_git_changes.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/execution-quality/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=execution_quality_gate.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/assertion-runs/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_assertion_registry.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/test-plans/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_test_plan.view(c,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/qc/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN')
+                    data=engineering_qc.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/quality/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_quality.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/draft-pr/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_draft.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/sandbox/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_sandbox.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/candidate-selections/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_candidate_selection.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/workspace',path):
+                actor,pid,_=self.auth_context
+                with LOCK:data=project_git_workspace.view(DB_PATH,pid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=project_planning.view(c,pid)
+                    data['discovery']=planning_jobs.latest(c,pid)
+                    data['wbs']=work_breakdown.view(c,pid,data['discovery'])
+                    data['decomposition']=decomposition_jobs.latest(c,pid)
+                    data['can_write']=auth_store.authorize(c,actor,pid,'write')
+                    data['can_approve']=auth_store.authorize(c,actor,pid,'approve')
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements',path):
                 actor,pid,_=self.auth_context
                 with LOCK,db() as c:
@@ -747,7 +1140,7 @@ class Handler(SimpleHTTPRequestHandler):
                 with LOCK,db() as c: data=github_bridge.exports(c,path.split('/')[3])
                 self.send_json(200,{'exports':data});return
             if path.startswith('/api/projects/') and path.endswith('/state'):
-                self.send_json(200,project_state(path.split('/')[3])); return
+                self.send_json(200,project_state(path.split('/')[3],self.auth_context[0])); return
             if path.startswith('/api/artifacts/'):
                 aid=path.split('/')[3]
                 with LOCK,db() as c: a=c.execute('SELECT * FROM artifacts WHERE id=?',(aid,)).fetchone()
@@ -759,7 +1152,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200,dict(messages=list(reversed(data))));return
             if path.startswith('/api/'): self.send_json(404,{'error':'Endpoint không tồn tại'}); return
             if path=='/':self.path='/index.html'
-            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/requirements.html','/requirements.js','/styles.css','/world3d.js','/app.js'):
+            elif path not in ('/index.html','/account.html','/auth-account.js','/auth.css','/access.html','/access.js','/providers.html','/providers.js','/providers.css','/usage.html','/usage.js','/usage.css','/cost.html','/cost.js','/resources.html','/resources.js','/queue.html','/queue.js','/routing.html','/routing.js','/protection.html','/protection.js','/monitoring.html','/monitoring.js','/monitoring.css','/requirements.html','/requirements.js','/planning.html','/planning.js','/styles.css','/world3d.js','/studio-line.js','/studio-line.css','/app.js'):
                 self.send_json(404,{'error':'Not found'});return
             return super().do_GET()
         except Exception as ex: self.send_json(400,{'error':str(ex)})
@@ -776,6 +1169,100 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/defect-repairs/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    data=defect_repair_tracking.record(c,DB_PATH,pid,jid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/discover',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_planning(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/decompose',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_decomposition(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependency-extension/approve',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=wbs_dependency_extension.approve(c,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/dependent-coding',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_dependent_coding(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/test-plans/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:data=engineering_test_plan.record(c,pid,jid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/quality/[A-Za-z0-9_-]{1,100}/defects',path):
+                actor,pid,_=self.auth_context
+                jid=path.split('/')[-2]
+                with LOCK,db() as c:data=engineering_quality.record(c,DB_PATH,pid,jid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/candidate-selections/confirm',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=engineering_candidate_selection.record(c,DB_PATH,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/completions/confirm',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=dependency_completion.record(c,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/workspace',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    if not auth_store.authorize(c,actor,pid,'manage'):raise PermissionError('Owner required')
+                    data=project_git_workspace.initialize(DB_PATH,pid,body)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/contracts/confirm',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=engineering_contract.confirm(c,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/qa',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=studio_verification.attest(c,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/retry',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_bound_retry(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/coding',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_bound_coding(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/studio/work-packages/bind',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:data=work_package_binding.bind(c,pid,actor,body,now())
+                self.send_json(201,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/adopt',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    work_breakdown.planning_adoption.adopt(c,pid,actor,body,now(),work_breakdown.view(c,pid))
+                    data=work_breakdown.view(c,pid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/review',path):
+                actor,pid,_=self.auth_context
+                self.send_json(202,enqueue_cross_review(pid,actor,body));return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/schedule',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    work_breakdown.sprint_schedule.save(c,pid,actor,body,now(),work_breakdown.view(c,pid))
+                    data=work_breakdown.view(c,pid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs/estimates',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    work_breakdown.resource_estimates.save(c,pid,actor,body,now(),work_breakdown.view(c,pid))
+                    data=work_breakdown.view(c,pid)
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/wbs(?:/seed)?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=work_breakdown.save(c,pid,actor,body,now(),seed=path.endswith('/seed'))
+                self.send_json(200,data);return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning(?:/(?:seed|approve))?',path):
+                actor,pid,_=self.auth_context
+                with LOCK,db() as c:
+                    data=(project_planning.approve(c,pid,actor,body,now()) if path.endswith('/approve') else
+                        project_planning.save(c,pid,actor,body,now(),seed=path.endswith('/seed')))
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/requirements/discover',path):
                 actor,pid,_=self.auth_context
                 if set(body)!={'confirmation','scope_contract'} or body['confirmation']!='RUN AI REQUIREMENTS':

@@ -11,6 +11,8 @@ jobs:
     name: Python tests and JavaScript syntax
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      defect_detection_sha256: ${{ steps.defect-detection.outputs.evidence_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,9 +44,20 @@ jobs:
         run: python -m compileall -q backend tools tests
       - name: Run test suite
         run: python -m unittest discover -s tests -v
+      - name: Automated defect detection acceptance
+        id: defect-detection
+        run: python tools/engineering_defect_detection_acceptance.py
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.defect-detection.outcome != 'skipped'
+        with:
+          name: engineering-defect-detection-evidence
+          path: engineering-defect-detection-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Validate frontend syntax
         run: |
           node --check web/app.js
+          node --check web/studio-line.js
           node --check web/world3d.js
           node --check web/auth-account.js
           node --check web/access.js
@@ -57,6 +70,7 @@ jobs:
           node --check web/protection.js
           node --check web/monitoring.js
           node --check web/requirements.js
+          node --check web/planning.js
 
   web-e2e:
     name: Browser E2E — Chromium
@@ -95,7 +109,7 @@ jobs:
         run: |
           PYTHONPATH=backend python -c "import os, sqlite3, auth_store; c=sqlite3.connect(os.environ['RUNNER_TEMP']+'/orbit-web-e2e.sqlite'); auth_store.create_user(c,'ci-browser-user','local-ci-fixture-password'); auth_store.create_user(c,'ci-viewer','local-ci-fixture-password'); pid=c.execute('SELECT id FROM projects LIMIT 1').fetchone()[0]; auth_store.grant(c,'ci-browser-user',pid,'owner'); auth_store.grant(c,'ci-viewer',pid,'viewer'); c.commit(); c.close()"
       - name: Run real Chromium E2E
-        run: node --test tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs tests/browser/resources.test.cjs tests/browser/agent-queue.test.cjs tests/browser/concurrency.test.cjs tests/browser/routing.test.cjs tests/browser/protection.test.cjs tests/browser/monitoring.test.cjs
+        run: node --test tests/browser/studio-line.test.cjs tests/browser/web-first.test.cjs tests/browser/react-interaction.test.cjs tests/browser/auth-account.test.cjs tests/browser/security.test.cjs tests/browser/provider-settings.test.cjs tests/browser/token-usage.test.cjs tests/browser/ai-cost.test.cjs tests/browser/resources.test.cjs tests/browser/agent-queue.test.cjs tests/browser/concurrency.test.cjs tests/browser/routing.test.cjs tests/browser/protection.test.cjs tests/browser/monitoring.test.cjs
       - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -107,9 +121,41 @@ jobs:
   requirements-browser:
     name: P6.1 Browser E2E — isolated synthetic inference
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    # Cumulative real Git/Docker and dependency evidence checks need CI headroom.
+    # Keep individual test, HTTP, inference and Docker deadlines unchanged.
+    timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      dependency_evidence_sha256: ${{ steps.dependency-evidence.outputs.evidence_sha256 }}
+      sandbox_evidence_sha256: ${{ steps.engineering-sandbox-evidence.outputs.evidence_sha256 }}
+      draft_evidence_sha256: ${{ steps.engineering-draft-evidence.outputs.evidence_sha256 }}
+      quality_evidence_sha256: ${{ steps.engineering-quality-evidence.outputs.evidence_sha256 }}
+      workflow_evidence_sha256: ${{ steps.engineering-workflow-evidence.outputs.evidence_sha256 }}
+      qc_evidence_sha256: ${{ steps.engineering-qc-evidence.outputs.evidence_sha256 }}
+      test_plan_evidence_sha256: ${{ steps.test-plan-evidence.outputs.evidence_sha256 }}
+      assertion_evidence_sha256: ${{ steps.assertion-evidence.outputs.evidence_sha256 }}
+      runner_evidence_sha256: ${{ steps.runner-evidence.outputs.evidence_sha256 }}
+      registry_evidence_sha256: ${{ steps.registry-evidence.outputs.evidence_sha256 }}
+      execution_gate_evidence_sha256: ${{ steps.execution-gate-evidence.outputs.evidence_sha256 }}
+      final_execution_evidence_sha256: ${{ steps.final-execution-evidence.outputs.evidence_sha256 }}
+      git_change_evidence_sha256: ${{ steps.git-change-evidence.outputs.evidence_sha256 }}
+      dependency_impact_evidence_sha256: ${{ steps.dependency-impact-evidence.outputs.evidence_sha256 }}
+      impacted_test_evidence_sha256: ${{ steps.impacted-test-evidence.outputs.evidence_sha256 }}
+      regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
+      regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
+      final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      sast_sha256: ${{ steps.sast.outputs.evidence_sha256 }}
+      threat_model_sha256: ${{ steps.threat-model.outputs.evidence_sha256 }}
+      security_evidence_sha256: ${{ steps.security-evidence.outputs.evidence_sha256 }}
+      defect_retest_quality_sha256: ${{ steps.defect-retest-quality.outputs.evidence_sha256 }}
+      defect_repair_positive_sha256: ${{ steps.defect-repair-positive.outputs.evidence_sha256 }}
+      defect_repair_sha256: ${{ steps.defect-repair.outputs.evidence_sha256 }}
+      detected_registry_sha256: ${{ steps.detected-registry.outputs.evidence_sha256 }}
+      severity_hardening_sha256: ${{ steps.severity-hardening.outputs.evidence_sha256 }}
+      defect_classification_sha256: ${{ steps.defect-classification.outputs.evidence_sha256 }}
+      defect_integration_sha256: ${{ steps.defect-integration.outputs.evidence_sha256 }}
+      final_regression_chain_sha256: ${{ steps.final-regression-evidence.outputs.chain_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,6 +170,11 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: Prepare pinned real engineering sandbox image
+        run: |
+          docker pull python:3.12-alpine
+          image="$(docker image inspect python:3.12-alpine --format '{{index .RepoDigests 0}}')"
+          echo "ORBIT_SANDBOX_PYTHON_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Start isolated HTTP and durable queue fixture
         run: |
           export ORBIT_REQUIREMENTS_BROWSER_FIXTURE=1 AI_PROVIDER=ollama AI_MODEL_A=fixture-a AI_MODEL_B=fixture-b AI_HOST=127.0.0.1 AI_PORT=8787 ORBIT_MAX_RUN_CALLS=20
@@ -137,18 +188,630 @@ jobs:
           cat "$RUNNER_TEMP/requirements-browser.log"
           exit 1
       - name: Requirements Chromium acceptance
-        run: node --test tests/browser/requirements.test.cjs
+        env:
+          ORBIT_REQUIREMENTS_BROWSER_FIXTURE: '1'
+          AI_PROVIDER: ollama
+          AI_MODEL_A: fixture-a
+          AI_MODEL_B: fixture-b
+          AI_HOST: 127.0.0.1
+          AI_PORT: '8787'
+          ORBIT_MAX_RUN_CALLS: '20'
+          AI_COMPANY_DB: ${{ runner.temp }}/requirements-browser.sqlite
+          ORBIT_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/dependency-browser-evidence.json
+          ORBIT_ENGINEERING_SANDBOX_EVIDENCE: ${{ runner.temp }}/engineering-sandbox-evidence.json
+          ORBIT_ENGINEERING_DRAFT_EVIDENCE: ${{ runner.temp }}/engineering-draft-evidence.json
+          ORBIT_ENGINEERING_QUALITY_EVIDENCE: ${{ runner.temp }}/engineering-quality-evidence.json
+          ORBIT_ENGINEERING_WORKFLOW_EVIDENCE: ${{ runner.temp }}/engineering-workflow-evidence.json
+          ORBIT_ENGINEERING_QC_EVIDENCE: ${{ runner.temp }}/engineering-qc-evidence.json
+          ORBIT_TEST_PLAN_EVIDENCE: ${{ runner.temp }}/engineering-test-plan-evidence.json
+          ORBIT_ASSERTION_CONTRACT_EVIDENCE: ${{ runner.temp }}/engineering-assertion-contract-evidence.json
+          ORBIT_ASSERTION_RUNNER_EVIDENCE: ${{ runner.temp }}/engineering-assertion-runner-evidence.json
+          ORBIT_ASSERTION_REGISTRY_EVIDENCE: ${{ runner.temp }}/engineering-assertion-registry-evidence.json
+          ORBIT_EXECUTION_GATE_EVIDENCE: ${{ runner.temp }}/engineering-execution-gate-evidence.json
+          ORBIT_FINAL_EXECUTION_EVIDENCE: ${{ runner.temp }}/engineering-final-execution-evidence.json
+          ORBIT_GIT_CHANGE_EVIDENCE: ${{ runner.temp }}/engineering-git-change-evidence.json
+          ORBIT_DEPENDENCY_IMPACT_EVIDENCE: ${{ runner.temp }}/engineering-dependency-impact-evidence.json
+          ORBIT_IMPACTED_TEST_EVIDENCE: ${{ runner.temp }}/engineering-impacted-test-evidence.json
+          ORBIT_REGRESSION_PRIORITY_EVIDENCE: ${{ runner.temp }}/engineering-regression-priority-evidence.json
+          ORBIT_REGRESSION_GATE_EVIDENCE: ${{ runner.temp }}/engineering-regression-gate-evidence.json
+          ORBIT_FINAL_REGRESSION_LIFECYCLE: ${{ runner.temp }}/engineering-regression-lifecycle-evidence.json
+        run: |
+          set -o pipefail
+          node --test tests/browser/requirements.test.cjs tests/browser/planning.test.cjs | tee "$RUNNER_TEMP/planning-browser.tap"
+      - name: Validate dependency integration evidence
+        id: dependency-evidence
+        run: python tools/dependency_acceptance.py "$RUNNER_TEMP/dependency-browser-evidence.json"
+      - name: Validate real Git sandbox integration evidence
+        id: engineering-sandbox-evidence
+        run: python tools/engineering_sandbox_acceptance.py "$RUNNER_TEMP/engineering-sandbox-evidence.json"
+      - name: Validate draft PR integration evidence
+        id: engineering-draft-evidence
+        run: python tools/engineering_draft_acceptance.py "$RUNNER_TEMP/engineering-draft-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json"
+      - name: Validate engineering quality evidence
+        id: engineering-quality-evidence
+        run: python tools/engineering_quality_acceptance.py "$RUNNER_TEMP/engineering-quality-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json" "$RUNNER_TEMP/engineering-draft-evidence.json"
+      - name: Validate engineering workflow continuity evidence
+        id: engineering-workflow-evidence
+        run: python tools/engineering_workflow_acceptance.py "$RUNNER_TEMP/engineering-workflow-evidence.json"
+      - name: Validate consolidated QA/QC evidence
+        id: engineering-qc-evidence
+        run: python tools/engineering_qc_acceptance.py "$RUNNER_TEMP/engineering-qc-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json" "$RUNNER_TEMP/engineering-quality-evidence.json" "$RUNNER_TEMP/engineering-draft-evidence.json"
+      - name: Validate acceptance test plan evidence
+        id: test-plan-evidence
+        run: python tools/engineering_test_plan_acceptance.py "$RUNNER_TEMP/engineering-test-plan-evidence.json" "$RUNNER_TEMP/engineering-qc-evidence.json"
+      - name: Validate executable assertion contract
+        id: assertion-evidence
+        run: python tools/engineering_assertion_acceptance.py "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-test-plan-evidence.json"
+      - name: Real Docker assertion negative and failure probes
+        env:
+          ORBIT_ASSERTION_REAL_DOCKER: '1'
+        run: python -m unittest discover -s tests -p test_acceptance_runner.py -v
+      - name: Validate real individual assertion execution
+        id: runner-evidence
+        run: python tools/engineering_runner_acceptance.py "$RUNNER_TEMP/engineering-assertion-runner-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json"
+      - name: Validate immutable assertion registry
+        id: registry-evidence
+        run: python tools/engineering_registry_acceptance.py "$RUNNER_TEMP/engineering-assertion-registry-evidence.json" "$RUNNER_TEMP/engineering-assertion-runner-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json"
+      - name: Validate combined execution quality gate
+        id: execution-gate-evidence
+        run: python tools/engineering_execution_gate_acceptance.py "$RUNNER_TEMP/engineering-execution-gate-evidence.json" "$RUNNER_TEMP/engineering-qc-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-registry-evidence.json"
+      - name: Validate final real assertion failure and recovery evidence
+        id: final-execution-evidence
+        run: python tools/engineering_final_execution_acceptance.py "$RUNNER_TEMP/engineering-final-execution-evidence.json" "$RUNNER_TEMP/engineering-qc-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-registry-evidence.json" "$RUNNER_TEMP/engineering-execution-gate-evidence.json"
+      - name: Validate exact Git change evidence
+        id: git-change-evidence
+        run: python tools/engineering_git_change_acceptance.py "$RUNNER_TEMP/engineering-git-change-evidence.json" "$RUNNER_TEMP/engineering-sandbox-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate dependency impact evidence
+        id: dependency-impact-evidence
+        run: python tools/engineering_dependency_impact_acceptance.py "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-git-change-evidence.json"
+      - name: Validate impacted test mapping evidence
+        id: impacted-test-evidence
+        run: python tools/engineering_impacted_test_acceptance.py "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-assertion-contract-evidence.json" "$RUNNER_TEMP/engineering-assertion-runner-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate prioritized full regression evidence
+        id: regression-priority-evidence
+        run: python tools/engineering_regression_priority_acceptance.py "$RUNNER_TEMP/engineering-regression-priority-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate durable regression quality gate
+        id: regression-gate-evidence
+        run: python tools/engineering_regression_gate_acceptance.py "$RUNNER_TEMP/engineering-regression-gate-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-assertion-registry-evidence.json" "$RUNNER_TEMP/engineering-execution-gate-evidence.json"
+      - name: Validate final regression impact lifecycle and chain
+        id: final-regression-evidence
+        run: python tools/engineering_final_regression_acceptance.py "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-git-change-evidence.json" "$RUNNER_TEMP/engineering-dependency-impact-evidence.json" "$RUNNER_TEMP/engineering-impacted-test-evidence.json" "$RUNNER_TEMP/engineering-regression-priority-evidence.json" "$RUNNER_TEMP/engineering-regression-gate-evidence.json" "$RUNNER_TEMP/engineering-final-execution-evidence.json"
+      - name: Validate trusted defect detection lifecycle
+        id: defect-integration
+        run: python tools/engineering_defect_integration_acceptance.py "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.defects" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-defect-integration-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-integration-evidence
+          path: ${{ runner.temp }}/engineering-defect-integration-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate defect classification lifecycle
+        id: defect-classification
+        run: python tools/engineering_defect_classification_acceptance.py "$RUNNER_TEMP/engineering-defect-integration-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.classification" "$RUNNER_TEMP/engineering-defect-classification-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-classification-evidence
+          path: ${{ runner.temp }}/engineering-defect-classification-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate authoritative severity hardening
+        id: severity-hardening
+        run: python tools/engineering_severity_acceptance.py "$RUNNER_TEMP/engineering-defect-classification-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.severity" "$RUNNER_TEMP/engineering-severity-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-severity-evidence
+          path: ${{ runner.temp }}/engineering-severity-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate detected defect registry lifecycle
+        id: detected-registry
+        run: python tools/engineering_detected_registry_acceptance.py "$RUNNER_TEMP/engineering-severity-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.registry" "$RUNNER_TEMP/engineering-detected-registry-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-detected-registry-evidence
+          path: ${{ runner.temp }}/engineering-detected-registry-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate defect assignment and repair tracking
+        id: defect-repair
+        run: python tools/engineering_defect_repair_acceptance.py "$RUNNER_TEMP/engineering-detected-registry-evidence.json" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.repair" "$RUNNER_TEMP/engineering-defect-repair-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-repair-evidence
+          path: ${{ runner.temp }}/engineering-defect-repair-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate positive repair closure and concurrent SQLite writers
+        id: defect-repair-positive
+        run: python tools/engineering_defect_repair_positive_acceptance.py "$RUNNER_TEMP/engineering-defect-repair-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.repair-positive" "$RUNNER_TEMP/engineering-defect-repair-positive-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-repair-positive-evidence
+          path: ${{ runner.temp }}/engineering-defect-repair-positive-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate mandatory trusted Docker retest lifecycle
+        id: defect-retest-quality
+        run: python tools/engineering_defect_retest_quality_acceptance.py "$RUNNER_TEMP/engineering-defect-repair-positive-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.retest-quality" "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-retest-quality-evidence
+          path: ${{ runner.temp }}/engineering-defect-retest-quality-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Verify mandatory security evidence consolidation
+        id: security-evidence
+        run: python tools/engineering_security_evidence_acceptance.py "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.security" "$RUNNER_TEMP/engineering-security-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-security-evidence
+          path: ${{ runner.temp }}/engineering-security-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Verify mandatory threat model and security requirements
+        id: threat-model
+        run: python tools/engineering_threat_model_acceptance.py "$RUNNER_TEMP/engineering-security-evidence.json" "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.threat" "$RUNNER_TEMP/engineering-threat-model-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-threat-model-evidence
+          path: ${{ runner.temp }}/engineering-threat-model-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Verify mandatory static security analysis
+        id: sast
+        run: python tools/engineering_sast_acceptance.py "$RUNNER_TEMP/engineering-threat-model-evidence.json" "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.sast" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.sast-input" "$RUNNER_TEMP/engineering-sast-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-sast-evidence
+          path: ${{ runner.temp }}/engineering-sast-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain final regression impact evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-final-regression-evidence
+          path: ${{ runner.temp }}/engineering-final-regression-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain regression quality gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-regression-gate-evidence
+          path: ${{ runner.temp }}/engineering-regression-gate-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain prioritized full regression evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-regression-priority-evidence
+          path: ${{ runner.temp }}/engineering-regression-priority-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain impacted test mapping evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-impacted-test-evidence
+          path: ${{ runner.temp }}/engineering-impacted-test-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain dependency impact evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-dependency-impact-evidence
+          path: ${{ runner.temp }}/engineering-dependency-impact-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain Git change evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-git-change-evidence
+          path: ${{ runner.temp }}/engineering-git-change-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain final automated execution evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-final-execution-evidence
+          path: ${{ runner.temp }}/engineering-final-execution-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain execution quality gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-execution-gate-evidence
+          path: ${{ runner.temp }}/engineering-execution-gate-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain assertion registry evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-assertion-registry-evidence
+          path: ${{ runner.temp }}/engineering-assertion-registry-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain assertion runner evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-assertion-runner-evidence
+          path: ${{ runner.temp }}/engineering-assertion-runner-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain executable assertion evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-assertion-contract-evidence
+          path: ${{ runner.temp }}/engineering-assertion-contract-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain acceptance test plan evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-test-plan-evidence
+          path: ${{ runner.temp }}/engineering-test-plan-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain QA/QC evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-qc-evidence
+          path: ${{ runner.temp }}/engineering-qc-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain engineering workflow evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-workflow-evidence
+          path: ${{ runner.temp }}/engineering-workflow-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain engineering quality evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-quality-evidence
+          path: ${{ runner.temp }}/engineering-quality-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain draft PR integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-draft-evidence
+          path: ${{ runner.temp }}/engineering-draft-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain real Git sandbox integration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-sandbox-evidence
+          path: ${{ runner.temp }}/engineering-sandbox-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain verified dependency evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-browser-evidence
+          path: ${{ runner.temp }}/dependency-browser-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain browser diagnostic log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: p61-browser-diagnostics
-          path: ${{ runner.temp }}/requirements-browser.log
+          path: |
+            ${{ runner.temp }}/requirements-browser.log
+            ${{ runner.temp }}/planning-browser.tap
           retention-days: 7
       - name: Stop fixture
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
+          rm -f "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.sast-input"
+
+  studio-system-acceptance:
+    name: P6.5c — Static application security testing system acceptance
+    needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download all engineering evidence for independent final acceptance
+        if: needs.requirements-browser.result == 'success' && needs.validate.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engineering-*-evidence
+          merge-multiple: true
+          path: final-defect-input
+      - name: Verify final automated defect acceptance
+        id: final-defect
+        if: needs.requirements-browser.result == 'success' && needs.validate.result == 'success'
+        env:
+          STUDIO_NEEDS: ${{ toJSON(needs) }}
+        run: python tools/engineering_final_defect_acceptance.py final-defect-input engineering-final-defect-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: steps.final-defect.outcome == 'success'
+        with:
+          name: engineering-final-defect-evidence
+          path: engineering-final-defect-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Download mandatory retest evidence
+        if: needs.requirements-browser.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: engineering-defect-retest-quality-evidence
+          path: mandatory-retest
+      - name: Record Studio-specific acceptance
+        if: always()
+        env:
+          STUDIO_NEEDS: ${{ toJSON(needs) }}
+          FINAL_DEFECT_SHA256: ${{ steps.final-defect.outputs.evidence_sha256 }}
+        run: |
+          python - <<'PY'
+          import json, os, re
+          required = ["validate","web-e2e","requirements-browser","web-typescript-docker","react-offline-smoke","p4-fixture-e2e","tls-container-smoke","proxy-container-smoke","stress-fixture","planning-system-acceptance"]
+          actual = json.loads(os.environ['STUDIO_NEEDS'])
+          checks = {key: actual.get(key, {}).get('result', 'missing') for key in required}
+          evidence_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('dependency_evidence_sha256', '')
+          evidence_valid = isinstance(evidence_sha256, str) and bool(re.fullmatch(r'[0-9a-f]{64}', evidence_sha256)) and checks['requirements-browser'] == 'success'
+          sandbox_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('sandbox_evidence_sha256', '')
+          sandbox_valid = isinstance(sandbox_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',sandbox_sha256)) and checks['requirements-browser']=='success'
+          draft_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('draft_evidence_sha256', '')
+          draft_valid = isinstance(draft_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',draft_sha256)) and checks['requirements-browser']=='success'
+          quality_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('quality_evidence_sha256', '')
+          quality_valid = isinstance(quality_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',quality_sha256)) and checks['requirements-browser']=='success'
+          workflow_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('workflow_evidence_sha256', '')
+          workflow_valid = isinstance(workflow_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',workflow_sha256)) and checks['requirements-browser']=='success'
+          engineering_passed = set(actual) == set(required) and all(value == 'success' for value in checks.values()) and evidence_valid and sandbox_valid and draft_valid and quality_valid and workflow_valid
+          qc_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('qc_evidence_sha256', '')
+          qc_valid = isinstance(qc_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',qc_sha256)) and checks['requirements-browser']=='success'
+          test_plan_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('test_plan_evidence_sha256', '')
+          test_plan_valid = isinstance(test_plan_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',test_plan_sha256)) and checks['requirements-browser']=='success'
+          assertion_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('assertion_evidence_sha256', '')
+          assertion_valid = isinstance(assertion_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',assertion_sha256)) and checks['requirements-browser']=='success'
+          runner_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('runner_evidence_sha256', '')
+          runner_valid = isinstance(runner_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',runner_sha256)) and checks['requirements-browser']=='success'
+          registry_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('registry_evidence_sha256', '')
+          registry_valid = isinstance(registry_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',registry_sha256)) and checks['requirements-browser']=='success'
+          execution_gate_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('execution_gate_evidence_sha256', '')
+          execution_gate_valid = isinstance(execution_gate_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',execution_gate_sha256)) and checks['requirements-browser']=='success'
+          final_execution_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_execution_evidence_sha256', '')
+          final_execution_valid = isinstance(final_execution_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',final_execution_sha256)) and checks['requirements-browser']=='success'
+          git_change_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('git_change_evidence_sha256', '')
+          git_change_valid = isinstance(git_change_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',git_change_sha256)) and checks['requirements-browser']=='success'
+          automated_execution_passed = engineering_passed and qc_valid and test_plan_valid and assertion_valid and runner_valid and registry_valid and execution_gate_valid and final_execution_valid
+          dependency_impact_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('dependency_impact_evidence_sha256', '')
+          dependency_impact_valid = isinstance(dependency_impact_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',dependency_impact_sha256)) and checks['requirements-browser']=='success'
+          impacted_test_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('impacted_test_evidence_sha256', '')
+          impacted_test_valid = isinstance(impacted_test_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',impacted_test_sha256)) and checks['requirements-browser']=='success'
+          regression_priority_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('regression_priority_evidence_sha256', '')
+          regression_priority_valid = isinstance(regression_priority_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',regression_priority_sha256)) and checks['requirements-browser']=='success'
+          regression_gate_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('regression_gate_evidence_sha256', '')
+          regression_gate_valid = isinstance(regression_gate_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',regression_gate_sha256)) and checks['requirements-browser']=='success'
+          import hashlib
+          final_regression_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_regression_evidence_sha256', '')
+          final_chain_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('final_regression_chain_sha256', '')
+          expected_chain = dict(git_change=git_change_sha256,dependency_impact=dependency_impact_sha256,
+                                impacted_test=impacted_test_sha256,regression_priority=regression_priority_sha256,
+                                regression_gate=regression_gate_sha256,final_execution=final_execution_sha256)
+          expected_chain_sha256 = hashlib.sha256(json.dumps(expected_chain,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          final_regression_valid = isinstance(final_regression_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',final_regression_sha256)) and final_chain_sha256==expected_chain_sha256 and checks['requirements-browser']=='success'
+          regression_passed = automated_execution_passed and git_change_valid and dependency_impact_valid and impacted_test_valid and regression_priority_valid and regression_gate_valid and final_regression_valid
+          defect_sha256 = actual.get('validate', {}).get('outputs', {}).get('defect_detection_sha256', '')
+          defect_valid = isinstance(defect_sha256,str) and bool(re.fullmatch(r'[0-9a-f]{64}',defect_sha256)) and checks['validate']=='success'
+          defect_integration_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_integration_sha256', '')
+          defect_integration_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_integration_sha256)) and checks['requirements-browser']=='success'
+          classification_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_classification_sha256', '')
+          classification_valid = bool(re.fullmatch(r'[0-9a-f]{64}',classification_sha256)) and checks['requirements-browser']=='success'
+          severity_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('severity_hardening_sha256', '')
+          severity_valid = bool(re.fullmatch(r'[0-9a-f]{64}',severity_sha256)) and checks['requirements-browser']=='success'
+          detected_registry_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('detected_registry_sha256', '')
+          detected_registry_valid = bool(re.fullmatch(r'[0-9a-f]{64}',detected_registry_sha256)) and checks['requirements-browser']=='success'
+          defect_repair_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_sha256', '')
+          defect_repair_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_sha256)) and checks['requirements-browser']=='success'
+          defect_repair_positive_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_positive_sha256', '')
+          defect_repair_positive_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_positive_sha256)) and checks['requirements-browser']=='success'
+          import hashlib
+          from pathlib import Path
+          retest_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_retest_quality_sha256', '')
+          retest_valid = False
+          try:
+              blob = Path('mandatory-retest/engineering-defect-retest-quality-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              retest_valid = (hashlib.sha256(blob).hexdigest() == retest_sha256
+                  and checks['requirements-browser']=='success' and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.defect-retest-quality-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['positive_repair_sha256']==defect_repair_positive_sha256)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          final_defect_sha256 = os.environ.get('FINAL_DEFECT_SHA256','')
+          final_defect_valid = False
+          final_defect_chain = None
+          try:
+              blob = Path('engineering-final-defect-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              final_defect_valid = (hashlib.sha256(blob).hexdigest()==final_defect_sha256
+                  and ev['gate']=='PASS' and ev['schema']=='orbit.final-automated-defect-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['evidence_sha256']['retest']==retest_sha256
+                  and ev['regression_chain_sha256']==final_chain_sha256)
+              if final_defect_valid: final_defect_chain = ev['evidence_chain_sha256']
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          security_sha256 = actual.get('requirements-browser',{}).get('outputs',{}).get('security_evidence_sha256','')
+          security_valid = False
+          try:
+              blob = Path('final-defect-input/engineering-security-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              security_valid = (hashlib.sha256(blob).hexdigest()==security_sha256 and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.security-evidence-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT'] and ev['retest_sha256']==retest_sha256
+                  and ev['security_gate']=='BLOCK' and ev['security_release_authorized'] is False)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          defect_passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid and final_defect_valid
+          threat_sha256 = actual.get('requirements-browser',{}).get('outputs',{}).get('threat_model_sha256','')
+          threat_valid = False
+          try:
+              blob = Path('final-defect-input/engineering-threat-model-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              threat_valid = (hashlib.sha256(blob).hexdigest()==threat_sha256 and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.threat-model-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['security_sha256']==security_sha256 and ev['retest_sha256']==retest_sha256
+                  and ev['security_gate']=='BLOCK' and ev['requirements_approved'] is False
+                  and ev['security_release_authorized'] is False)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          sast_sha256 = actual.get('requirements-browser',{}).get('outputs',{}).get('sast_sha256','')
+          sast_valid = False
+          try:
+              blob = Path('final-defect-input/engineering-sast-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              sast_valid = (hashlib.sha256(blob).hexdigest()==sast_sha256 and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.sast-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['threat_sha256']==threat_sha256 and ev['retest_sha256']==retest_sha256
+                  and ev['security_gate']=='BLOCK' and ev['requirements_approved'] is False
+                  and ev['security_release_authorized'] is False and ev['scan_waiver_authorized'] is False)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          passed = defect_passed and security_valid and threat_valid and sast_valid
+          report = dict(schema='orbit.studio-system-acceptance.v1',
+                        milestone='P6.5c', source_commit=os.environ['GITHUB_SHA'],
+                        run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                        checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
+                        dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
+                        engineering_sandbox_acceptance='PASS' if sandbox_valid else 'BLOCK',
+                        engineering_sandbox_evidence_sha256=sandbox_sha256 if sandbox_valid else None,
+                        engineering_draft_acceptance='PASS' if draft_valid else 'BLOCK',
+                        engineering_draft_evidence_sha256=draft_sha256 if draft_valid else None,
+                        engineering_quality_acceptance='PASS' if quality_valid else 'BLOCK',
+                        engineering_quality_evidence_sha256=quality_sha256 if quality_valid else None,
+                        engineering_workflow_acceptance='PASS' if workflow_valid else 'BLOCK',
+                        engineering_workflow_evidence_sha256=workflow_sha256 if workflow_valid else None,
+                        engineering_qc_acceptance='PASS' if qc_valid else 'BLOCK',
+                        engineering_qc_evidence_sha256=qc_sha256 if qc_valid else None,
+                        acceptance_test_plan_acceptance='PASS' if test_plan_valid else 'BLOCK',
+                        acceptance_test_plan_evidence_sha256=test_plan_sha256 if test_plan_valid else None,
+                        assertion_contract_acceptance='PASS' if assertion_valid else 'BLOCK',
+                        assertion_contract_evidence_sha256=assertion_sha256 if assertion_valid else None,
+                        assertion_runner_acceptance='PASS' if runner_valid else 'BLOCK',
+                        assertion_runner_evidence_sha256=runner_sha256 if runner_valid else None,
+                        assertion_registry_acceptance='PASS' if registry_valid else 'BLOCK',
+                        assertion_registry_evidence_sha256=registry_sha256 if registry_valid else None,
+                        execution_quality_gate_acceptance='PASS' if execution_gate_valid else 'BLOCK',
+                        execution_quality_gate_evidence_sha256=execution_gate_sha256 if execution_gate_valid else None,
+                        automated_test_execution_acceptance='PASS' if final_execution_valid else 'BLOCK',
+                        automated_test_execution_evidence_sha256=final_execution_sha256 if final_execution_valid else None,
+                        automated_test_execution_complete=automated_execution_passed,
+                        git_change_detection_acceptance='PASS' if git_change_valid else 'BLOCK',
+                        git_change_evidence_sha256=git_change_sha256 if git_change_valid else None,
+                        dependency_impact_acceptance='PASS' if dependency_impact_valid else 'BLOCK',
+                        dependency_impact_evidence_sha256=dependency_impact_sha256 if dependency_impact_valid else None,
+                        impacted_test_mapping_acceptance='PASS' if impacted_test_valid else 'BLOCK',
+                        impacted_test_evidence_sha256=impacted_test_sha256 if impacted_test_valid else None,
+                        regression_priority_acceptance='PASS' if regression_priority_valid else 'BLOCK',
+                        regression_priority_evidence_sha256=regression_priority_sha256 if regression_priority_valid else None,
+                        regression_quality_gate_acceptance='PASS' if regression_gate_valid else 'BLOCK',
+                        regression_gate_evidence_sha256=regression_gate_sha256 if regression_gate_valid else None,
+                        regression_impact_acceptance='PASS' if regression_passed else 'BLOCK',
+                        regression_impact_complete=regression_passed,
+                        final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
+                        final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
+                        automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        final_automated_defect_acceptance='PASS' if final_defect_valid else 'BLOCK',
+                        final_automated_defect_evidence_sha256=final_defect_sha256 if final_defect_valid else None,
+                        final_automated_defect_chain_sha256=final_defect_chain,
+                        automated_defect_detection_complete=defect_passed,
+                        security_evidence_acceptance='PASS' if security_valid else 'BLOCK',
+                        security_evidence_sha256=security_sha256 if security_valid else None,
+                        sast_acceptance='PASS' if sast_valid else 'BLOCK',
+                        sast_evidence_sha256=sast_sha256 if sast_valid else None,
+                        threat_model_acceptance='PASS' if threat_valid else 'BLOCK',
+                        threat_model_evidence_sha256=threat_sha256 if threat_valid else None,
+                        security_requirements_approved=False,
+                        security_quality_gate='BLOCK',security_release_authorized=False,
+                        defect_retest_quality_acceptance='PASS' if retest_valid else 'BLOCK',
+                        defect_retest_quality_evidence_sha256=retest_sha256 if retest_valid else None,
+                        defect_repair_positive_acceptance='PASS' if defect_repair_positive_valid else 'BLOCK',
+                        defect_repair_positive_evidence_sha256=defect_repair_positive_sha256 if defect_repair_positive_valid else None,
+                        defect_repair_acceptance='PASS' if defect_repair_valid else 'BLOCK',
+                        defect_repair_evidence_sha256=defect_repair_sha256 if defect_repair_valid else None,
+                        detected_registry_acceptance='PASS' if detected_registry_valid else 'BLOCK',
+                        detected_registry_evidence_sha256=detected_registry_sha256 if detected_registry_valid else None,
+                        severity_hardening_acceptance='PASS' if severity_valid else 'BLOCK',
+                        severity_hardening_evidence_sha256=severity_sha256 if severity_valid else None,
+                        defect_classification_acceptance='PASS' if classification_valid else 'BLOCK',
+                        defect_classification_evidence_sha256=classification_sha256 if classification_valid else None,
+                        defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
+                        automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
+                        system_acceptance='PASS' if passed else 'BLOCK',
+                        development_next_phase='P6.5d' if passed else None,
+                        engineering_phase_complete=engineering_passed,
+                        development_scope='development_only',
+                        transport='isolated_synthetic_inference_and_sandbox_fixture',
+                        automatic_adoption=False, automatic_dispatch=False,
+                        execution_authorized=False, merge_authorized=False,
+                        real_ai_acceptance='NOT_ASSESSED', model_qualification='NOT_ASSESSED',
+                        production_release_authorized=False)
+          with open('studio-system-acceptance.json','x') as out:
+              json.dump(report,out,indent=2)
+          print(json.dumps(report,indent=2))
+          raise SystemExit(0 if passed else 1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-system-acceptance
+          path: studio-system-acceptance.json
+          if-no-files-found: error
+          retention-days: 14
+
+  planning-system-acceptance:
+    name: P6.2j — final system acceptance (not model qualification)
+    needs: [validate, requirements-browser]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record independently scoped system acceptance
+        env:
+          REGRESSION_RESULT: ${{ needs.validate.result }}
+          BROWSER_RESULT: ${{ needs.requirements-browser.result }}
+        run: |
+          python - <<'PY'
+          import json, os
+          checks = dict(regression=os.environ['REGRESSION_RESULT'],
+                        browser=os.environ['BROWSER_RESULT'])
+          passed = all(value == 'success' for value in checks.values())
+          report = dict(schema='orbit.planning-system-acceptance.v1',
+                        source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.2j', transport='isolated_synthetic_fixture',
+                        checks=checks, system_acceptance='PASS' if passed else 'BLOCK',
+                        model_qualification='NOT_ASSESSED',
+                        real_ai_acceptance='NOT_ASSESSED',
+                        production_release_authorized=False)
+          with open('planning-system-acceptance.json', 'x') as out:
+              json.dump(report, out, indent=2)
+          print(json.dumps(report, indent=2))
+          raise SystemExit(0 if passed else 1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: planning-system-acceptance
+          path: planning-system-acceptance.json
+          if-no-files-found: error
+          retention-days: 14
 
   web-typescript-docker:
     name: Real Docker TypeScript sandbox — two candidates

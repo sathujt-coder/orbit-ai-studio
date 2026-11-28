@@ -1,0 +1,42 @@
+{
+  "schema": "orbit.planning-readiness-baseline.v1",
+  "milestone": "P6.2j.1",
+  "baseline_head": "f68a9292ab0561fa4687c0d6e786df0e82c87a2d",
+  "baseline_merge": "8051c702aa6dd57d9a45221613e8cfba00aa069c",
+  "system": {
+    "status": "PASS",
+    "run_id": 45615851710,
+    "artifact_id": 15020564581,
+    "python_passed": 394,
+    "python_total": 394,
+    "chromium_passed": 19,
+    "chromium_total": 19,
+    "transport": "isolated_synthetic_fixture"
+  },
+  "model": {
+    "status": "BLOCK",
+    "real_ai_acceptance": "BLOCK",
+    "qualification": "BLOCK",
+    "offline_run_id": 45615852089,
+    "offline_artifact_id": 15023621149,
+    "benchmark_run_id": 45615851847,
+    "benchmark_artifact_id": 15024177161,
+    "qualified_models": [],
+    "blocked_reason": "WBS acceptance gate failed",
+    "cross_review": "NOT_REACHED",
+    "adoption": "NOT_REACHED"
+  },
+  "production": {
+    "status": "BLOCK",
+    "release_authorized": false
+  },
+  "development": {
+    "next_phase": "P6.3",
+    "allowed": true,
+    "scope": "development_only",
+    "automatic_adoption": false,
+    "execution_authorized": false,
+    "merge_authorized": false
+  },
+  "evidence_scope": "CI logs and artifact metadata; ZIP contents and checksums not independently verified"
+}

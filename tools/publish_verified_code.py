@@ -34,6 +34,9 @@ def main(argv=None, client_type=VerifiedCodePRClient):
         with sqlite3.connect(args.db) as conn:
             conn.row_factory = sqlite3.Row
             job = detail(conn, args.job_id)
+            if (conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='studio_coding_bindings'").fetchone()
+                and conn.execute('SELECT 1 FROM studio_coding_bindings WHERE job_id=?',(args.job_id,)).fetchone()):
+                raise PermissionError('Bound engineering jobs require publish_engineering_draft.py')
             prior = conn.execute("SELECT status,pr_url FROM code_pr_exports WHERE job_id=?", (args.job_id,)).fetchone() if _has_table(conn) else None
             if prior and prior['status'] in ('pending', 'created'):
                 raise ValueError('Code PR already pending or created: ' + str(prior['pr_url']))

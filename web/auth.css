@@ -10,3 +10,7 @@
 .auth-panel #authSession{margin:20px 0}
 .auth-panel #authSession p{margin-bottom:12px}
 .auth-panel :focus-visible{outline:2px solid #79ddff;outline-offset:3px}
+
+/* Long, live planning forms use immediate scroll positioning so reload and
+   other off-screen controls do not move during an action. Scope to Planning. */
+html.planning-page{scroll-behavior:auto}

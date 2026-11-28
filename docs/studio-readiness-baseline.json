@@ -1,0 +1,67 @@
+{
+  "schema": "orbit.studio-readiness-baseline.v1",
+  "milestone": "SG.7",
+  "baseline_head": "00e502934e8f98cbc92383b7a225b99df408035c",
+  "baseline_merge": "d91ce77d09e74831e5b25554c6ce9eb5caebb5fb",
+  "system": {
+    "status": "PASS",
+    "run_id": 45738996567,
+    "artifact_id": 15080780154,
+    "python": {
+      "passed": 416,
+      "total": 416
+    },
+    "general_browser_js": {
+      "passed": 22,
+      "total": 22
+    },
+    "planning_chromium": {
+      "passed": 3,
+      "total": 3
+    },
+    "jobs": {
+      "passed": 11,
+      "total": 11
+    },
+    "transport": "isolated_synthetic_inference_and_sandbox_fixture"
+  },
+  "coverage": {
+    "legacy_handoff": "PASS",
+    "adopted_work_package_binding": "PASS",
+    "coding_queue_submission": "PASS",
+    "sqlite_trigger_rollback": "PASS",
+    "qa_receipt_ui": "PASS",
+    "stale_verification_rejection": "PASS",
+    "http_rbac_csrf": "PASS",
+    "recovery_function": "PASS"
+  },
+  "limitations": {
+    "real_bound_workflow_docker": "NOT_ASSESSED",
+    "full_http_server_restart": "NOT_ASSESSED",
+    "criterion_semantic_correctness": "NOT_ASSESSED",
+    "dependent_package_execution": "BLOCK",
+    "bound_job_retry": "BLOCK",
+    "mobile_project_switch": "NOT_ASSESSED"
+  },
+  "model": {
+    "real_ai_acceptance": "NOT_ASSESSED",
+    "qualification": "NOT_ASSESSED",
+    "offline_run_id": 45738996459,
+    "qualification_run_id": 45738996489,
+    "prior_planning_production_block": true
+  },
+  "production": {
+    "status": "BLOCK",
+    "release_authorized": false
+  },
+  "development": {
+    "next_phase": "P6.3",
+    "requires_current_sg7_ci_pass": true,
+    "scope": "development_only",
+    "automatic_adoption": false,
+    "automatic_dispatch": false,
+    "execution_authorized": false,
+    "merge_authorized": false
+  },
+  "evidence_scope": "Historical CI logs and artifact metadata; ZIP not independently extracted"
+}

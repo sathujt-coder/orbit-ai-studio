@@ -202,14 +202,15 @@ def _execute_docker(image, workspace, command, runner, timeout, trace_label):
     return result
 
 
-def _verify_lane(lane, proposal, policy, runner, timeout):
+def _verify_lane(lane, proposal, policy, runner, timeout, materialize=None):
     result = {'lane': lane, 'sha256': policy['sha256'], 'findings': policy['findings'],
               'steps': [], 'status': 'not_verified'}
     if policy['blocking_reasons']:
         result.update(status='blocked', reasons=policy['blocking_reasons'])
         return result
     with tempfile.TemporaryDirectory(prefix='orbit-v05-', dir=None) as work:
-        workspace = _materialize_proposal(proposal, work)
+        workspace = (_materialize_proposal(proposal, work) if materialize is None
+                     else materialize(lane, proposal, work))
         commands = []
         if policy['python']:
             commands.append(('python_tests', 'python', ['python', '-B', '-m', 'unittest', 'discover',
@@ -231,7 +232,7 @@ def _verify_lane(lane, proposal, policy, runner, timeout):
 
 
 def verify_job(job, *, python_image=None, node_image=None, runner=subprocess.run,
-               timeout=25, approval=None):
+               timeout=25, approval=None, materialize=None):
     """Only execute when human submits exact approval token RUN SANDBOX <job id>."""
     started = utc_now()
     if not isinstance(timeout, int) or type(timeout) is not int or not 1 <= timeout <= MAX_EXECUTION_SECONDS:
@@ -260,7 +261,7 @@ def verify_job(job, *, python_image=None, node_image=None, runner=subprocess.run
         images[language] = pinned_image(python_image if language == 'python' else node_image)
     for lane, proposal_data in proposal.items():
         lane_plans[lane]['images'] = {'python': images.get('python'), 'node': images.get('javascript')}
-        report['lanes'][lane] = _verify_lane(lane, proposal_data, lane_plans[lane], runner, timeout)
+        report['lanes'][lane] = _verify_lane(lane, proposal_data, lane_plans[lane], runner, timeout, materialize)
     statuses = {lane['status'] for lane in report['lanes'].values()}
     report['gate'] = 'PASS' if statuses == {'passed'} else 'BLOCK'
     report['verdict'] = ('passed' if report['gate'] == 'PASS' else

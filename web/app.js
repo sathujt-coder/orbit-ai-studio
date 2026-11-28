@@ -8,35 +8,70 @@ const ago=date=>{let n=(Date.now()-new Date(date).getTime())/1000;if(n<60)return
 let codingQuality=null;
 let codingJobs=[],codingSelected='',codingBusy=false,codingDetail=null,codingVerifications=[];
 let githubConfig=null,githubExports=[],githubSelected='',githubVerified='',githubBusy=false;
-let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')||'',selectedDept='techlead',selectedAgent='techlead-A',world=null,loading=false,documentText='',showAll=false,artifactFilter=null,chatSending=false;
-let sessionCsrf='';
+let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')||'',selectedDept='po',selectedAgent='po-A',world=null,loading=false,documentText='',showAll=false,artifactFilter=null,chatSending=false;
+let sessionCsrf='',sessionUser='',stateGeneration=0;
 async function api(path,method='GET',body){let opts={method,headers:{'Content-Type':'application/json','X-ORBIT-UI':'1'}};if(method!=='GET')opts.headers['X-ORBIT-CSRF']=sessionCsrf;if(body!==undefined)opts.body=JSON.stringify(body);const r=await fetch(path,opts);let v;try{v=await r.json()}catch{throw Error('Máy chủ không phản hồi JSON')};if(r.status===401){location.replace('/account.html');throw Error('Phiên đã hết hạn')}if(!r.ok)throw Error(v.error||'Lỗi không xác định');return v}
 function toast(msg,isError=false){let el=document.createElement('div');el.className='toast'+(isError?' error':'');el.textContent=msg;$('toastWrap').append(el);setTimeout(()=>el.remove(),4500)}
-function setProject(pid){projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='techlead';selectedAgent='techlead-A';artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
-async function init(){try{const session=await api('/api/auth/session');sessionCsrf=session.csrf_token;bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.routing_mode==='smart'?'SMART ROUTING · Model được chọn theo tác vụ':'A: '+bootstrap.provider.modelA+' · B: '+bootstrap.provider.modelB+' (chưa xác minh live)';
+function setProject(pid){clearRepair();stateGeneration++;loading=false;projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='po';selectedAgent='po-A';$('studioLine').replaceChildren();$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;$('roleWorkspace').replaceChildren();delete $('roleWorkspace').dataset.signature;delete $('roleWorkspace').dataset.projectId;delete $('roleWorkspace').dataset.role;delete $('studioLine').dataset.projectId;$('studioLine').dataset.ready='false';$('lineFreshness').textContent='Đang tải dự án mới…';$('pipelineTrack').replaceChildren();$('agentMembers').replaceChildren();$('deptName').textContent='Đang tải phòng ban…';$('deptDescription').textContent='';$('deptDeliverable').textContent='';$('deptStatus').textContent='Chưa xác minh';$('inspect-actions-extension')?.replaceChildren();world?.updateTasks([]);artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
+async function init(){try{const session=await api('/api/auth/session');sessionCsrf=session.csrf_token;sessionUser=session.user;bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.routing_mode==='smart'?'SMART ROUTING · Model được chọn theo tác vụ':'A: '+bootstrap.provider.modelA+' · B: '+bootstrap.provider.modelB+' (chưa xác minh live)';
   const providerLink=document.getElementById('providerSettingsLink');if(providerLink)providerLink.hidden=!bootstrap.provider_admin;const monitoringLink=document.getElementById('monitoringLink');if(monitoringLink)monitoringLink.hidden=!bootstrap.provider_admin;const resourceLink=document.getElementById('resourceSettingsLink');if(resourceLink)resourceLink.hidden=!bootstrap.provider_admin;
  $('headerDate').textContent=new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'numeric',month:'long'});
  bindEvents();renderSidebar();await loadState();await loadGithubConfig();await loadGithubExports();await loadCodingJobs();setInterval(loadState,1400);setInterval(loadCodingJobs,4000)}catch(err){toast('Không thể kết nối backend: '+err.message,true);$('activityFeed').innerHTML='<div class="empty"><span>⚠</span><b>Chưa kết nối máy chủ</b><small>Mở ứng dụng tại http://127.0.0.1:8787 sau khi chạy python3 backend/server.py</small></div>'}}
-async function loadState(){if(!projectId||loading)return;loading=true;try{let state=await api('/api/projects/'+encodeURIComponent(projectId)+'/state');if(projectId!==state.project.id)return;current=state;render()}catch(err){toast(err.message,true)}finally{loading=false}}
-function render(){if(!current)return;renderSidebar();renderStats();renderInspector();renderPipeline();renderActivity();renderArtifacts();renderGitHub();const state=current;let active=state.tasks.find(t=>activeStatuses.includes(t.status));$('worldActive').textContent=active?'● '+active.name+' đang làm':state.tasks.some(t=>t.status==='awaiting_approval')?'● Chờ phê duyệt':'● Hệ thống sẵn sàng';$('breadcrumbProject').textContent=state.project.name;world.updateTasks(state.tasks);world.setSelected(selectedDept);const run=state.running;$('pausePipeline').classList.toggle('hidden',!run);$('runPipeline').classList.toggle('hidden',run);$('nextStage').disabled=run;$('sidebarDocs').textContent=state.artifacts.length}
+async function loadState(){
+ if(!projectId||loading)return;
+ const generation=stateGeneration,pid=projectId;loading=true;
+ try{
+  const state=await api('/api/projects/'+encodeURIComponent(pid)+'/state');
+  if(generation!==stateGeneration||projectId!==pid||state.project.id!==pid)return;
+  current=state;render();syncRepairControls();
+  $('lineFreshness').textContent='Dữ liệu dự án: '+state.project.name+' · cập nhật '+new Date().toLocaleTimeString('vi-VN');
+ }catch(err){
+  if(generation!==stateGeneration)return;
+  $('studioLine').dataset.ready='false';$('roleWorkspace').dataset.stale='true';$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;
+  $('lineFreshness').textContent='Không cập nhật được dữ liệu; trạng thái hiển thị có thể đã cũ.';syncRepairControls();
+  toast(err.message,true);
+ }finally{if(generation===stateGeneration)loading=false}
+}
+function render(){if(!current)return;renderSidebar();renderStudioLine();renderRoleWorkspace();renderStats();renderInspector();renderPipeline();renderActivity();renderArtifacts();renderGitHub();const state=current;let active=state.tasks.find(t=>activeStatuses.includes(t.status));$('worldActive').textContent=active?'● '+active.name+' đang làm':state.tasks.some(t=>t.status==='awaiting_approval')?'● Chờ phê duyệt':'● Hệ thống sẵn sàng';$('breadcrumbProject').textContent=state.project.name;world.updateTasks(state.tasks);world.setSelected(selectedDept);const run=state.running;$('pausePipeline').classList.toggle('hidden',!run);$('runPipeline').classList.toggle('hidden',run);$('nextStage').disabled=run;$('sidebarDocs').textContent=state.artifacts.length}
 function renderSidebar(){if(!bootstrap)return;const p=$('projectSide');p.innerHTML=bootstrap.projects.map(x=>`<button class="project-item ${x.id===projectId?'active':''}" data-pid="${esc(x.id)}"><span class="project-dot"></span><div><strong>${esc(x.name)}</strong><small>${esc(x.platform)}</small></div></button>`).join('');p.querySelectorAll('[data-pid]').forEach(el=>el.addEventListener('click',()=>setProject(el.dataset.pid)))}
 function renderStats(){let x=current.stats;$('statPercent').innerHTML=x.percent+'<span class="metric-unit">%</span>';$('statProgress').textContent=x.done+'/'+x.total+' giai đoạn hoàn thành';$('statReviews').textContent=x.reviews;$('worldCount').textContent=bootstrap.stages.length}
-function selectDept(sid){if(!bootstrap.stages.some(s=>s.id===sid))return;selectedDept=sid;selectedAgent=sid+'-A';renderInspector();renderPipeline();world.setSelected(sid)}
+function renderRoleWorkspace(){if(!current)return;const holder=$('roleWorkspace');delete holder.dataset.stale;window.StudioLine.renderWorkspace(holder,bootstrap.stages,current,selectedDept,{chat:(id,lane,pid)=>{if(!current||projectId!==pid||$('studioLine').dataset.ready!=='true')return;selectDept(id);selectedAgent=id+'-'+lane;openChat()},inspect:(id,pid)=>{if(!current||projectId!==pid)return;selectDept(id);$('officeDetails').open=true;$('departmentsSection').scrollIntoView({behavior:'smooth',block:'nearest'})},artifact:(id,pid)=>{if(current&&projectId===pid&&$('studioLine').dataset.ready==='true')openArtifact(id)}})}
+let studioActionPending=false;
+async function submitStudioAction(pid,kind,body,signature){
+ const holder=$('studioWorkflow'),generation=stateGeneration;
+ if(studioActionPending||pid!==projectId||holder.dataset.projectId!==pid||$('studioLine').dataset.ready!=='true'||holder.dataset.signature!==signature)throw Error('Dữ liệu đã thay đổi; kiểm tra lại nguồn.');
+ if(!['bind','coding','qa'].includes(kind))throw Error('Invalid Studio action');
+ studioActionPending=true;
+ try{
+  await api('/api/projects/'+encodeURIComponent(pid)+'/studio/work-packages/'+kind,'POST',body);
+  if(generation===stateGeneration&&pid===projectId){
+   ++stateGeneration;loading=false;
+   toast('Đã ghi nhận yêu cầu. Kiểm tra trạng thái backend.');
+   await loadState();
+  }
+ }catch(err){
+  if(generation===stateGeneration&&pid===projectId){++stateGeneration;loading=false;await loadState();toast(err.message,true)}
+  throw err
+ }
+ finally{studioActionPending=false}
+}
+function renderStudioLine(){if(!current)return;const holder=$('studioLine');holder.dataset.ready='false';if(!window.StudioLine)throw Error('Studio Generator module unavailable');window.StudioLine.render(holder,bootstrap.stages,current.tasks,selectedDept,id=>{selectDept(id);$('officeDetails').open=true;$('roleWorkspaceSection').scrollIntoView({behavior:'smooth',block:'nearest'})},current.handoff?.project_id===current.project.id?current.handoff:null,current.activity?.project_id===current.project.id?current.activity:null,current.quality?.project_id===current.project.id?current.quality:null);window.StudioLine.renderWorkflow($('studioWorkflow'),current,submitStudioAction);holder.dataset.projectId=current.project.id;holder.dataset.ready='true'}
+function selectDept(sid){if(!current||!bootstrap.stages.some(s=>s.id===sid))return;selectedDept=sid;selectedAgent=sid+'-A';renderInspector();renderPipeline();renderStudioLine();renderRoleWorkspace();world.setSelected(sid)}
 function renderInspector(){if(!current)return;const s=bootstrap.stages.find(s=>s.id===selectedDept),t=current.tasks.find(t=>t.stage_id===selectedDept),idx=bootstrap.stages.findIndex(x=>x.id===selectedDept);if(!s||!t)return;
  $('deptIcon').textContent=s.icon;$('deptIcon').style.color=s.color;$('deptIcon').style.borderColor=s.color+'67';$('deptCode').textContent=s.short+' / DEPT. '+String(idx+1).padStart(2,'0');$('deptName').textContent=s.name;$('deptDescription').textContent=s.description;$('deptDeliverable').textContent=s.deliverable;$('deptStatus').textContent=statusMap[t.status]||t.status;$('deptStatus').className='state-chip '+t.status;
- $('agentMembers').innerHTML=['A','B'].map(k=>{let a=selectedDept+'-'+k,live=activeStatuses.includes(t.status);return `<div class="agent-card ${selectedAgent===a?'selected':''}" data-agent="${a}"><div class="avatar ${k==='B'?'lane-b':''}">${s.short.slice(0,2)}<sup>${k}</sup></div><div class="agent-copy"><b>${esc(a)} · ${k==='A'?'Creator':'Reviewer'}</b><small>${k==='A'?'Nghiên cứu và đề xuất độc lập':'Phương án khác & phản biện chéo'}</small></div><span class="agent-pulse ${live?'active':''}"></span></div>`}).join('');$('agentMembers').querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>{selectedAgent=el.dataset.agent;renderInspector()}));
+ $('agentMembers').innerHTML=['A','B'].map(k=>{let a=selectedDept+'-'+k,live=activeStatuses.includes(t.status);return `<div class="agent-card ${selectedAgent===a?'selected':''}" data-agent="${a}"><div class="avatar ${k==='B'?'lane-b':''}">${s.short.slice(0,2)}<sup>${k}</sup></div><div class="agent-copy"><b>${esc(a)} · ${'Đề xuất + review'}</b><small>${k==='A'?'Nghiên cứu và đề xuất độc lập':'Phương án khác & phản biện chéo'}</small></div><span class="agent-pulse" title="Không có trạng thái riêng từng agent"></span></div>`}).join('');$('agentMembers').querySelectorAll('[data-agent]').forEach(el=>el.addEventListener('click',()=>{selectedAgent=el.dataset.agent;renderInspector()}));
  let parent=$('inspect-actions-extension');if(!parent){parent=document.createElement('div');parent.id='inspect-actions-extension';parent.className='inspect-actions';$('deptViewArtifacts').parentElement.after(parent)}parent.innerHTML='';if(t.status==='awaiting_approval')parent.innerHTML='<button class="btn primary" id="approveCurrent" style="width:100%">✓ Phê duyệt giai đoạn</button>';if(t.status==='needs_revision')parent.innerHTML='<button class="btn danger" id="retryCurrent" style="width:100%">↻ Yêu cầu thực hiện lại</button>';
  if($('approveCurrent'))$('approveCurrent').addEventListener('click',()=>stageAction('approve'));
  if($('retryCurrent'))$('retryCurrent').addEventListener('click',()=>stageAction('retry'));
 }
 async function stageAction(action){try{await api(`/api/stages/${projectId}/${selectedDept}/${action}`,'POST',{});toast(action==='approve'?'Đã phê duyệt. Bạn có thể tiếp tục quy trình.':'Đã đưa giai đoạn trở lại hàng đợi.');await loadState()}catch(err){toast(err.message,true)}}
-function renderPipeline(){const holder=$('pipelineTrack');holder.innerHTML=current.tasks.map(t=>{let active=activeStatuses.includes(t.status),done=completedStatuses.includes(t.status),blocked=['awaiting_approval','needs_revision'].includes(t.status);return `<button class="stage-node ${selectedDept===t.stage_id?'active':''} ${done?'completed':active?'in-progress':blocked?'problem':''}" title="${esc(t.name+': '+statusMap[t.status])}" data-stage="${t.stage_id}"><span class="stage-icon">${esc(t.icon)}</span><b>${esc(t.short)}</b><small>${done?'✓ Hoàn thành':statusMap[t.status]||t.status}</small></button>`}).join('');holder.querySelectorAll('[data-stage]').forEach(el=>el.addEventListener('click',()=>{selectDept(el.dataset.stage);$('departmentsSection').scrollIntoView({behavior:'smooth',block:'nearest'})}))}
+function renderPipeline(){const holder=$('pipelineTrack');holder.innerHTML=current.tasks.map(t=>{let active=activeStatuses.includes(t.status),done=completedStatuses.includes(t.status),blocked=['awaiting_approval','needs_revision'].includes(t.status);return `<button class="stage-node ${selectedDept===t.stage_id?'active':''} ${done?'completed':active?'in-progress':blocked?'problem':''}" title="${esc(t.name+': '+statusMap[t.status])}" data-stage="${t.stage_id}"><span class="stage-icon">${esc(t.icon)}</span><b>${esc(t.short)}</b><small>${done?'✓ Hoàn thành':statusMap[t.status]||t.status}</small></button>`}).join('');holder.querySelectorAll('[data-stage]').forEach(el=>el.addEventListener('click',()=>{selectDept(el.dataset.stage);$('officeDetails').open=true;$('departmentsSection').scrollIntoView({behavior:'smooth',block:'nearest'})}))}
 function renderActivity(){$('activityFeed').innerHTML=current.events.length?current.events.slice(0,13).map(e=>`<div class="event"><span class="event-symbol ${esc(e.level)}">${e.level==='success'?'✓':e.level==='warning'?'!':e.level==='error'?'×':'⌁'}</span><div class="event-msg"><b>${esc(e.message)}</b><small>${e.agent_id?esc(e.agent_id)+' · ':''}${ago(e.created_at)}</small></div></div>`).join(''):'<div class="empty"><span>◷</span><b>Chưa có sự kiện</b><small>Chạy quy trình để xem agent hoạt động</small></div>'}
 function renderArtifacts(){let all=current.artifacts.filter(a=>!artifactFilter||a.stage_id===artifactFilter),docs=showAll?all:all.slice(0,5);$('artifactTotal').textContent=all.length+' FILES';$('artifactList').innerHTML=docs.length?docs.map(a=>{let stage=bootstrap.stages.find(s=>s.id===a.stage_id),kind=a.kind==='final'?'Bản hợp nhất':'Bản nháp';return `<div class="artifact-item" data-artifact="${a.id}"><div class="file-icon ${a.kind==='draft'?'review':''}">${a.kind==='final'?'▤':'◇'}</div><div class="file-text"><b>${esc(stage?.name||a.stage_id)} — ${kind}</b><small>${esc(a.agent_id)} · ${ago(a.created_at)}</small></div><span class="file-arrow">↗</span></div>`}).join(''):'<div class="empty"><span>▤</span><b>Chưa có tài liệu</b><small>Bản nháp của các agent và tài liệu hợp nhất sẽ hiển thị tại đây</small></div>';$('artifactList').querySelectorAll('[data-artifact]').forEach(el=>el.addEventListener('click',()=>openArtifact(el.dataset.artifact)));$('showAllArtifacts').textContent=artifactFilter?'Bỏ lọc ↗':showAll?'Thu gọn':'Xem tất cả ↗'}
-async function openArtifact(id){try{const a=await api('/api/artifacts/'+encodeURIComponent(id));documentText=a.content;$('artifactModalTitle').textContent=(bootstrap.stages.find(s=>s.id===a.stage_id)?.name||a.stage_id)+' · '+(a.kind==='final'?'Tài liệu hợp nhất':'Đề xuất độc lập');$('artifactModalMeta').textContent=a.agent_id+' · '+a.kind.toUpperCase()+' · '+new Date(a.created_at).toLocaleString('vi-VN');$('artifactBody').textContent=a.content;openModal('artifactModal')}catch(err){toast(err.message,true)}}
+async function openArtifact(id){const pid=projectId,generation=stateGeneration;try{const a=await api('/api/artifacts/'+encodeURIComponent(id));if(pid!==projectId||generation!==stateGeneration)return;documentText=a.content;$('artifactModalTitle').textContent=(bootstrap.stages.find(s=>s.id===a.stage_id)?.name||a.stage_id)+' · '+(a.kind==='final'?'Tài liệu hợp nhất':'Đề xuất độc lập');$('artifactModalMeta').textContent=a.agent_id+' · '+a.kind.toUpperCase()+' · '+new Date(a.created_at).toLocaleString('vi-VN');$('artifactBody').textContent=a.content;openModal('artifactModal')}catch(err){toast(err.message,true)}}
 function openModal(id){$(id).classList.remove('hidden')}
 function closeModal(id){$(id).classList.add('hidden')}
-async function openChat(){let a=selectedAgent;$('chatTitle').textContent='Trao đổi · '+a;openModal('chatModal');$('chatFeed').innerHTML='<div class="empty"><small>Đang tải hội thoại...</small></div>';try{let r=await api('/api/chat?project_id='+encodeURIComponent(projectId)+'&agent_id='+encodeURIComponent(a));if(a!==selectedAgent)return;renderChatMessages(r.messages)}catch(err){toast(err.message,true)}}
+async function openChat(){let a=selectedAgent,pid=projectId,generation=stateGeneration;$('chatTitle').textContent='Trao đổi · '+a;openModal('chatModal');$('chatFeed').innerHTML='<div class="empty"><small>Đang tải hội thoại...</small></div>';try{let r=await api('/api/chat?project_id='+encodeURIComponent(projectId)+'&agent_id='+encodeURIComponent(a));if(a!==selectedAgent||pid!==projectId||generation!==stateGeneration)return;renderChatMessages(r.messages)}catch(err){toast(err.message,true)}}
 function renderChatMessages(ms){$('chatFeed').innerHTML=ms.length?'':'<div class="empty"><span>✳</span><b>Hỏi agent về dự án</b><small>Đưa yêu cầu, hỏi phương án hoặc đề nghị phân tích rủi ro.</small></div>';ms.forEach(m=>{let bubble=document.createElement('div');bubble.className='chat-bubble '+m.role;let title=document.createElement('small');title.textContent=m.role==='user'?'Bạn':selectedAgent;let txt=document.createElement('div');txt.textContent=m.content;bubble.append(title,txt);$('chatFeed').append(bubble)});$('chatFeed').scrollTop=$('chatFeed').scrollHeight}
 function bindEvents(){for(let el of [$('newProjectBtn'),$('newProjectShortcut')])el.addEventListener('click',()=>openModal('createModal'));
  document.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click',()=>closeModal(el.dataset.close)));document.querySelectorAll('.modal-backdrop').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id)}));document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(el=>closeModal(el.id))});
@@ -47,17 +82,17 @@ function bindEvents(){for(let el of [$('newProjectBtn'),$('newProjectShortcut')]
  $('chatForm').addEventListener('submit',sendChat);
  $('codingForm').addEventListener('submit',startCoding);
  $('codingRefresh').addEventListener('click',loadCodingJobs);
- $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){codingSelected=btn.dataset.job;codingVerifications=[];await loadCodingDetail();renderCoding()}});
+ $('codingJobs').addEventListener('click',async e=>{const btn=e.target.closest('[data-job]');if(btn){if(codingSelected!==btn.dataset.job)clearRepair();codingSelected=btn.dataset.job;codingVerifications=[];await loadCodingDetail();renderCoding()}});
  $('githubArtifact').addEventListener('change',e=>{githubSelected=e.target.value;githubVerified='';$('githubPreviewText').textContent='Chọn Kiểm tra trước khi gửi để xác minh quality gate.';renderGitHub()});
  $('githubPreview').addEventListener('click',previewGitHub);$('githubCreate').addEventListener('click',createGitHubPR);
- document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('[data-view]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const section=({overview:'overviewSection',departments:'departmentsSection',workflow:'workflowSection',artifacts:'artifactsSection',coding:'codingSection',github:'githubSection'})[btn.dataset.view];$(section).scrollIntoView({behavior:'smooth',block:'start'})}));
+ document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('[data-view]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const section=({overview:'overviewSection',departments:'roleWorkspaceSection',workflow:'workflowSection',artifacts:'artifactsSection',coding:'codingSection',github:'githubSection'})[btn.dataset.view];if(section==='departmentsSection')$('officeDetails').open=true;$(section).scrollIntoView({behavior:'smooth',block:'start'})}));
 }
 async function sendChat(e){e.preventDefault();if(chatSending)return;let input=$('chatInput'),message=input.value.trim(),agent=selectedAgent;if(!message)return;chatSending=true;input.value='';let button=$('chatForm').querySelector('button');button.disabled=true;let user={role:'user',content:message};const prev=[...$('chatFeed').querySelectorAll('.chat-bubble')].map(e=>({role:e.classList.contains('user')?'user':'assistant',content:e.querySelector('div').textContent}));renderChatMessages([...prev,user,{role:'assistant',content:'Đang suy nghĩ...'}]);try{await api('/api/chat','POST',{project_id:projectId,agent_id:agent,message});let r=await api('/api/chat?project_id='+encodeURIComponent(projectId)+'&agent_id='+encodeURIComponent(agent));renderChatMessages(r.messages)}catch(err){toast(err.message,true);renderChatMessages(prev.concat(user))}finally{chatSending=false;button.disabled=false;input.focus()}}
 async function run(mode){try{await api('/api/projects/'+projectId+'/run','POST',{mode});toast(mode==='all'?'Bắt đầu thực hiện pipeline theo thứ tự.':'Đã giao một giai đoạn cho cặp agent.');await loadState()}catch(err){toast(err.message,true)}}
 
 async function startCoding(e){e.preventDefault();if(codingBusy||!projectId)return;
  const spec=$('codingSpec').value.trim();if(spec.length<15)return;codingBusy=true;$('codingStart').disabled=true;
- try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});codingSelected=r.job_id;codingDetail=null;codingVerifications=[];
+ try{const r=await api('/api/coding/start','POST',{project_id:projectId,spec});clearRepair();codingSelected=r.job_id;codingDetail=null;codingVerifications=[];
   $('codingSpec').value='';toast('DEV-A và DEV-B đã nhận job. Code chỉ được tải khi cả hai review đạt.');await loadCodingJobs();await loadCodingDetail();}
  catch(err){toast(err.message,true)}finally{codingBusy=false;$('codingStart').disabled=false}}
 async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
@@ -66,7 +101,193 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status)))await loadCodingDetail();
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
+let securityGeneration=0;
+function clearSecurityEvidence(){
+ securityGeneration++;
+ clearThreatModel();
+ $('securityEvidenceStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadSecurityEvidence(){
+ const pid=projectId,jid=codingSelected;
+ clearSecurityEvidence();
+ if(!pid||!jid)return;
+ const generation=securityGeneration,live=()=>generation===securityGeneration&&pid===projectId&&jid===codingSelected;
+ $('securityEvidenceStatus').textContent='Đang tải snapshot · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/security-evidence/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-evidence.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||
+     !['BLOCK','SECURITY_EVIDENCE_READY'].includes(v.state))throw Error('Invalid security evidence');
+  $('securityEvidenceStatus').textContent=[v.state,'Security gate: '+v.security_gate,
+   ...Object.entries(v.checks).map(([k,x])=>k+': '+x),
+   ...Object.entries(v.assessments).map(([k,x])=>k+': '+x),
+   'Candidate: '+(v.source?.candidate_digest||'—'),'Execution: '+(v.source?.execution_digest||'—'),
+   'Evidence: '+v.evidence_digest,'Snapshot tại thời điểm tải · Không cấp quyền execution/release'].join('\n');
+ }catch(e){if(live()){$('securityEvidenceStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('securityEvidenceRefresh').addEventListener('click',loadSecurityEvidence);
+let threatGeneration=0;
+function clearThreatModel(){
+ threatGeneration++;
+ clearSast();
+ $('threatModelStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadThreatModel(){
+ const pid=projectId,jid=codingSelected;clearThreatModel();
+ if(!pid||!jid)return;
+ const generation=threatGeneration,live=()=>generation===threatGeneration&&pid===projectId&&jid===codingSelected;
+ $('threatModelStatus').textContent='Đang tải mô hình nguy cơ · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/threat-model/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-threat-model.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||v.requirements_approved!==false||
+     !['BLOCK','THREAT_MODEL_READY'].includes(v.state)||
+     !Array.isArray(v.threats)||!Array.isArray(v.requirements)||
+     v.requirements.some(x=>x.verification_status!=='NOT_VERIFIED'||x.mandatory!==true))throw Error('Invalid threat model');
+  $('threatModelStatus').textContent=[v.state,'Security gate: BLOCK · Requirements NOT APPROVED',
+   'Catalog: '+v.catalog_digest,'Candidate: '+(v.source?.candidate_digest||'—'),
+   'Security evidence: '+(v.source?.security_evidence_digest||'—'),
+   ...v.threats.map(x=>x.id+' · '+x.stride+' · '+x.severity+' · '+x.description),
+   ...v.requirements.map(x=>x.id+' · '+x.verification_status+' · '+x.requirement+' · '+x.verification),
+   'Evidence: '+v.evidence_digest,'Baseline architecture only · Không phải security clearance'].join('\n');
+ }catch(e){if(live()){$('threatModelStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('threatModelRefresh').addEventListener('click',loadThreatModel);
+let sastGeneration=0;
+function clearSast(){
+ sastGeneration++;
+ $('sastStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadSast(){
+ const pid=projectId,jid=codingSelected;clearSast();
+ if(!pid||!jid)return;
+ const generation=sastGeneration,live=()=>generation===sastGeneration&&pid===projectId&&jid===codingSelected;
+ $('sastStatus').textContent='Đang phân tích tĩnh · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/sast/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-sast.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||v.requirements_approved!==false||
+     !['BLOCK','SAST_BASELINE_READY'].includes(v.state)||!['NOT_ASSESSED','BLOCK','NO_RULE_MATCHES'].includes(v.scan_verdict)||
+     !Array.isArray(v.files)||!Array.isArray(v.findings))throw Error('Invalid SAST evidence');
+  $('sastStatus').textContent=[v.state,'Security gate: BLOCK','Scan: '+v.scan_verdict,
+   'Candidate: '+(v.source?.candidate_digest||'—'),'Policy: '+v.policy_digest,
+   ...v.files.map(x=>x.path+' · '+x.status),
+   ...v.findings.map(x=>x.path+':'+x.line+' · '+x.rule_id+' · '+x.severity),
+   'Evidence: '+v.evidence_digest,'Python AST baseline · Không phải security clearance'].join('\n');
+ }catch(e){if(live()){$('sastStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('sastRefresh').addEventListener('click',loadSast);
+let repairView=null,retestView=null,repairScope=null,repairGeneration=0,repairBusy=false;
+const repairTransitions={OPEN:['ASSIGN'],ASSIGNED:['REASSIGN','START'],IN_PROGRESS:['REASSIGN','SUBMIT'],
+ REPAIR_SUBMITTED:['REJECT','VERIFY'],VERIFIED:['REJECT','CLOSE'],CLOSED:['REOPEN']};
+const repairReview=new Set(['ASSIGN','REASSIGN','REJECT','VERIFY','CLOSE','REOPEN']);
+const repairHex=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
+function repairScoped(){return repairScope&&repairScope.pid===projectId&&repairScope.jid===codingSelected;}
+function repairActions(item){
+ const p=current?.workflow_permissions;
+ if(repairBusy||!repairScoped()||repairView?.state!=='READY'||retestView?.repair_digest!==repairView.evidence_digest||
+   !item||!sessionUser||p?.project_id!==projectId||current?.project?.id!==projectId||$('studioLine').dataset.ready!=='true')return [];
+ return (repairTransitions[item.state]||[]).filter(action=>{
+  if(repairReview.has(action)){
+   if(!p.can_approve)return false;
+   if(!['ASSIGN','REASSIGN'].includes(action)&&item.assignee===sessionUser)return false;
+   if(action==='CLOSE'&&item.history.at(-1)?.snapshot.actor===sessionUser)return false;
+   return true;
+  }
+  return p.can_write===true&&item.assignee===sessionUser;
+ });
+}
+function syncRepairControls(){
+ const select=$('defectRepairAction');if(!select)return;
+ const item=repairView?.items.find(x=>x.registration_digest===$('defectRepairItem').value);
+ const actions=repairActions(item),old=select.value;
+ if([...select.options].map(x=>x.value).join(',')!==actions.join(',')){
+  select.replaceChildren(...actions.map(a=>new Option(a,a)));
+  if(actions.includes(old))select.value=old;
+ }
+ const assign=['ASSIGN','REASSIGN'].includes(select.value);
+ $('defectRepairItem').disabled=repairBusy||!repairScoped()||!repairView;
+ select.disabled=!actions.length;$('defectRepairAssignee').disabled=!actions.length||!assign;
+ $('defectRepairAssignee').required=!!actions.length&&assign;
+ $('defectRepairNote').disabled=!actions.length;$('defectRepairSubmit').disabled=!actions.length;
+ $('defectRepairRefresh').disabled=repairBusy;
+}
+function clearRepair(message='Chọn coding job và tải trạng thái.'){
+ clearSecurityEvidence();
+ repairGeneration++;repairView=null;retestView=null;repairScope=null;
+ $('defectRepairItem')?.replaceChildren();
+ if($('defectRepairStatus'))$('defectRepairStatus').textContent=message;
+ if($('defectRetestStatus'))$('defectRetestStatus').textContent='Chưa xác minh · BLOCK';
+ syncRepairControls();
+}
+async function loadRepair(){
+ if(repairBusy)return;
+ const pid=projectId,jid=codingSelected,old=$('defectRepairItem').value;
+ clearRepair('Đang tải evidence…');
+ if(!pid||!jid)return;
+ const generation=repairGeneration,base='/api/projects/'+encodeURIComponent(pid)+'/engineering/';
+ const path=base+'defect-repairs/'+encodeURIComponent(jid);
+ repairScope={pid,jid,path};
+ const live=()=>generation===repairGeneration&&repairScoped();
+ try{
+  const v=await api(path);if(!live())return;
+  const q=await api(base+'defect-retest-quality/'+encodeURIComponent(jid));if(!live())return;
+  if(v.project_id!==pid||v.job_id!==jid||q.project_id!==pid||q.job_id!==jid||
+     !repairHex(v.evidence_digest)||!repairHex(q.evidence_digest)||!Array.isArray(v.items)||!Array.isArray(q.items)||
+     (v.state==='READY'&&q.repair_digest!==v.evidence_digest)||
+     (q.repair_digest!==null&&q.repair_digest!==v.evidence_digest))throw Error('Evidence không đồng nhất; tải lại trạng thái.');
+  repairView=v;retestView=q;
+  const select=$('defectRepairItem');select.replaceChildren();
+  const status=new Map(q.items.map(x=>[x.registration_digest,x.status]));
+  for(const x of v.items){
+   const option=document.createElement('option');option.value=x.registration_digest;
+   option.textContent=(x.latest?'Hiện tại':'Lịch sử')+' · '+x.severity+' · '+x.state+' · '+(status.get(x.registration_digest)||'CHƯA XÁC MINH')+' · '+x.registration_digest.slice(0,12);
+   select.append(option);
+  }
+  if([...select.options].some(x=>x.value===old))select.value=old;
+  $('defectRepairStatus').textContent=[v.state+' · '+v.registry_state,...v.items.map(x=>
+    (x.latest?'CURRENT':'HISTORICAL')+' · '+x.finding_id+' · '+x.registration_digest+' · '+x.state+' · '+(x.assignee||'—')+'\n'+
+    x.history.map(e=>e.snapshot.action+' '+e.snapshot.actor+' · '+e.digest+' · '+e.snapshot.note).join('\n'))].join('\n');
+  $('defectRetestStatus').textContent=[q.state,...Object.entries(q.checks||{}).map(([k,val])=>k+': '+val),
+    'Execution: '+(q.execution_digest||'—'),'Regression: '+(q.regression_digest||'—'),'Retest evidence: '+q.evidence_digest,
+    ...q.items.map(x=>x.registration_digest+' · '+x.status+' · closure '+(x.closure_digest||'—')),
+    'Development evidence only · Không cấp quyền execution/release'].join('\n');
+  syncRepairControls();
+ }catch(e){if(live()){clearRepair('Không thể xác minh evidence; tải lại thủ công.');toast(e.message,true);}}
+}
+$('defectRepairRefresh')?.addEventListener('click',loadRepair);
+$('defectRepairItem')?.addEventListener('change',syncRepairControls);
+$('defectRepairAction')?.addEventListener('change',syncRepairControls);
+$('defectRepairForm')?.addEventListener('submit',async e=>{
+ e.preventDefault();
+ const v=repairView,scope=repairScope,generation=repairGeneration;
+ const item=v?.items.find(x=>x.registration_digest===$('defectRepairItem').value);
+ const action=$('defectRepairAction').value;
+ if(!repairActions(item).includes(action)){toast('Tải lại trạng thái defect và kiểm tra quyền.',true);return;}
+ const confirmation=action+' DEFECT '+scope.jid+' '+item.finding_id;
+ if(!window.confirm(confirmation+'\nOccurrence: '+item.registration_digest))return;
+ clearSecurityEvidence();repairBusy=true;syncRepairControls();
+ let success=false;
+ try{
+  await api(scope.path,'POST',{action,finding_id:item.finding_id,registration_digest:item.registration_digest,
+   expected_digest:v.evidence_digest,assignee:['ASSIGN','REASSIGN'].includes(action)?$('defectRepairAssignee').value.trim():null,
+   note:$('defectRepairNote').value,confirmation});
+  success=true;
+ }catch(err){if(generation===repairGeneration&&repairScoped())toast(err.message,true);}
+ finally{
+  repairBusy=false;
+  if(generation===repairGeneration&&repairScoped()){
+   if(success){$('defectRepairNote').value='';await loadRepair();}
+   else clearRepair('Cập nhật bị từ chối; tải lại evidence trước khi thử lại.');
+  }else syncRepairControls();
+ }
+});
+syncRepairControls();
 async function loadCodingDetail(){if(!codingSelected)return;
+ if(repairScope&&(repairScope.pid!==projectId||repairScope.jid!==codingSelected))clearRepair();
  try{const id=codingSelected;const detail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');const quality=await api('/api/coding/'+encodeURIComponent(id)+'/quality');if(id!==codingSelected)return;codingDetail=detail;codingQuality=quality;codingVerifications=v.verifications||[];renderCoding()}
  catch(err){toast(err.message,true)}}
 function renderCoding(){if(!bootstrap)return;

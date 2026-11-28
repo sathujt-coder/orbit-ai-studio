@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="vi" class="planning-page"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project Planning · ORBIT</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/auth.css"><link rel="stylesheet" href="/usage.css"></head>
+<body><main class="auth-shell"><section class="auth-panel usage-panel">
+<h1>Project Planning</h1><p>WBS và dependency graph từ PRD đã phê duyệt. Bản nháp quy tắc hoặc hai đề xuất AI độc lập; không tự chạy task.</p>
+<label>Dự án <select id="project"></select></label> <button type="button" id="reload" class="btn outline">Tải lại</button>
+<p id="status" role="status" aria-live="polite">Đang tải…</p>
+<section id="panel" hidden>
+<p id="input-state"></p><details><summary>PRD nguồn và acceptance criteria</summary><pre id="source"></pre></details>
+<p id="plan-state"></p><details><summary>Planning Scope Contract (tùy chọn bổ sung)</summary><p>Backend luôn chặn cụm từ out_of_scope của PRD. Thêm forbidden và rules theo requirement, kind (implement/verify), evidence (nguyên văn description hoặc acceptance), matches (nhóm cụm từ thay thế). Đây là kiểm tra từ khóa, không thay thế review nghiệp vụ.</p><textarea id="scope-contract" rows="8" maxlength="10000" spellcheck="false" placeholder='{"forbidden":[],"rules":[]}'></textarea></details><button id="discover" type="button" class="btn outline">Chạy PM-A/B</button><p id="discovery-status" role="status"></p><details><summary>Hai đề xuất AI (kiểm tra phạm vi theo quy tắc; chưa cross-review, chưa tiếp nhận)</summary><pre id="discovery-evidence"></pre></details>
+<div><button id="seed" type="button" class="btn primary">Tạo WBS nháp</button> <button id="save" type="button" class="btn outline">Lưu phiên bản mới</button> <button id="approve" type="button" class="btn outline">Phê duyệt kế hoạch</button></div>
+<p>Nhập effort_minutes bằng số phút ước tính; null nghĩa là chưa ước tính. Không coi tổng effort hay thời gian phụ thuộc là lịch thực thi cam kết.</p>
+<label>Plan JSON<textarea id="document" rows="20" maxlength="50000" spellcheck="false"></textarea></label>
+<h2>WBS phân cấp từ PM-A/B</h2><p>Chọn đề xuất đã qua kiểm tra, tạo bản nháp phân cấp theo requirement và từng acceptance criterion. Điền action, output và evidence cụ thể trong JSON. Chưa phải phê duyệt hay thực thi.</p>
+<label>PM lane <select id="wbs-lane"><option>A</option><option>B</option></select></label>
+<button id="wbs-seed" type="button" class="btn outline">Tạo WBS phân cấp</button> <button id="wbs-save" type="button" class="btn outline">Lưu chi tiết WBS</button>
+<button id="wbs-decompose" type="button" class="btn outline">AI phân rã WBS (local)</button><p id="decomposition-status" role="status"></p><details><summary>Đề xuất AI và bằng chứng (chưa tiếp nhận)</summary><pre id="decomposition-evidence"></pre></details><p id="wbs-status" role="status"></p><div id="wbs-tree"></div>
+<label>WBS JSON<textarea id="wbs-document" rows="18" maxlength="50000" spellcheck="false"></textarea></label>
+<details><summary>Traceability và Quality Findings</summary><pre id="wbs-findings"></pre></details>
+<h2>Resource Estimates</h2><p>Ước lượng thủ công theo package: effort_minutes (phút công), role (vai trò dự kiến). Null là chưa xác định. Không phân bổ nhân sự hoặc cam kết lịch.</p>
+<p id="estimate-state" role="status"></p><label>Estimates JSON<textarea id="estimate-document" rows="12" maxlength="50000" spellcheck="false"></textarea></label>
+<button id="estimate-save" type="button" class="btn outline">Lưu ước lượng</button><details><summary>Tổng effort theo vai trò và lịch sử</summary><pre id="estimate-analysis"></pre></details>
+<h2>Milestones &amp; Sprint Scheduling</h2><p>Lịch nháp: sprints gồm id, start/end YYYY-MM-DD, capacity (phút theo role); assignments gán package vào sprint; milestones gồm id, title, sprint, packages. Không tự phân bổ agent hoặc cam kết ngày giao.</p>
+<p id="schedule-state" role="status"></p><label>Schedule JSON<textarea id="schedule-document" rows="14" maxlength="50000" spellcheck="false"></textarea></label>
+<button id="schedule-save" type="button" class="btn outline">Lưu lịch nháp</button><details><summary>Capacity, dependency và milestone findings</summary><pre id="schedule-analysis"></pre></details>
+<h2>PM Cross-review &amp; Quality Gate</h2><p>PM-A/B review đề xuất đối diện và bộ kế hoạch chung đã lưu. Cả hai phải APPROVE, điểm ≥80 và đủ năm kiểm tra. Không tự tiếp nhận hay thực thi.</p><button id="review-run" type="button" class="btn outline">Chạy PM Cross-review (local)</button><p id="review-state" role="status"></p><details><summary>Review evidence</summary><pre id="review-evidence"></pre></details>
+<h2>Human Approval &amp; Explicit Adoption</h2><p>Người có quyền approve tiếp nhận đúng bundle đã qua review. Snapshot bất biến; không tự thực thi hay phát hành.</p><button id="adopt-bundle" type="button" class="btn outline">Phê duyệt và tiếp nhận kế hoạch</button><p id="adoption-state" role="status"></p><details><summary>Bundle đã tiếp nhận và lịch sử</summary><pre id="adoption-evidence"></pre></details>
+<h2>Kế hoạch phẳng đã lưu</h2><div class="usage-scroll"><table><thead><tr><th>Task</th><th>Nội dung</th><th>Loại</th><th>Requirement</th><th>Phụ thuộc</th><th>Phút</th></tr></thead><tbody id="tasks"></tbody></table></div>
+<h2>Dependency Graph &amp; Critical Path</h2>
+<p>Phân tích dựa trên phiên bản đã lưu, không phải lịch cam kết. Các lớp chỉ biểu thị thứ tự phụ thuộc; số phút giả định tài nguyên song song không giới hạn.</p>
+<label>Đồ thị <select id="graph-source"><option value="plan">Kế hoạch phẳng</option><option value="wbs">WBS phân cấp</option></select></label>
+<p id="graph-status" role="status" aria-live="polite"></p><p id="graph-path"></p>
+<details open><summary>Các lớp phụ thuộc</summary><ol id="graph-layers"></ol></details>
+<div class="usage-scroll"><table><thead><tr><th>Task / Package</th><th>Phụ thuộc</th><th>Phút</th><th>ES</th><th>EF</th><th>LS</th><th>LF</th><th>Float</th><th>Găng</th></tr></thead><tbody id="graph-nodes"></tbody></table></div>
+<details><summary>Cạnh thuộc đường găng</summary><ul id="graph-edges"></ul></details>
+<details><summary>Phân tích DAG (JSON)</summary><pre id="analysis"></pre></details><h2>Lịch sử phiên bản</h2><pre id="history"></pre>
+</section><a href="/requirements.html">Product Requirements</a> · <a href="/">Về dashboard</a></section></main><script src="/planning.js"></script></body></html>
