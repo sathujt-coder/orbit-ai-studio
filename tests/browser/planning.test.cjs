@@ -900,6 +900,10 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(recoveredHistory.execution_history,registryRecovered.history);
   assert.deepEqual(recoveredHistory.priority_history,[failedRun.priority_receipt,recoveredRun.priority_receipt]);
   assert.equal(recoveredHistory.priority_audit_count,2);
+  const positiveRepair=JSON.parse(execFileSync('python',['tests/browser/defect_repair_positive_fixture.py',process.env.AI_COMPANY_DB,pid,boundJob.job_id],{stdio:'pipe',timeout:360000}).toString());
+  assert.equal(positiveRepair.live_unchanged,true);
+  assert.equal(positiveRepair.closed.items.find(x=>x.registration_digest===positiveRepair.registration_digest).state,'CLOSED');
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.repair-positive',JSON.stringify(positiveRepair),{flag:'wx'});
   const priorityArgsFor=(comparison,digest)=>assertionArgsFor(correctedPlan,4).slice(0,-2).concat(['--priority-comparison',comparison,'--priority-mapping-digest',digest]);
   assert.throws(()=>execFileSync('python',priorityArgsFor('baseline_to_B',initialMapping.evidence_digest),{stdio:'pipe',timeout:60000}),e=>e.status===1);
   const priorityRuns={};

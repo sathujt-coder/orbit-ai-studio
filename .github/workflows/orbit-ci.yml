@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      defect_repair_positive_sha256: ${{ steps.defect-repair-positive.outputs.evidence_sha256 }}
       defect_repair_sha256: ${{ steps.defect-repair.outputs.evidence_sha256 }}
       detected_registry_sha256: ${{ steps.detected-registry.outputs.evidence_sha256 }}
       severity_hardening_sha256: ${{ steps.severity-hardening.outputs.evidence_sha256 }}
@@ -314,6 +315,15 @@ jobs:
         with:
           name: engineering-defect-repair-evidence
           path: ${{ runner.temp }}/engineering-defect-repair-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate positive repair closure and concurrent SQLite writers
+        id: defect-repair-positive
+        run: python tools/engineering_defect_repair_positive_acceptance.py "$RUNNER_TEMP/engineering-defect-repair-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.repair-positive" "$RUNNER_TEMP/engineering-defect-repair-positive-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-repair-positive-evidence
+          path: ${{ runner.temp }}/engineering-defect-repair-positive-evidence.json
           if-no-files-found: error
           retention-days: 14
       - name: Retain final regression impact evidence
@@ -529,9 +539,11 @@ jobs:
           detected_registry_valid = bool(re.fullmatch(r'[0-9a-f]{64}',detected_registry_sha256)) and checks['requirements-browser']=='success'
           defect_repair_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_sha256', '')
           defect_repair_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_sha256)) and checks['requirements-browser']=='success'
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid
+          defect_repair_positive_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_positive_sha256', '')
+          defect_repair_positive_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_positive_sha256)) and checks['requirements-browser']=='success'
+          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.4', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.4.1', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -573,6 +585,8 @@ jobs:
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        defect_repair_positive_acceptance='PASS' if defect_repair_positive_valid else 'BLOCK',
+                        defect_repair_positive_evidence_sha256=defect_repair_positive_sha256 if defect_repair_positive_valid else None,
                         defect_repair_acceptance='PASS' if defect_repair_valid else 'BLOCK',
                         defect_repair_evidence_sha256=defect_repair_sha256 if defect_repair_valid else None,
                         detected_registry_acceptance='PASS' if detected_registry_valid else 'BLOCK',
