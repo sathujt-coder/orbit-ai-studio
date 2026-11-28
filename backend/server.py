@@ -24,6 +24,7 @@ import engineering_draft
 import engineering_quality
 import defect_severity
 import detected_defect_registry
+import defect_repair_tracking
 import engineering_qc
 import engineering_test_plan
 import engineering_assertion_registry
@@ -198,6 +199,7 @@ def init_db():
         regression_quality_gate.ensure_schema(c)
         defect_severity.ensure_schema(c)
         detected_defect_registry.ensure_schema(c)
+        defect_repair_tracking.ensure_schema(c)
         dependency_completion.ensure_schema(c)
         dependency_queue.ensure_schema(c)
         bound_recovery.ensure_schema(c)
@@ -892,6 +894,14 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_response(303);self.send_header('Location','/account.html');self.send_header('Cache-Control','no-store');self.end_headers();return
                 if path in ('/routing.html','/protection.html','/monitoring.html') and not provider_settings.is_admin(session['user']):
                     self.send_json(403,{'error':'Operator required'});return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/defect-repairs/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    project_planning.check_role(c,pid,actor,'read')
+                    data=defect_repair_tracking.view(c,DB_PATH,pid,jid)
+                self.send_json(200,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/regression-quality/[A-Za-z0-9_-]{1,100}',path):
                 actor,pid,_=self.auth_context
                 jid=path.rsplit('/',1)[1]
@@ -1123,6 +1133,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(status,data,headers);return
             if not isinstance(body,dict):raise ValueError('Invalid body')
             if not self.guard('POST',path,body):return
+            if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/engineering/defect-repairs/[A-Za-z0-9_-]{1,100}',path):
+                actor,pid,_=self.auth_context
+                jid=path.rsplit('/',1)[1]
+                with LOCK,db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    data=defect_repair_tracking.record(c,DB_PATH,pid,jid,actor,body,now())
+                self.send_json(201,data);return
             if re.fullmatch(r'/api/projects/[A-Za-z0-9_-]{1,100}/planning/discover',path):
                 actor,pid,_=self.auth_context
                 self.send_json(202,enqueue_planning(pid,actor,body));return

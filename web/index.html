@@ -95,6 +95,16 @@
             <div id="codingJobs" class="coding-jobs">Chưa có job.</div>
             <pre id="codingDetail" class="github-preview">Chọn một job để xem tiến độ, 2 phương án và kết quả review.</pre>
             <h3>Quality Gate · Chỉ đọc</h3><pre id="codingQuality" class="github-preview" aria-live="polite">Chưa có dữ liệu Quality Gate.</pre>
+            <h3>Defect Assignment &amp; Repair Tracking</h3>
+            <button type="button" class="btn outline" id="defectRepairRefresh">Tải trạng thái defect</button>
+            <pre id="defectRepairStatus" class="github-preview" aria-live="polite">Chọn coding job và tải trạng thái.</pre>
+            <form id="defectRepairForm">
+              <label>Defect <select id="defectRepairItem" required></select></label>
+              <label>Hành động <select id="defectRepairAction"><option>ASSIGN</option><option>REASSIGN</option><option>START</option><option>SUBMIT</option><option>REJECT</option><option>VERIFY</option><option>CLOSE</option></select></label>
+              <label>Assignee (chỉ ASSIGN/REASSIGN) <input id="defectRepairAssignee" maxlength="100"></label>
+              <label>Ghi chú <textarea id="defectRepairNote" maxlength="1000" required></textarea></label>
+              <button type="submit" class="btn outline">Xác nhận cập nhật defect</button>
+            </form>
             <pre id="codingVerification" class="github-preview">Sandbox verification: chưa có bằng chứng chạy mã. Chỉ có thể thực thi qua CLI sau xác nhận thủ công.</pre>
             <a id="codingDownload" class="btn outline hidden" download>Tải bản mã đã qua review ↧</a>
           </div>

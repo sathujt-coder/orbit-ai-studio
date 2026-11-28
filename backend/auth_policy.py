@@ -14,6 +14,8 @@ def resource_project(c,table,identifier):
 def scope(c,method,path,query='',body=None):
     body=body or {}
     if method=='GET':
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/defect-repairs/('+ID+r')',path)
+        if m:return (m[1],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/regression-quality/('+ID+r')',path)
         if m:return (m[1],'read')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/impacted-tests/('+ID+r')',path)
@@ -58,6 +60,12 @@ def scope(c,method,path,query='',body=None):
         m=re.fullmatch(r'/api/artifacts/('+ID+r')',path)
         if m:return (resource_project(c,'artifacts',m[1]),'read')
     if method=='POST':
+        m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/defect-repairs/('+ID+r')',path)
+        if m:
+            action=body.get('action')
+            if action in ('ASSIGN','REASSIGN','REJECT','VERIFY','CLOSE'):return (m[1],'approve')
+            if action in ('START','SUBMIT'):return (m[1],'write')
+            return None
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/test-plans/('+ID+r')',path)
         if m:return (m[1],'approve')
         m=re.fullmatch(r'/api/projects/('+ID+r')/engineering/quality/('+ID+r')/defects',path)

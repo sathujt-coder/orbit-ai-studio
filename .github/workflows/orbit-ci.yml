@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      defect_repair_sha256: ${{ steps.defect-repair.outputs.evidence_sha256 }}
       detected_registry_sha256: ${{ steps.detected-registry.outputs.evidence_sha256 }}
       severity_hardening_sha256: ${{ steps.severity-hardening.outputs.evidence_sha256 }}
       defect_classification_sha256: ${{ steps.defect-classification.outputs.evidence_sha256 }}
@@ -304,6 +305,15 @@ jobs:
         with:
           name: engineering-detected-registry-evidence
           path: ${{ runner.temp }}/engineering-detected-registry-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate defect assignment and repair tracking
+        id: defect-repair
+        run: python tools/engineering_defect_repair_acceptance.py "$RUNNER_TEMP/engineering-detected-registry-evidence.json" "$RUNNER_TEMP/engineering-final-regression-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.repair" "$RUNNER_TEMP/engineering-defect-repair-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-repair-evidence
+          path: ${{ runner.temp }}/engineering-defect-repair-evidence.json
           if-no-files-found: error
           retention-days: 14
       - name: Retain final regression impact evidence
@@ -517,9 +527,11 @@ jobs:
           severity_valid = bool(re.fullmatch(r'[0-9a-f]{64}',severity_sha256)) and checks['requirements-browser']=='success'
           detected_registry_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('detected_registry_sha256', '')
           detected_registry_valid = bool(re.fullmatch(r'[0-9a-f]{64}',detected_registry_sha256)) and checks['requirements-browser']=='success'
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid
+          defect_repair_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_sha256', '')
+          defect_repair_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_sha256)) and checks['requirements-browser']=='success'
+          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.3', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.4', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -561,6 +573,8 @@ jobs:
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        defect_repair_acceptance='PASS' if defect_repair_valid else 'BLOCK',
+                        defect_repair_evidence_sha256=defect_repair_sha256 if defect_repair_valid else None,
                         detected_registry_acceptance='PASS' if detected_registry_valid else 'BLOCK',
                         detected_registry_evidence_sha256=detected_registry_sha256 if detected_registry_valid else None,
                         severity_hardening_acceptance='PASS' if severity_valid else 'BLOCK',
@@ -570,7 +584,7 @@ jobs:
                         defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
                         automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4e.4' if passed else None,
+                        development_next_phase='P6.4e.5' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',

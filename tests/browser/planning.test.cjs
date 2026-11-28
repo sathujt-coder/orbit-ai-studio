@@ -815,6 +815,22 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.throws(()=>execFileSync('python',defectRegisterArgs,{stdio:'pipe',timeout:60000}),e=>e.status===1&&e.stderr.toString().includes('Execution already registered'));
   assert.deepEqual(defectRegistryRead(),defectRegistryRegistered);
   assert.equal((await get(owner,regressionGatePath)).state,'BLOCK');
+  const repairPath=engineering+'/defect-repairs/'+boundJob.job_id;
+  const repairOpen=await get(owner,repairPath);
+  assert.equal(repairOpen.state,'READY');
+  assert.equal(repairOpen.items[0].state,'OPEN');
+  const repairItem=repairOpen.items[0];
+  const repairBody=(action,v,assignee=null)=>({action,finding_id:repairItem.finding_id,registration_digest:repairItem.registration_digest,
+    expected_digest:v.evidence_digest,assignee,note:'Controlled repair tracking fixture',confirmation:action+' DEFECT '+boundJob.job_id+' '+repairItem.finding_id});
+  assert.equal((await post(viewer,vc,repairPath,repairBody('ASSIGN',repairOpen,'ci-developer'))).status(),403);
+  assert.equal((await post(reviewer,rc,repairPath,repairBody('ASSIGN',repairOpen,'ci-developer'))).status(),201);
+  const repairAssigned=await get(owner,repairPath);
+  assert.equal(repairAssigned.items[0].state,'ASSIGNED');
+  assert.equal((await post(reviewer,rc,repairPath,repairBody('ASSIGN',repairOpen,'ci-developer'))).status(),400);
+  assert.equal((await post(dev,dc,repairPath,repairBody('START',repairAssigned))).status(),201);
+  const repairStarted=await get(owner,repairPath);
+  assert.equal(repairStarted.items[0].state,'IN_PROGRESS');
+  assert.equal((await post(dev,dc,repairPath,repairBody('SUBMIT',repairStarted))).status(),400);
   const classificationFailed=detectDefects(true);
   assert.equal(classificationFailed.state,'CLASSIFIED');
   assert.equal(detectionFailed.state,'DETECTED',JSON.stringify(detectionFailed));
@@ -863,6 +879,17 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   const defectRegistryRecovered=defectRegistryRead();
   assert.equal(defectRegistryRecovered.state,'NO_CURRENT_FINDINGS');
   assert.deepEqual(defectRegistryRecovered.history,defectRegistryRegistered.history);
+  const repairRecovered=await get(owner,repairPath);
+  assert.deepEqual(repairRecovered.items,repairStarted.items);
+  assert.equal((await post(dev,dc,repairPath,repairBody('SUBMIT',repairRecovered))).status(),201);
+  const repairSubmitted=await get(owner,repairPath);
+  assert.equal(repairSubmitted.items[0].state,'REPAIR_SUBMITTED');
+  assert.equal(repairSubmitted.items[0].history.at(-1).snapshot.repair.execution_digest,registryRecovered.current_receipt.digest);
+  assert.equal((await post(reviewer,rc,repairPath,repairBody('VERIFY',repairSubmitted))).status(),400);
+  assert.equal((await post(reviewer,rc,repairPath,repairBody('REJECT',repairSubmitted))).status(),201);
+  const repairRejected=await get(owner,repairPath);
+  assert.equal(repairRejected.items[0].state,'IN_PROGRESS');
+  assert.deepEqual(await get(viewer,repairPath),repairRejected);
   const severityRecovered=severityRead();
   assert.equal(severityRecovered.state,'NO_FINDINGS');
   const classificationRecovered=detectDefects(true);
@@ -1215,6 +1242,15 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
     source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
     pending:defectRegistryPending,registered:defectRegistryRegistered,recovered:defectRegistryRecovered,
     stale:defectRegistryStale,duplicate_rejected:true,failed_gate:severityFailedGate
+  }),{flag:'wx'});
+  const repairStale=await get(owner,repairPath);
+  assert.equal(repairStale.state,'BLOCK');
+  assert.deepEqual(repairStale.items,repairRejected.items);
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.repair',JSON.stringify({
+    source_commit:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+    open:repairOpen,assigned:repairAssigned,started:repairStarted,recovered:repairRecovered,
+    submitted:repairSubmitted,rejected:repairRejected,stale:repairStale,
+    original_assertion_change_rejected:true,duplicate_rejected:true,viewer_mutation_rejected:true,early_submission_rejected:true
   }),{flag:'wx'});
   const staleHistory=readRegressionHistory();
   assert.deepEqual(staleHistory,recoveredHistory);

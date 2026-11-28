@@ -12,7 +12,7 @@ let bootstrap=null,current=null,projectId=localStorage.getItem('orbit-project')|
 let sessionCsrf='',stateGeneration=0;
 async function api(path,method='GET',body){let opts={method,headers:{'Content-Type':'application/json','X-ORBIT-UI':'1'}};if(method!=='GET')opts.headers['X-ORBIT-CSRF']=sessionCsrf;if(body!==undefined)opts.body=JSON.stringify(body);const r=await fetch(path,opts);let v;try{v=await r.json()}catch{throw Error('Máy chủ không phản hồi JSON')};if(r.status===401){location.replace('/account.html');throw Error('Phiên đã hết hạn')}if(!r.ok)throw Error(v.error||'Lỗi không xác định');return v}
 function toast(msg,isError=false){let el=document.createElement('div');el.className='toast'+(isError?' error':'');el.textContent=msg;$('toastWrap').append(el);setTimeout(()=>el.remove(),4500)}
-function setProject(pid){stateGeneration++;loading=false;projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='po';selectedAgent='po-A';$('studioLine').replaceChildren();$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;$('roleWorkspace').replaceChildren();delete $('roleWorkspace').dataset.signature;delete $('roleWorkspace').dataset.projectId;delete $('roleWorkspace').dataset.role;delete $('studioLine').dataset.projectId;$('studioLine').dataset.ready='false';$('lineFreshness').textContent='Đang tải dự án mới…';$('pipelineTrack').replaceChildren();$('agentMembers').replaceChildren();$('deptName').textContent='Đang tải phòng ban…';$('deptDescription').textContent='';$('deptDeliverable').textContent='';$('deptStatus').textContent='Chưa xác minh';$('inspect-actions-extension')?.replaceChildren();world?.updateTasks([]);artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
+function setProject(pid){clearRepair();stateGeneration++;loading=false;projectId=pid;localStorage.setItem('orbit-project',pid);current=null;selectedDept='po';selectedAgent='po-A';$('studioLine').replaceChildren();$('studioWorkflow').replaceChildren();delete $('studioWorkflow').dataset.projectId;$('roleWorkspace').replaceChildren();delete $('roleWorkspace').dataset.signature;delete $('roleWorkspace').dataset.projectId;delete $('roleWorkspace').dataset.role;delete $('studioLine').dataset.projectId;$('studioLine').dataset.ready='false';$('lineFreshness').textContent='Đang tải dự án mới…';$('pipelineTrack').replaceChildren();$('agentMembers').replaceChildren();$('deptName').textContent='Đang tải phòng ban…';$('deptDescription').textContent='';$('deptDeliverable').textContent='';$('deptStatus').textContent='Chưa xác minh';$('inspect-actions-extension')?.replaceChildren();world?.updateTasks([]);artifactFilter=null;showAll=false;githubSelected='';githubVerified='';githubExports=[];codingJobs=[];codingSelected='';codingDetail=null;codingVerifications=[];loadState();loadGithubExports();loadCodingJobs();renderSidebar()}
 async function init(){try{const session=await api('/api/auth/session');sessionCsrf=session.csrf_token;bootstrap=await api('/api/bootstrap');let ps=bootstrap.projects;if(!ps.some(p=>p.id===projectId))projectId=ps[0]?.id||'';localStorage.setItem('orbit-project',projectId);world=new Office3D($('world'),$('worldLabels'),selectDept);world.setData(bootstrap.stages,[],selectedDept);$('systemModel').textContent=bootstrap.provider.mode==='demo'?'Chế độ minh họa · DEMO':bootstrap.provider.routing_mode==='smart'?'SMART ROUTING · Model được chọn theo tác vụ':'A: '+bootstrap.provider.modelA+' · B: '+bootstrap.provider.modelB+' (chưa xác minh live)';
   const providerLink=document.getElementById('providerSettingsLink');if(providerLink)providerLink.hidden=!bootstrap.provider_admin;const monitoringLink=document.getElementById('monitoringLink');if(monitoringLink)monitoringLink.hidden=!bootstrap.provider_admin;const resourceLink=document.getElementById('resourceSettingsLink');if(resourceLink)resourceLink.hidden=!bootstrap.provider_admin;
  $('headerDate').textContent=new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'numeric',month:'long'});
@@ -101,7 +101,36 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['ready','failed','needs_revision'].includes(x.status)))await loadCodingDetail();
  if(codingSelected&&codingJobs.some(x=>x.id===codingSelected&&['queued','generating','reviewing'].includes(x.status)))await loadCodingDetail();
  }catch(err){console.warn('Coding status unavailable:',err.message)}}
+let repairView=null,repairScope=null,repairGeneration=0;
+function clearRepair(){repairGeneration++;repairView=null;repairScope=null;$('defectRepairItem')?.replaceChildren();if($('defectRepairStatus'))$('defectRepairStatus').textContent='Chọn coding job và tải trạng thái.';}
+async function loadRepair(){
+ const pid=projectId,jid=codingSelected,generation=++repairGeneration;
+ if(!pid||!jid){clearRepair();return;}
+ const path='/api/projects/'+encodeURIComponent(pid)+'/engineering/defect-repairs/'+encodeURIComponent(jid);
+ try{
+  const v=await api(path);if(generation!==repairGeneration||pid!==projectId||jid!==codingSelected)return;
+  repairView=v;repairScope={pid,jid,path};
+  const select=$('defectRepairItem'),old=select.value;select.replaceChildren();
+  for(const x of v.items||[]){if(!x.latest)continue;const option=document.createElement('option');option.value=x.registration_digest;option.textContent=x.severity+' · '+x.state+' · '+x.finding_id.slice(0,12);select.append(option);}
+  if([...select.options].some(x=>x.value===old))select.value=old;
+  $('defectRepairStatus').textContent=[v.state+' · '+v.registry_state,...(v.items||[]).map(x=>x.finding_id+' · '+x.state+' · '+(x.assignee||'—')+'\n'+x.history.map(e=>e.snapshot.action+' '+e.snapshot.actor+' · '+e.snapshot.note).join('\n'))].join('\n');
+ }catch(e){if(generation===repairGeneration){clearRepair();toast(e.message,true);}}
+}
+$('defectRepairRefresh')?.addEventListener('click',loadRepair);
+$('defectRepairForm')?.addEventListener('submit',async e=>{
+ e.preventDefault();
+ const v=repairView,scope=repairScope;
+ if(!v||v.state!=='READY'||!scope||scope.pid!==projectId||scope.jid!==codingSelected){toast('Tải lại trạng thái defect trước.',true);return;}
+ const item=v.items.find(x=>x.registration_digest===$('defectRepairItem').value&&x.latest);
+ if(!item)return;
+ const action=$('defectRepairAction').value,confirmation=action+' DEFECT '+scope.jid+' '+item.finding_id;
+ if(!window.confirm(confirmation))return;
+ try{await api(scope.path,'POST',{action,finding_id:item.finding_id,registration_digest:item.registration_digest,expected_digest:v.evidence_digest,assignee:['ASSIGN','REASSIGN'].includes(action)?$('defectRepairAssignee').value.trim():null,note:$('defectRepairNote').value,confirmation});
+ if(scope.pid===projectId&&scope.jid===codingSelected){$('defectRepairNote').value='';await loadRepair();}}
+ catch(err){toast(err.message,true);}
+});
 async function loadCodingDetail(){if(!codingSelected)return;
+ if(repairScope&&(repairScope.pid!==projectId||repairScope.jid!==codingSelected))clearRepair();
  try{const id=codingSelected;const detail=await api('/api/coding/'+encodeURIComponent(id));const v=await api('/api/coding/'+encodeURIComponent(id)+'/verifications');const quality=await api('/api/coding/'+encodeURIComponent(id)+'/quality');if(id!==codingSelected)return;codingDetail=detail;codingQuality=quality;codingVerifications=v.verifications||[];renderCoding()}
  catch(err){toast(err.message,true)}}
 function renderCoding(){if(!bootstrap)return;
