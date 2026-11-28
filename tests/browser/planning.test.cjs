@@ -748,6 +748,12 @@ test('P6.2a planning WBS, approval, RBAC and stale PRD via real Chromium/HTTP',a
   assert.deepEqual(missingHistory.execution_history,registrySecond.history);
   assert.deepEqual(missingHistory.priority_history,[]);
   assert.equal(missingHistory.priority_audit_count,0);
+  // Start from the untouched inventory, before the deliberately changed assertion
+  // below. Its unresolved defect must not be deleted to manufacture a PASS.
+  const retestEvidence=JSON.parse(execFileSync('python',['tests/browser/defect_retest_quality_fixture.py',process.env.AI_COMPANY_DB,pid,boundJob.job_id],{stdio:'pipe',timeout:480000}).toString());
+  assert.equal(retestEvidence.live_unchanged,true);
+  assert.equal(retestEvidence.points.final.gate.state,'RETEST_QUALITY_PASS');
+  fsSandbox.writeFileSync(process.env.ORBIT_FINAL_REGRESSION_LIFECYCLE+'.retest-quality',JSON.stringify(retestEvidence),{flag:'wx'});
   // Final lifecycle: explicitly revise a single expected value, execute real
   // Docker assertions, preserve the BLOCK receipt, then approve and rerun.
   const badCases=executableBody.cases.map(t=>t.kind==='POSITIVE'

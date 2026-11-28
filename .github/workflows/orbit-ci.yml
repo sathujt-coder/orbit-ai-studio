@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Cumulative real Git/Docker and dependency evidence checks need CI headroom.
     # Keep individual test, HTTP, inference and Docker deadlines unchanged.
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -145,6 +145,7 @@ jobs:
       regression_priority_evidence_sha256: ${{ steps.regression-priority-evidence.outputs.evidence_sha256 }}
       regression_gate_evidence_sha256: ${{ steps.regression-gate-evidence.outputs.evidence_sha256 }}
       final_regression_evidence_sha256: ${{ steps.final-regression-evidence.outputs.evidence_sha256 }}
+      defect_retest_quality_sha256: ${{ steps.defect-retest-quality.outputs.evidence_sha256 }}
       defect_repair_positive_sha256: ${{ steps.defect-repair-positive.outputs.evidence_sha256 }}
       defect_repair_sha256: ${{ steps.defect-repair.outputs.evidence_sha256 }}
       detected_registry_sha256: ${{ steps.detected-registry.outputs.evidence_sha256 }}
@@ -326,6 +327,15 @@ jobs:
           path: ${{ runner.temp }}/engineering-defect-repair-positive-evidence.json
           if-no-files-found: error
           retention-days: 14
+      - name: Validate mandatory trusted Docker retest lifecycle
+        id: defect-retest-quality
+        run: python tools/engineering_defect_retest_quality_acceptance.py "$RUNNER_TEMP/engineering-defect-repair-positive-evidence.json" "$RUNNER_TEMP/engineering-regression-lifecycle-evidence.json.retest-quality" "$RUNNER_TEMP/engineering-defect-retest-quality-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engineering-defect-retest-quality-evidence
+          path: ${{ runner.temp }}/engineering-defect-retest-quality-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain final regression impact evidence
         uses: actions/upload-artifact@v4
         with:
@@ -467,13 +477,20 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4d.6 — Final regression impact analysis acceptance
+    name: P6.4e.5d — Trusted Docker retest system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Download mandatory retest evidence
+        if: needs.requirements-browser.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: engineering-defect-retest-quality-evidence
+          path: mandatory-retest
       - name: Record Studio-specific acceptance
+        if: always()
         env:
           STUDIO_NEEDS: ${{ toJSON(needs) }}
         run: |
@@ -541,9 +558,24 @@ jobs:
           defect_repair_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_sha256)) and checks['requirements-browser']=='success'
           defect_repair_positive_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_repair_positive_sha256', '')
           defect_repair_positive_valid = bool(re.fullmatch(r'[0-9a-f]{64}',defect_repair_positive_sha256)) and checks['requirements-browser']=='success'
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid
+          import hashlib
+          from pathlib import Path
+          retest_sha256 = actual.get('requirements-browser', {}).get('outputs', {}).get('defect_retest_quality_sha256', '')
+          retest_valid = False
+          try:
+              blob = Path('mandatory-retest/engineering-defect-retest-quality-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              retest_valid = (hashlib.sha256(blob).hexdigest() == retest_sha256
+                  and checks['requirements-browser']=='success' and ev['gate']=='PASS'
+                  and ev['schema']=='orbit.defect-retest-quality-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['positive_repair_sha256']==defect_repair_positive_sha256)
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.4.1', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.5d', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -585,6 +617,8 @@ jobs:
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        defect_retest_quality_acceptance='PASS' if retest_valid else 'BLOCK',
+                        defect_retest_quality_evidence_sha256=retest_sha256 if retest_valid else None,
                         defect_repair_positive_acceptance='PASS' if defect_repair_positive_valid else 'BLOCK',
                         defect_repair_positive_evidence_sha256=defect_repair_positive_sha256 if defect_repair_positive_valid else None,
                         defect_repair_acceptance='PASS' if defect_repair_valid else 'BLOCK',
@@ -598,7 +632,7 @@ jobs:
                         defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
                         automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4e.5' if passed else None,
+                        development_next_phase='P6.4e.6' if passed else None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
