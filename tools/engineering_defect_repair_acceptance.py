@@ -10,7 +10,7 @@ def require(ok):
     if not ok:raise ValueError('Invalid repair tracking lifecycle')
 def main():
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(RepairTrackingTests))
-    require(result.wasSuccessful() and result.testsRun==16 and not result.skipped)
+    require(result.wasSuccessful() and result.testsRun==18 and not result.skipped)
     raw=Path(sys.argv[1]).read_bytes();prior=json.loads(raw)
     regression_raw=Path(sys.argv[2]).read_bytes();reg=json.loads(regression_raw)
     v=json.loads(Path(sys.argv[3]).read_bytes())

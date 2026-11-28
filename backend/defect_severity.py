@@ -62,10 +62,15 @@ def _attest(c,db,pid,jid,actor,finding_id,expected_digest,impact,rationale):
     return digest
 
 def view(c,db,pid,jid,submitted=None):
+    return _severity_view(c,pid,jid,lambda:current(c,db,pid,jid,submitted))
+
+def _severity_view(c,pid,jid,read_current):
+    """Internal evaluator: callers must supply a freshly validated detection in this transaction."""
     out=dict(schema='orbit.defect-severity.v2',policy=POLICY,project_id=pid,job_id=jid,
              state='BLOCK',items=[],detection_digest=None,quality_gate_override=False,**FLAGS)
     try:
-        v=current(c,db,pid,jid,submitted)
+        if not c.in_transaction:raise ValueError('Consistent transaction required')
+        v=read_current()
         result=base.classify(pid,jid,v)
         if result['state']=='BLOCK':raise ValueError('Invalid detection')
         items=[]

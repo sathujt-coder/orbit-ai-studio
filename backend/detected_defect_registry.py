@@ -60,7 +60,7 @@ def history(c,pid,jid):
 def current(c,db,pid,jid):
     if not c.in_transaction:raise ValueError('Consistent transaction required')
     d=severity.current(c,db,pid,jid)
-    s=severity.view(c,db,pid,jid,submitted=d)
+    s=severity._severity_view(c,pid,jid,lambda:d)
     if s['state']=='BLOCK' or s['detection_digest']!=d['evidence_digest']:
         raise ValueError('Current authoritative evidence required')
     if s['quality_gate_override'] is not False or any(s.get(k) is not False for k in FLAGS):
@@ -102,6 +102,11 @@ def register(c,db,pid,jid,actor,expected_severity_digest,confirmation):
         c.execute('RELEASE detected_defect_register')
 
 def view(c,db,pid,jid):
+    return _snapshot(c,db,pid,jid)[0]
+
+def _snapshot(c,db,pid,jid):
+    """Return the registry view and the exact authoritative detection used to build it."""
+    detection=None
     out=dict(schema='orbit.detected-defect-registry.v1',project_id=pid,job_id=jid,state='BLOCK',
              history=[],current_finding_ids=[],unregistered_finding_ids=[],severity_digest=None,
              automatic_closure=False,quality_gate_override=False,**FLAGS)
@@ -116,7 +121,8 @@ def view(c,db,pid,jid):
             x['snapshot']['severity_digest']==s['evidence_digest'] for x in chains.get(did,[]))]
         out.update(state='REGISTRATION_REQUIRED' if pending else ('REGISTERED' if ids else 'NO_CURRENT_FINDINGS'),
                    current_finding_ids=ids,unregistered_finding_ids=pending,severity_digest=s['evidence_digest'])
+        detection=d
     except (ValueError,KeyError,TypeError,AttributeError,IndexError,sqlite3.Error,PermissionError,OSError):
         pass
     out['evidence_digest']=pp.digest(out)
-    return out
+    return out,detection

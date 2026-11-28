@@ -93,6 +93,24 @@ class RepairTrackingTests(unittest.TestCase):
         v=self.view();self.assertEqual(v['state'],'BLOCK')
         self.assertEqual(v['items'][0]['state'],'IN_PROGRESS')
         with self.assertRaises(ValueError):self.act('SUBMIT','dev')
+    def test_single_authoritative_detection_per_view(self):
+        detect=t.registry.severity.detection
+        with patch.object(detect,'view',wraps=detect.view) as checked:
+            v=self.view()
+            self.assertEqual(v['state'],'READY')
+            self.assertEqual(checked.call_count,1)
+    def test_early_submit_rejects_without_rechecking_regression(self):
+        self.start()
+        digest=self.view()['evidence_digest']
+        detect=t.registry.severity.detection
+        with patch.object(detect,'view',wraps=detect.view) as checked, \
+             patch.object(t.regression,'view') as gate, patch.object(t.runs,'history') as history:
+            with self.assertRaisesRegex(ValueError,'Fresh authoritative execution required'):
+                self.act('SUBMIT','dev',digest=digest)
+            self.assertEqual(checked.call_count,1)
+            gate.assert_not_called()
+            history.assert_not_called()
+        self.assertEqual(self.view()['items'][0]['state'],'IN_PROGRESS')
     def test_invalid_transition(self):
         with self.assertRaises(ValueError):self.act('START','dev')
     def test_scope(self):

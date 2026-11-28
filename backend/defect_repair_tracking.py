@@ -82,6 +82,10 @@ def history(c,pid,jid,registered):
     return result
 
 def view(c,db,pid,jid):
+    return _snapshot(c,db,pid,jid)[0]
+
+def _snapshot(c,db,pid,jid):
+    detection=None
     if not c.in_transaction:raise ValueError('Consistent transaction required')
     out=dict(schema='orbit.defect-repair-tracking.v1',project_id=pid,job_id=jid,state='BLOCK',
              registry_digest=None,registry_state='BLOCK',items=[],current_execution=None,
@@ -94,21 +98,27 @@ def view(c,db,pid,jid):
                 out['items'].append(dict(finding_id=did,registration_digest=rd,latest=x==chain[-1],
                     severity=x['snapshot']['classification']['severity'],state=last['state'] if last else 'OPEN',
                     assignee=last['assignee'] if last else None,history=ev))
-        v=registry.view(c,db,pid,jid)
+        v,d=registry._snapshot(c,db,pid,jid)
         out.update(registry_digest=v['evidence_digest'],registry_state=v['state'])
         if v['state'] not in ('REGISTERED','NO_CURRENT_FINDINGS'):raise ValueError('Registry not current')
-        d,_=registry.current(c,db,pid,jid)
         out.update(state='READY',current_execution=d['receipt_digest'])
+        detection=d
     except (ValueError,KeyError,TypeError,AttributeError,IndexError,sqlite3.Error,PermissionError,OSError):
         pass
     out['evidence_digest']=pp.digest(out)
-    return out
+    return out,detection
 
-def repair_evidence(c,db,pid,jid,original,*,verify=False):
-    d,_=registry.current(c,db,pid,jid)
+def repair_evidence(c,db,pid,jid,original,*,verify=False,_current_detection=None):
+    # Only the internal record path supplies this freshly validated transaction-local value.
+    d=_current_detection
+    if d is None:d,_=registry.current(c,db,pid,jid)
+    if d['receipt_digest']==original['execution_digest']:
+        raise ValueError('Fresh authoritative execution required')
     g=regression.view(c,db,pid,jid)
-    run=runs.view(c,db,pid,jid)
-    receipt=run['current_receipt']
+    # Detection and regression have already validated the current source and run.
+    # Load the immutable chain rather than recomputing the current Git source again.
+    chain=runs.history(c,pid,jid)
+    receipt=chain[-1] if chain else None
     if (not receipt or receipt['digest']!=d['receipt_digest'] or
         receipt['digest']==original['execution_digest'] or
         g['receipts'].get('execution')!=receipt['digest'] or
@@ -141,7 +151,7 @@ def record(c,db,pid,jid,actor,body,stamp):
     c.execute('SAVEPOINT defect_repair_record')
     try:
         pp.check_role(c,pid,actor,role)
-        v=view(c,db,pid,jid)
+        v,detection=_snapshot(c,db,pid,jid)
         if v['state']!='READY' or v['evidence_digest']!=body['expected_digest']:
             raise ValueError('Stale repair view or registry')
         item=next((x for x in v['items'] if x['finding_id']==did and x['registration_digest']==rd and x['latest']),None)
@@ -157,10 +167,10 @@ def record(c,db,pid,jid,actor,body,stamp):
         if action not in REVIEW and actor!=assignee:raise PermissionError('Assigned developer required')
         original=registry.history(c,pid,jid)[did][-1]['snapshot']
         evidence=None
-        if action=='SUBMIT':evidence=repair_evidence(c,db,pid,jid,original)
+        if action=='SUBMIT':evidence=repair_evidence(c,db,pid,jid,original,_current_detection=detection)
         if action in ('VERIFY','CLOSE','REJECT'):
             evidence=prev['repair']
-            if action!='REJECT' and repair_evidence(c,db,pid,jid,original,verify=True)!=evidence:
+            if action!='REJECT' and repair_evidence(c,db,pid,jid,original,verify=True,_current_detection=detection)!=evidence:
                 raise ValueError('Submitted repair evidence is stale')
             if action=='CLOSE' and actor==prev['actor']:
                 raise PermissionError('Independent closure reviewer required')
