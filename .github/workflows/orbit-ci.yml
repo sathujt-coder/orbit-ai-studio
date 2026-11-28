@@ -477,12 +477,35 @@ jobs:
           if [ -f "$RUNNER_TEMP/requirements-browser.pid" ]; then kill "$(cat "$RUNNER_TEMP/requirements-browser.pid")" || true; fi
 
   studio-system-acceptance:
-    name: P6.4e.5d — Trusted Docker retest system acceptance
+    name: P6.4e.6 — Final automated defect system acceptance
     needs: [validate, web-e2e, requirements-browser, web-typescript-docker, react-offline-smoke, p4-fixture-e2e, tls-container-smoke, proxy-container-smoke, stress-fixture, planning-system-acceptance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download all engineering evidence for independent final acceptance
+        if: needs.requirements-browser.result == 'success' && needs.validate.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engineering-*-evidence
+          merge-multiple: true
+          path: final-defect-input
+      - name: Verify final automated defect acceptance
+        id: final-defect
+        if: needs.requirements-browser.result == 'success' && needs.validate.result == 'success'
+        env:
+          STUDIO_NEEDS: ${{ toJSON(needs) }}
+        run: python tools/engineering_final_defect_acceptance.py final-defect-input engineering-final-defect-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: steps.final-defect.outcome == 'success'
+        with:
+          name: engineering-final-defect-evidence
+          path: engineering-final-defect-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Download mandatory retest evidence
         if: needs.requirements-browser.result == 'success'
         uses: actions/download-artifact@v4
@@ -493,6 +516,7 @@ jobs:
         if: always()
         env:
           STUDIO_NEEDS: ${{ toJSON(needs) }}
+          FINAL_DEFECT_SHA256: ${{ steps.final-defect.outputs.evidence_sha256 }}
         run: |
           python - <<'PY'
           import json, os, re
@@ -573,9 +597,24 @@ jobs:
                   and ev['positive_repair_sha256']==defect_repair_positive_sha256)
           except (OSError, ValueError, KeyError, TypeError):
               pass
-          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid
+          final_defect_sha256 = os.environ.get('FINAL_DEFECT_SHA256','')
+          final_defect_valid = False
+          final_defect_chain = None
+          try:
+              blob = Path('engineering-final-defect-evidence.json').read_bytes()
+              ev = json.loads(blob)
+              final_defect_valid = (hashlib.sha256(blob).hexdigest()==final_defect_sha256
+                  and ev['gate']=='PASS' and ev['schema']=='orbit.final-automated-defect-acceptance.v1'
+                  and ev['source_commit']==os.environ['GITHUB_SHA'] and ev['run_id']==os.environ['GITHUB_RUN_ID']
+                  and ev['run_attempt']==os.environ['GITHUB_RUN_ATTEMPT']
+                  and ev['evidence_sha256']['retest']==retest_sha256
+                  and ev['regression_chain_sha256']==final_chain_sha256)
+              if final_defect_valid: final_defect_chain = ev['evidence_chain_sha256']
+          except (OSError, ValueError, KeyError, TypeError):
+              pass
+          passed = regression_passed and defect_valid and defect_integration_valid and classification_valid and severity_valid and detected_registry_valid and defect_repair_valid and defect_repair_positive_valid and retest_valid and final_defect_valid
           report = dict(schema='orbit.studio-system-acceptance.v1',
-                        milestone='P6.4e.5d', source_commit=os.environ['GITHUB_SHA'],
+                        milestone='P6.4e.6', source_commit=os.environ['GITHUB_SHA'],
                         run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                         checks=checks, dependency_integration_acceptance='PASS' if evidence_valid else 'BLOCK',
                         dependency_evidence_sha256=evidence_sha256 if evidence_valid else None,
@@ -617,6 +656,10 @@ jobs:
                         final_regression_evidence_sha256=final_regression_sha256 if final_regression_valid else None,
                         final_regression_chain_sha256=final_chain_sha256 if final_regression_valid else None,
                         automated_defect_detection_acceptance='PASS' if defect_valid and defect_integration_valid else 'BLOCK',
+                        final_automated_defect_acceptance='PASS' if final_defect_valid else 'BLOCK',
+                        final_automated_defect_evidence_sha256=final_defect_sha256 if final_defect_valid else None,
+                        final_automated_defect_chain_sha256=final_defect_chain,
+                        automated_defect_detection_complete=passed,
                         defect_retest_quality_acceptance='PASS' if retest_valid else 'BLOCK',
                         defect_retest_quality_evidence_sha256=retest_sha256 if retest_valid else None,
                         defect_repair_positive_acceptance='PASS' if defect_repair_positive_valid else 'BLOCK',
@@ -632,7 +675,7 @@ jobs:
                         defect_integration_evidence_sha256=defect_integration_sha256 if defect_integration_valid else None,
                         automated_defect_detection_evidence_sha256=defect_sha256 if defect_valid else None,
                         system_acceptance='PASS' if passed else 'BLOCK',
-                        development_next_phase='P6.4e.6' if passed else None,
+                        development_next_phase=None,
                         engineering_phase_complete=engineering_passed,
                         development_scope='development_only',
                         transport='isolated_synthetic_inference_and_sandbox_fixture',
