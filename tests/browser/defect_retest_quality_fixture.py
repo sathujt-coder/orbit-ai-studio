@@ -4,6 +4,7 @@ from defect_repair_positive_fixture import (closing, connect, capture, snapshots
     tempfile, json)
 import defect_retest_quality as q
 import security_evidence as security
+import security_threat_model as threat
 
 def point(db,pid,jid):
     with closing(connect(db)) as c:
@@ -54,7 +55,7 @@ def main():
             require(not t.registry.history(c,pid,jid),'Clean registry baseline required')
             c.rollback()
             closer=c.execute("SELECT m.user_id FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id WHERE m.project_id=? AND m.role='owner' AND u.active=1",(pid,)).fetchone()[0]
-        fail_case=cases[0]['id'];points={};executions=[];security_points={}
+        fail_case=cases[0]['id'];points={};executions=[];security_points={};threat_points={}
         def execute(fail=False):
             result=run(db,pid,jid,source,m,version+len(executions),fail_case if fail else None)
             require(result['report']['gate']==('BLOCK' if fail else 'PASS'),'Unexpected real Docker result')
@@ -69,6 +70,10 @@ def main():
                 require(sec['state']==('BLOCK' if key=='stale' else 'SECURITY_EVIDENCE_READY')
                     and sec['security_gate']=='BLOCK','Unexpected security consolidation state')
                 security_points[key]=sec
+                model=threat.evaluate(pid,jid,sec)
+                require(model['state']==('BLOCK' if key=='stale' else 'THREAT_MODEL_READY')
+                    and model['security_gate']=='BLOCK' and model['requirements_approved'] is False,'Unexpected threat model state')
+                threat_points[key]=model
         execute(True);r1=register(db,pid,jid);mark('open','BLOCK')
         command(db,pid,jid,r1,'ASSIGN','ci-reviewer','ci-developer')
         command(db,pid,jid,r1,'START','ci-developer')
@@ -110,6 +115,6 @@ def main():
             require(snapshots.capture(c,pid,lambda c,p:capture(c,p,jid))==before,'Live evidence modified')
         print(json.dumps(dict(schema='orbit.defect-retest-quality-browser.v1',source_commit=os.environ['GITHUB_SHA'],
             run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],project_id=pid,job_id=jid,
-            registrations=[r1,r2],executions=executions,points=points,reopen_race=reopen,security_points=security_points,
+            registrations=[r1,r2],executions=executions,points=points,reopen_race=reopen,security_points=security_points,threat_points=threat_points,
             same_run_rejected=True,failed_verify_rejected=True,stale_digest_rejected=True,live_unchanged=True),sort_keys=True))
 if __name__=='__main__':main()

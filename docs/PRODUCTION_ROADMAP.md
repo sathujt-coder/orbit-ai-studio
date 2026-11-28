@@ -234,5 +234,10 @@ CI #188, HEAD 4eaf7bf, run 46096666758, all 11 jobs PASS; 677/22/3 tests and 18/
 ORBIT CI #193, HEAD f01d72b, run 46106980886, all 11 jobs success; 711 Python tests (4 separate real Docker probes), 23 General Browser, 3 Planning Chromium, 18/18 dependency checkpoints. Mandatory final defect artifact 15248088614. Model inference #160 and qualification #107 failed independently; no release authority.
 
 ## P6.5 — Automated Security Engineering (development only)
-### P6.5a — Security Evidence Consolidation (pending CI)
+### P6.5a — Security Evidence Consolidation (development CI PASS)
 See docs/P6.5a-security-evidence.md. Read-only current source/receipt/retest/sandbox-policy contract, scoped HTTP RBAC/CSRF, manual dashboard, mandatory trusted Docker and HTTP evidence. Consolidation READY is not security PASS; all unassessed security categories and production release remain BLOCK. No changes to prior gates or model parameters. P6.5b only after CI PASS.
+
+CI #194, HEAD 2f85ed8, run 46115997166, 11/11 jobs success, 725 Python tests (4 separate Docker probes), 24 General Browser, 3 Planning Chromium, 18/18 dependency checkpoints; 33 ZIP and 28 Studio digest references independently matched. Security evidence 15251991718 PASS; security gate BLOCK.
+
+### P6.5b — Threat Modeling & Security Requirements (pending CI)
+See docs/P6.5b-threat-model.md. Deterministic architecture baseline, exact source binding, 7 assets, 6 boundaries, 16 threats/requirements with all six STRIDE categories; no candidate-specific analysis, approval or security clearance. Read-only dashboard/API, mandatory CI evidence, existing P6.4/P6.5a gates unchanged.

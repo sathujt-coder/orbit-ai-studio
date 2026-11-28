@@ -104,6 +104,7 @@ async function loadCodingJobs(){if(!projectId)return;const pid=projectId;
 let securityGeneration=0;
 function clearSecurityEvidence(){
  securityGeneration++;
+ clearThreatModel();
  $('securityEvidenceStatus').textContent='Chưa xác minh · Security gate BLOCK';
 }
 async function loadSecurityEvidence(){
@@ -126,6 +127,33 @@ async function loadSecurityEvidence(){
  }catch(e){if(live()){$('securityEvidenceStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
 }
 $('securityEvidenceRefresh').addEventListener('click',loadSecurityEvidence);
+let threatGeneration=0;
+function clearThreatModel(){
+ threatGeneration++;
+ $('threatModelStatus').textContent='Chưa xác minh · Security gate BLOCK';
+}
+async function loadThreatModel(){
+ const pid=projectId,jid=codingSelected;clearThreatModel();
+ if(!pid||!jid)return;
+ const generation=threatGeneration,live=()=>generation===threatGeneration&&pid===projectId&&jid===codingSelected;
+ $('threatModelStatus').textContent='Đang tải mô hình nguy cơ · Security gate BLOCK';
+ try{
+  const v=await api('/api/projects/'+encodeURIComponent(pid)+'/engineering/threat-model/'+encodeURIComponent(jid));
+  if(!live())return;
+  if(v.schema!=='orbit.security-threat-model.v1'||v.project_id!==pid||v.job_id!==jid||
+     !/^[0-9a-f]{64}$/.test(v.evidence_digest)||v.security_gate!=='BLOCK'||v.requirements_approved!==false||
+     !['BLOCK','THREAT_MODEL_READY'].includes(v.state)||
+     !Array.isArray(v.threats)||!Array.isArray(v.requirements)||
+     v.requirements.some(x=>x.verification_status!=='NOT_VERIFIED'||x.mandatory!==true))throw Error('Invalid threat model');
+  $('threatModelStatus').textContent=[v.state,'Security gate: BLOCK · Requirements NOT APPROVED',
+   'Catalog: '+v.catalog_digest,'Candidate: '+(v.source?.candidate_digest||'—'),
+   'Security evidence: '+(v.source?.security_evidence_digest||'—'),
+   ...v.threats.map(x=>x.id+' · '+x.stride+' · '+x.severity+' · '+x.description),
+   ...v.requirements.map(x=>x.id+' · '+x.verification_status+' · '+x.requirement+' · '+x.verification),
+   'Evidence: '+v.evidence_digest,'Baseline architecture only · Không phải security clearance'].join('\n');
+ }catch(e){if(live()){$('threatModelStatus').textContent='Không thể xác minh · Security gate BLOCK';toast(e.message,true);}}
+}
+$('threatModelRefresh').addEventListener('click',loadThreatModel);
 let repairView=null,retestView=null,repairScope=null,repairGeneration=0,repairBusy=false;
 const repairTransitions={OPEN:['ASSIGN'],ASSIGNED:['REASSIGN','START'],IN_PROGRESS:['REASSIGN','SUBMIT'],
  REPAIR_SUBMITTED:['REJECT','VERIFY'],VERIFIED:['REJECT','CLOSE'],CLOSED:['REOPEN']};
