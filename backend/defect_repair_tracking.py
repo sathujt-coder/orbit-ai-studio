@@ -13,9 +13,9 @@ TRANSITIONS={
     ('IN_PROGRESS','REASSIGN'):'ASSIGNED', ('ASSIGNED','START'):'IN_PROGRESS',
     ('IN_PROGRESS','SUBMIT'):'REPAIR_SUBMITTED', ('REPAIR_SUBMITTED','REJECT'):'IN_PROGRESS',
     ('REPAIR_SUBMITTED','VERIFY'):'VERIFIED', ('VERIFIED','CLOSE'):'CLOSED',
-    ('VERIFIED','REJECT'):'IN_PROGRESS',
+    ('VERIFIED','REJECT'):'IN_PROGRESS', ('CLOSED','REOPEN'):'ASSIGNED',
 }
-REVIEW={'ASSIGN','REASSIGN','REJECT','VERIFY','CLOSE'}
+REVIEW={'ASSIGN','REASSIGN','REJECT','VERIFY','CLOSE','REOPEN'}
 def permission(action):
     if not isinstance(action,str) or action not in {a for _,a in TRANSITIONS}:
         raise ValueError('Unknown repair action')
@@ -37,6 +37,22 @@ def ensure_schema(c):
         (project_id=NEW.project_id AND job_id=NEW.job_id AND finding_id=NEW.finding_id
         AND registration_digest=NEW.registration_digest AND version=NEW.version))
       BEGIN SELECT RAISE(ABORT,'Duplicate repair receipt'); END""")
+
+def previous_close(chain):
+    return next((x['snapshot'] for x in reversed(chain) if x['snapshot']['action']=='CLOSE'),None)
+
+def require_newer_retest(c,pid,jid,chain,evidence):
+    """A reopened occurrence must use a durable execution after its last closure."""
+    closed=previous_close(chain)
+    if closed is None:return
+    prior=closed['repair']['execution_digest']
+    if prior==evidence['execution_digest']:
+        raise ValueError('Reopened defect requires execution newer than last closure')
+    receipts=runs.history(c,pid,jid)
+    order={r['digest']:i for i,r in enumerate(receipts)}
+    if (prior not in order or evidence['execution_digest'] not in order
+        or order[evidence['execution_digest']]<=order[prior]):
+        raise ValueError('Reopened defect requires execution newer than last closure')
 
 def history(c,pid,jid,registered):
     bindings={x['digest']:x['snapshot'] for chain in registered.values() for x in chain}
@@ -74,6 +90,9 @@ def history(c,pid,jid,registered):
                 or not all(runs.hex_digest(x) for x in e['repair'].values())
                 or e['repair']['execution_digest']==bindings[rd]['execution_digest']):
                 raise ValueError('Invalid repair evidence')
+            closed=previous_close(chain)
+            if closed and e['repair']['execution_digest']==closed['repair']['execution_digest']:
+                raise ValueError('Reopened repair reused closed execution')
         elif action in ('VERIFY','CLOSE','REJECT'):
             if not prev or e['repair']!=prev['repair']:
                 raise ValueError('Repair evidence changed')
@@ -154,8 +173,10 @@ def record(c,db,pid,jid,actor,body,stamp):
         v,detection=_snapshot(c,db,pid,jid)
         if v['state']!='READY' or v['evidence_digest']!=body['expected_digest']:
             raise ValueError('Stale repair view or registry')
-        item=next((x for x in v['items'] if x['finding_id']==did and x['registration_digest']==rd and x['latest']),None)
-        if not item:raise ValueError('Current registered defect required')
+        # A historical occurrence is not an alias of the latest registration.
+        # Every operation remains bound to its own immutable registration digest.
+        item=next((x for x in v['items'] if x['finding_id']==did and x['registration_digest']==rd),None)
+        if not item:raise ValueError('Exact registered defect occurrence required')
         state=TRANSITIONS.get((item['state'],action))
         if not state:raise ValueError('Invalid repair transition')
         chain=item['history']; prev=chain[-1]['snapshot'] if chain else None
@@ -165,13 +186,17 @@ def record(c,db,pid,jid,actor,body,stamp):
         if action in ('ASSIGN','REASSIGN','START','SUBMIT'):pp.check_role(c,pid,assignee,'write')
         if action in REVIEW and actor==assignee:raise PermissionError('Independent reviewer required')
         if action not in REVIEW and actor!=assignee:raise PermissionError('Assigned developer required')
-        original=registry.history(c,pid,jid)[did][-1]['snapshot']
+        original=next(x['snapshot'] for x in registry.history(c,pid,jid)[did] if x['digest']==rd)
         evidence=None
-        if action=='SUBMIT':evidence=repair_evidence(c,db,pid,jid,original,_current_detection=detection)
+        if action=='SUBMIT':
+            evidence=repair_evidence(c,db,pid,jid,original,_current_detection=detection)
+            require_newer_retest(c,pid,jid,chain,evidence)
         if action in ('VERIFY','CLOSE','REJECT'):
             evidence=prev['repair']
-            if action!='REJECT' and repair_evidence(c,db,pid,jid,original,verify=True,_current_detection=detection)!=evidence:
-                raise ValueError('Submitted repair evidence is stale')
+            if action!='REJECT':
+                if repair_evidence(c,db,pid,jid,original,verify=True,_current_detection=detection)!=evidence:
+                    raise ValueError('Submitted repair evidence is stale')
+                require_newer_retest(c,pid,jid,chain,evidence)
             if action=='CLOSE' and actor==prev['actor']:
                 raise PermissionError('Independent closure reviewer required')
         e=dict(schema=SCHEMA,project_id=pid,job_id=jid,finding_id=did,registration_digest=rd,

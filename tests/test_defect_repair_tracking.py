@@ -1,4 +1,4 @@
-import sqlite3,unittest
+import copy,sqlite3,unittest
 from unittest.mock import patch
 import defect_repair_tracking as t
 import test_detected_defect_registry as fixtures
@@ -111,6 +111,105 @@ class RepairTrackingTests(unittest.TestCase):
             gate.assert_not_called()
             history.assert_not_called()
         self.assertEqual(self.view()['items'][0]['state'],'IN_PROGRESS')
+    def close_fixture(self):
+        self.start()
+        with patch.object(t,'repair_evidence',return_value=self.evidence()):
+            self.act('SUBMIT','dev');self.act('VERIFY','qa');self.act('CLOSE','closer')
+        return self.view()['items'][0]['history']
+    def second_registration(self):
+        # The detection boundary in this unit fixture is mocked. Rehash a
+        # distinct authoritative execution for the same finding identity.
+        severity=self.f.f
+        v=copy.deepcopy(severity.v)
+        v['receipt_digest']='9'*64
+        for finding in v['findings']:finding['receipt_digest']=v['receipt_digest']
+        v.pop('evidence_digest')
+        v['evidence_digest']=t.pp.digest(v)
+        severity.v=v
+        return self.f.register()[0]
+    def test_reopen_preserves_closed_prefix(self):
+        old=self.close_fixture()
+        receipt=self.act('REOPEN','qa')
+        item=self.view()['items'][0]
+        self.assertEqual(item['state'],'ASSIGNED')
+        self.assertEqual(item['history'][:-1],old)
+        self.assertEqual(receipt['snapshot']['previous_digest'],old[-1]['digest'])
+        self.assertIsNone(receipt['snapshot']['repair'])
+        self.assertEqual(item['assignee'],'dev')
+    def test_reopen_rbac_and_confirmation(self):
+        self.close_fixture()
+        for actor in ('dev','viewer'):
+            with self.assertRaises(PermissionError):self.act('REOPEN',actor)
+        with self.assertRaises(PermissionError):self.act('REOPEN','qa',confirmation='yes')
+        self.assertEqual(self.view()['items'][0]['state'],'CLOSED')
+    def test_reopen_duplicate_stale(self):
+        self.close_fixture()
+        d=self.view()['evidence_digest']
+        self.act('REOPEN','qa',digest=d)
+        with self.assertRaisesRegex(ValueError,'Stale repair view'):self.act('REOPEN','qa',digest=d)
+        with self.assertRaisesRegex(ValueError,'Invalid repair transition'):self.act('REOPEN','qa')
+    def test_reopen_requires_closed(self):
+        self.start()
+        with self.assertRaises(ValueError):self.act('REOPEN','qa')
+    def test_reopen_audit_rollback(self):
+        old=self.close_fixture()
+        self.c.execute("""CREATE TRIGGER reject_reopen_audit BEFORE INSERT ON auth_audit
+          WHEN NEW.action='engineering_defect_repair_reopen'
+          BEGIN SELECT RAISE(ABORT,'injected'); END""")
+        n=self.c.execute('SELECT count(*) FROM auth_audit').fetchone()[0]
+        digest=self.view()['evidence_digest']
+        with self.assertRaises(sqlite3.IntegrityError):self.act('REOPEN','qa',digest=digest)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM auth_audit').fetchone()[0],n)
+        self.assertEqual(self.view()['items'][0]['history'],old)
+    def test_reopened_same_execution_rejected(self):
+        self.close_fixture();self.act('REOPEN','qa');self.act('START','dev')
+        with patch.object(t,'repair_evidence',return_value=self.evidence()):
+            with self.assertRaisesRegex(ValueError,'newer than last closure'):self.act('SUBMIT','dev')
+        self.assertEqual(self.view()['items'][0]['state'],'IN_PROGRESS')
+    def test_reopened_older_or_unknown_execution_rejected(self):
+        self.close_fixture();self.act('REOPEN','qa');self.act('START','dev')
+        new=dict(self.evidence(),execution_digest='d'*64)
+        for history in ([{'digest':'d'*64},{'digest':'a'*64}],[{'digest':'d'*64}]):
+            with patch.object(t,'repair_evidence',return_value=new),patch.object(t.runs,'history',return_value=history):
+                with self.assertRaisesRegex(ValueError,'newer than last closure'):self.act('SUBMIT','dev')
+    def test_reopen_fresh_reverify_close(self):
+        old=self.close_fixture();self.act('REOPEN','qa');self.act('START','dev')
+        new=dict(self.evidence(),execution_digest='d'*64,regression_digest='e'*64)
+        with patch.object(t,'repair_evidence',return_value=new),patch.object(t.runs,'history',return_value=[{'digest':'a'*64},{'digest':'d'*64}]):
+            self.act('SUBMIT','dev');self.act('VERIFY','qa')
+            with self.assertRaises(PermissionError):self.act('CLOSE','qa')
+            self.act('CLOSE','closer')
+        item=self.view()['items'][0]
+        self.assertEqual(item['state'],'CLOSED')
+        self.assertEqual(item['history'][:5],old)
+        self.assertEqual(len(item['history']),10)
+        self.assertEqual(item['history'][-1]['snapshot']['repair'],new)
+    def test_historical_occurrence_exact_binding(self):
+        old_rd=self.item['registration_digest'];new_rd=self.second_registration()
+        v=self.view()
+        self.assertFalse(next(x for x in v['items'] if x['registration_digest']==old_rd)['latest'])
+        self.start()
+        with patch.object(t,'repair_evidence',return_value=self.evidence()) as evidence:
+            self.act('SUBMIT','dev')
+        original=t.registry.history(self.c,'p','j')[self.item['finding_id']][0]['snapshot']
+        self.assertEqual(evidence.call_args.args[4],original)
+        v=self.view()
+        self.assertEqual(next(x for x in v['items'] if x['registration_digest']==old_rd)['state'],'REPAIR_SUBMITTED')
+        self.assertEqual(next(x for x in v['items'] if x['registration_digest']==new_rd)['history'],[])
+    def test_historical_closed_reopen_isolated(self):
+        old=self.close_fixture();new_rd=self.second_registration()
+        self.act('REOPEN','qa')
+        v=self.view()
+        historical=next(x for x in v['items'] if x['registration_digest']==self.item['registration_digest'])
+        newest=next(x for x in v['items'] if x['registration_digest']==new_rd)
+        self.assertEqual(historical['history'][:-1],old)
+        self.assertEqual(historical['state'],'ASSIGNED')
+        self.assertEqual(newest['state'],'OPEN')
+    def test_reopen_route_scope(self):
+        import auth_policy
+        path='/api/projects/p/engineering/defect-repairs/j'
+        self.assertEqual(auth_policy.scope(self.c,'POST',path,body={'action':'REOPEN'}),('p','approve'))
+        self.assertIsNone(auth_policy.scope(self.c,'POST',path,body={'action':'AUTO_CLOSE'}))
     def test_invalid_transition(self):
         with self.assertRaises(ValueError):self.act('START','dev')
     def test_scope(self):

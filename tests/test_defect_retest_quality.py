@@ -58,6 +58,12 @@ class RetestQualityTests(unittest.TestCase):
         with patch.object(q,'view',return_value=v):
             self.assertEqual(q.require_current(None,None,'p','j',v['evidence_digest']),v)
             with self.assertRaises(ValueError):q.require_current(None,None,'p','j','bad')
+    def test_reopened_occurrence_blocks_until_explicit_closure(self):
+        old=copy.deepcopy(self.item)
+        self.item['state']='ASSIGNED';seal(self.v)
+        self.assertEqual(self.evaluate()['state'],'BLOCK')
+        self.item.update(old);seal(self.v)
+        self.assertEqual(self.evaluate()['state'],'RETEST_QUALITY_PASS')
     def test_historical_unresolved_blocks(self):
         original=copy.deepcopy(self.original);original['execution_digest']='e'*64
         rd=q.pp.digest(original)
